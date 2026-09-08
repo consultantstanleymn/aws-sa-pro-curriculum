@@ -1,6 +1,6 @@
 // Shared client-side logic: quiz reveal, nav search filter, day tracker (localStorage only, per-browser).
 const TOTAL_DAYS = 70;
-const DEFAULT_CURRENT_DAY = 56;
+const DEFAULT_CURRENT_DAY = 1;
 const STORAGE_KEY = 'sapro_current_day';
 
 function getCurrentDay() {
@@ -55,16 +55,41 @@ function toggleTopLinks() {
 function renderTracker(containerId, currentPageDay) {
   const el = document.getElementById(containerId);
   if (!el) return;
+
+  // First time this browser hits a specific day page, treat that day as the
+  // tracked position instead of falling back to a stale/default day.
+  if (typeof currentPageDay === 'number') {
+    try {
+      if (!localStorage.getItem(STORAGE_KEY)) setCurrentDay(currentPageDay);
+    } catch (e) {}
+  }
+
   const day = getCurrentDay();
   const pct = Math.round((day / TOTAL_DAYS) * 100);
+  const onTrackedDay = typeof currentPageDay === 'number' && currentPageDay === day;
+  const atEnd = day >= TOTAL_DAYS;
+  const nextDay = Math.min(day + 1, TOTAL_DAYS);
+
+  let ctaHtml;
+  if (onTrackedDay && atEnd) {
+    ctaHtml = `<span class="btn" aria-disabled="true">Curriculum complete</span>`;
+  } else if (onTrackedDay) {
+    ctaHtml = `<a class="btn" id="continueBtn" href="${dayHref(nextDay)}">Continue to Day ${nextDay} &rarr;</a>`;
+  } else {
+    ctaHtml = `<a class="btn" href="${dayHref(day)}">Continue Studying &rarr;</a>`;
+  }
+
   el.innerHTML = `
     <div class="tracker-progress">
       <strong>Day ${day} of ${TOTAL_DAYS}</strong> — ${pct}% through the 14-week plan
       <div class="tracker-bar"><div class="tracker-bar-fill" style="width:${pct}%"></div></div>
     </div>
-    <a class="btn" href="${dayHref(day)}">Continue Studying &rarr;</a>
+    ${ctaHtml}
     <button class="btn btn-outline" id="jumpBtn" type="button">Jump to day&hellip;</button>
   `;
+  if (onTrackedDay && !atEnd) {
+    document.getElementById('continueBtn').addEventListener('click', () => setCurrentDay(nextDay));
+  }
   document.getElementById('jumpBtn').addEventListener('click', () => {
     const n = prompt('Jump to which day? (1-' + TOTAL_DAYS + ')', String(day));
     if (n && !isNaN(parseInt(n, 10))) {
