@@ -12,6 +12,12 @@ function esc(s) {
 
 function pad(n) { return String(n).padStart(3, '0'); }
 
+function readTime(d) {
+  const text = [d.summary, d.lab, ...(d.questions || []).map(q => q.q + ' ' + q.options.join(' ') + ' ' + q.explanation)].join(' ');
+  const words = text.trim().split(/\s+/).length;
+  return Math.max(3, Math.round(words / 200));
+}
+
 function questionsHtml(dayNum, qs) {
   if (!qs || !qs.length) {
     return `<p style="color:var(--text-muted);font-style:italic;">Detailed scenario questions for this day will be added when the curriculum reaches it — see the <a href="day-056.html">Day 56 DMS lesson</a> for the full format this site is building toward.</p>`;
@@ -65,13 +71,14 @@ function dayTemplate(d, prev, next) {
     </div>
   </aside>
   <main class="main-viewport">
-    <div class="content-wrapper">
+    <div class="content-wrapper reading">
       <div class="day-meta">
         <span class="pill pill-orange">Day ${d.day} / 70</span>
         <span class="pill pill-blue">Week ${d.week} of 14</span>
         <span class="pill pill-green">${esc(d.phase)}</span>
       </div>
       <h1 class="hero-title">${esc(d.title)}</h1>
+      <div class="reading-meta">&#128337; ~${readTime(d)} min read &middot; ${d.services.length} services covered</div>
       <div class="services-grid">
         ${services}
       </div>
