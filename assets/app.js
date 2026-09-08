@@ -20,7 +20,9 @@ function setCurrentDay(n) {
 }
 
 function dayHref(n) {
-  return (window.SAPRO_BASE || '') + 'days/day-' + String(n).padStart(3, '0') + '.html';
+  var inDaysDir = /\/days\//.test(window.location.pathname);
+  var prefix = window.SAPRO_BASE || (inDaysDir ? '' : 'days/');
+  return prefix + 'day-' + String(n).padStart(3, '0') + '.html';
 }
 
 function revealAnswer(id, correctIdx) {
