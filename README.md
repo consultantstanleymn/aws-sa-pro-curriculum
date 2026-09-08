@@ -3,8 +3,10 @@
 Welcome to the comprehensive, self-paced 14-week study curriculum for the AWS Solutions Architect - Professional (SAP-C02) certification and AWS Site Reliability Engineering (SRE) / DevOps competencies.
 
 ## Live Study Portal
-Access the fully styled, interactive documentation portal hosted via GitHub Pages:
-👉 **[Live Study Portal](https://consultantstanleymn.github.io/aws-sa-pro-curriculum/)**
+Access the fully styled, interactive documentation portal live at:
+👉 **[https://stanley-n.com](https://stanley-n.com)**
+
+*(Alternative GitHub Pages domain: [https://consultantstanleymn.github.io/aws-sa-pro-curriculum/](https://consultantstanleymn.github.io/aws-sa-pro-curriculum/))*
 
 ## Curriculum Architecture
 * **Phase 1 (Weeks 1–3):** Multi-Account Governance, Control Tower, Service Control Policies (SCPs) & Advanced Hybrid Networking (Transit Gateway, Direct Connect, Route 53 Resolver, PrivateLink).

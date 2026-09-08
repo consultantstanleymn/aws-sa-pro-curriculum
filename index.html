@@ -3,242 +3,653 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>AWS Solutions Architect Professional & SRE / DevOps Master Curriculum</title>
+  <title>AWS Solutions Architect Professional (SAP-C02) & SRE Master Curriculum — stanley-n.com</title>
   <style>
     :root {
-      --bg: #0f172a;
-      --card-bg: #1e293b;
-      --sidebar-bg: #0b1120;
-      --text: #f8fafc;
+      --bg-primary: #0b0f19;
+      --bg-secondary: #111827;
+      --bg-card: #1e293b;
+      --bg-card-hover: #273549;
+      --text-main: #f8fafc;
       --text-muted: #94a3b8;
-      --accent: #ff9900;
+      --accent-orange: #ff9900;
       --accent-blue: #38bdf8;
-      --border: #334155;
-      --code-bg: #020617;
+      --accent-green: #10b981;
+      --accent-purple: #a855f7;
+      --border-color: #334155;
+      --code-bg: #030712;
+      --sidebar-width: 320px;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif; background-color: var(--bg); color: var(--text); line-height: 1.6; display: flex; height: 100vh; overflow: hidden; }
-    
-    /* Sidebar */
-    #sidebar {
-      width: 320px;
-      min-width: 320px;
-      background-color: var(--sidebar-bg);
-      border-right: 1px solid var(--border);
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      background-color: var(--bg-primary);
+      color: var(--text-main);
+      line-height: 1.6;
       display: flex;
       flex-direction: column;
-      height: 100%;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    /* Top Navigation */
+    header.topbar {
+      height: 64px;
+      background-color: var(--bg-secondary);
+      border-bottom: 1px solid var(--border-color);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 28px;
+      flex-shrink: 0;
+      z-index: 10;
+    }
+    .brand-group {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .brand-logo {
+      background: linear-gradient(135deg, var(--accent-orange), #ea580c);
+      color: #000;
+      font-weight: 800;
+      font-size: 1.1rem;
+      padding: 6px 12px;
+      border-radius: 6px;
+      letter-spacing: 0.5px;
+    }
+    .brand-title {
+      font-size: 1.1rem;
+      font-weight: 700;
+      color: #fff;
+    }
+    .brand-domain {
+      font-size: 0.8rem;
+      background: rgba(56, 189, 248, 0.15);
+      color: var(--accent-blue);
+      padding: 4px 10px;
+      border-radius: 20px;
+      font-weight: 600;
+      border: 1px solid rgba(56, 189, 248, 0.3);
+    }
+    .top-links {
+      display: flex;
+      align-items: center;
+      gap: 18px;
+    }
+    .top-links a {
+      color: var(--text-muted);
+      text-decoration: none;
+      font-size: 0.88rem;
+      font-weight: 500;
+      transition: color 0.2s;
+    }
+    .top-links a:hover {
+      color: var(--accent-orange);
+    }
+    .badge-live {
+      background: rgba(16, 185, 129, 0.2);
+      color: var(--accent-green);
+      padding: 4px 10px;
+      border-radius: 12px;
+      font-size: 0.75rem;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .badge-live::before {
+      content: "";
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background-color: var(--accent-green);
+      animation: pulse 2s infinite;
+    }
+    @keyframes pulse {
+      0% { opacity: 1; }
+      50% { opacity: 0.4; }
+      100% { opacity: 1; }
+    }
+
+    /* Layout */
+    .app-container {
+      display: flex;
+      flex: 1;
+      height: calc(100vh - 64px);
+      overflow: hidden;
+    }
+
+    /* Sidebar */
+    aside.sidebar {
+      width: var(--sidebar-width);
+      background-color: var(--bg-secondary);
+      border-right: 1px solid var(--border-color);
+      display: flex;
+      flex-direction: column;
+      flex-shrink: 0;
       overflow-y: auto;
     }
-    .sidebar-header {
-      padding: 24px 20px;
-      border-bottom: 1px solid var(--border);
+    .search-box {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border-color);
     }
-    .sidebar-header h2 {
-      font-size: 1.1rem;
-      color: var(--accent);
-      margin-bottom: 4px;
+    .search-input {
+      width: 100%;
+      padding: 8px 12px;
+      background-color: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      color: var(--text-main);
+      font-size: 0.85rem;
+      outline: none;
     }
-    .sidebar-header p {
-      font-size: 0.8rem;
-      color: var(--text-muted);
+    .search-input:focus {
+      border-color: var(--accent-blue);
     }
-    .nav-group {
-      padding: 16px 0;
+    .nav-section {
+      padding: 14px 0;
+      border-bottom: 1px solid rgba(51, 65, 85, 0.4);
     }
-    .nav-title {
-      padding: 6px 20px;
-      font-size: 0.75rem;
+    .nav-section-title {
+      font-size: 0.7rem;
       text-transform: uppercase;
-      letter-spacing: 1px;
+      letter-spacing: 1.2px;
       color: var(--text-muted);
       font-weight: 700;
+      padding: 6px 20px 8px 20px;
     }
-    .nav-item {
+    .nav-link {
       display: block;
       padding: 8px 20px;
       color: #cbd5e1;
       text-decoration: none;
-      font-size: 0.9rem;
-      transition: all 0.2s;
+      font-size: 0.88rem;
+      border-left: 3px solid transparent;
+      transition: all 0.15s ease-in-out;
     }
-    .nav-item:hover, .nav-item.active {
-      background-color: var(--card-bg);
+    .nav-link:hover {
+      background-color: var(--bg-card);
       color: var(--accent-blue);
-      border-left: 3px solid var(--accent-blue);
+      border-left-color: var(--accent-blue);
     }
-    
-    /* Main Content */
-    #content {
+
+    /* Main Content Area */
+    main.main-viewport {
       flex: 1;
-      padding: 40px 60px;
       overflow-y: auto;
+      padding: 40px 60px;
       scroll-behavior: smooth;
     }
-    .content-container {
-      max-width: 960px;
+    .content-wrapper {
+      max-width: 1000px;
       margin: 0 auto;
     }
-    header.doc-header {
-      margin-bottom: 40px;
-      border-bottom: 1px solid var(--border);
-      padding-bottom: 24px;
+
+    /* Typography & Sections */
+    h1.hero-title {
+      font-size: 2.3rem;
+      font-weight: 800;
+      line-height: 1.25;
+      margin-bottom: 14px;
+      color: #fff;
     }
-    h1 { font-size: 2.2rem; color: #fff; margin-bottom: 12px; }
-    h2 { font-size: 1.6rem; color: var(--accent); margin: 36px 0 16px 0; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
-    h3 { font-size: 1.25rem; color: var(--accent-blue); margin: 24px 0 12px 0; }
+    .hero-subtitle {
+      font-size: 1.1rem;
+      color: var(--text-muted);
+      margin-bottom: 36px;
+      max-width: 820px;
+    }
+    section.doc-section {
+      margin-bottom: 60px;
+      scroll-margin-top: 24px;
+    }
+    h2.section-heading {
+      font-size: 1.6rem;
+      font-weight: 700;
+      color: var(--accent-orange);
+      margin-bottom: 20px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      border-bottom: 1px solid var(--border-color);
+      padding-bottom: 10px;
+    }
+    h3.sub-heading {
+      font-size: 1.25rem;
+      font-weight: 600;
+      color: var(--accent-blue);
+      margin: 24px 0 12px 0;
+    }
     p { margin-bottom: 16px; color: #cbd5e1; }
-    ul, ol { margin-bottom: 20px; padding-left: 24px; color: #cbd5e1; }
-    li { margin-bottom: 8px; }
-    
-    /* Cards & Callouts */
+
+    /* Cards */
     .card {
-      background-color: var(--card-bg);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 20px;
+      background-color: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 10px;
+      padding: 24px;
       margin-bottom: 24px;
     }
-    .card-highlight {
-      border-left: 4px solid var(--accent);
-    }
-    .card-sre {
-      border-left: 4px solid var(--accent-blue);
-    }
-    .tag {
+    .card-accent { border-left: 5px solid var(--accent-orange); }
+    .card-sre { border-left: 5px solid var(--accent-blue); }
+    .card-green { border-left: 5px solid var(--accent-green); }
+
+    /* Badges */
+    .pill {
       display: inline-block;
-      padding: 3px 8px;
-      border-radius: 4px;
       font-size: 0.75rem;
-      font-weight: 600;
+      font-weight: 700;
       text-transform: uppercase;
-      margin-right: 6px;
+      letter-spacing: 0.5px;
+      padding: 3px 10px;
+      border-radius: 20px;
+      margin-right: 8px;
     }
-    .tag-blue { background: rgba(56, 189, 248, 0.2); color: var(--accent-blue); }
-    .tag-orange { background: rgba(255, 153, 0, 0.2); color: var(--accent); }
-    
-    /* Code block */
+    .pill-orange { background: rgba(255, 153, 0, 0.2); color: var(--accent-orange); }
+    .pill-blue { background: rgba(56, 189, 248, 0.2); color: var(--accent-blue); }
+    .pill-green { background: rgba(16, 185, 129, 0.2); color: var(--accent-green); }
+    .pill-purple { background: rgba(168, 85, 247, 0.2); color: var(--accent-purple); }
+
+    /* Code & Pre */
     pre {
       background-color: var(--code-bg);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 16px;
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 18px;
       overflow-x: auto;
-      font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+      font-family: 'SFMono-Regular', Consolas, Menlo, monospace;
       font-size: 0.85rem;
       color: #38bdf8;
-      margin-bottom: 20px;
+      margin: 16px 0 24px 0;
     }
     code {
-      font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+      font-family: 'SFMono-Regular', Consolas, Menlo, monospace;
       background: rgba(255, 255, 255, 0.1);
       padding: 2px 6px;
       border-radius: 4px;
       font-size: 0.9em;
     }
-    pre code { background: none; padding: 0; }
-    
+    pre code { background: none; padding: 0; color: inherit; }
+
+    /* Tables */
+    .table-container {
+      overflow-x: auto;
+      margin: 20px 0 30px 0;
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+    }
+    table.data-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.9rem;
+      text-align: left;
+    }
+    table.data-table th {
+      background-color: var(--bg-secondary);
+      color: var(--text-main);
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border-color);
+      font-weight: 600;
+    }
+    table.data-table td {
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border-color);
+      color: #cbd5e1;
+    }
+    table.data-table tr:last-child td { border-bottom: none; }
+    table.data-table tr:hover td { background-color: var(--bg-card-hover); }
+
+    /* Scenario Box */
+    .scenario-card {
+      background: linear-gradient(180deg, #1e1b4b 0%, #171738 100%);
+      border: 1px solid #4338ca;
+      border-radius: 10px;
+      padding: 24px;
+      margin: 28px 0;
+    }
+    .scenario-question {
+      font-size: 1rem;
+      font-weight: 500;
+      color: #f1f5f9;
+      margin-bottom: 16px;
+    }
+    .scenario-options {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-bottom: 18px;
+      font-size: 0.9rem;
+      color: #e0e7ff;
+    }
+    .scenario-option {
+      background: rgba(255, 255, 255, 0.05);
+      padding: 10px 14px;
+      border-radius: 6px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+    .scenario-reveal-btn {
+      background-color: #6366f1;
+      color: #fff;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 6px;
+      font-weight: 600;
+      cursor: pointer;
+      font-size: 0.85rem;
+      transition: background 0.2s;
+    }
+    .scenario-reveal-btn:hover { background-color: #4f46e5; }
+    .scenario-explanation {
+      margin-top: 14px;
+      padding: 14px;
+      background: rgba(0, 0, 0, 0.35);
+      border-left: 4px solid var(--accent-orange);
+      border-radius: 4px;
+      font-size: 0.88rem;
+      color: #cbd5e1;
+      display: none;
+    }
+
+    /* Links */
     a { color: var(--accent-blue); text-decoration: none; }
     a:hover { text-decoration: underline; }
-    
-    .scenario-box {
-      background-color: #1e1b4b;
-      border: 1px solid #4338ca;
-      border-radius: 8px;
-      padding: 20px;
-      margin: 24px 0;
-    }
-    .answer-box {
-      margin-top: 12px;
-      padding: 12px;
-      background: rgba(255, 255, 255, 0.05);
-      border-radius: 6px;
-      border-left: 3px solid var(--accent);
+
+    /* Mobile responsiveness */
+    @media (max-width: 900px) {
+      body { height: auto; overflow: auto; }
+      .app-container { flex-direction: column; height: auto; overflow: visible; }
+      aside.sidebar { width: 100%; height: auto; max-height: 280px; }
+      main.main-viewport { padding: 24px; }
     }
   </style>
 </head>
 <body>
-  <div id="sidebar">
-    <div class="sidebar-header">
-      <h2>AWS SA Pro &amp; SRE</h2>
-      <p>SAP-C02 &bull; 14-Week Curriculum Portal</p>
-    </div>
-    <div class="nav-group">
-      <div class="nav-title">Curriculum</div>
-      <a href="#overview" class="nav-item">Roadmap &amp; Strategy</a>
-      <a href="#phase1" class="nav-item">Phase 1: Multi-Account &amp; Networking</a>
-      <a href="#phase2" class="nav-item">Phase 2: Compute, Storage &amp; DBs</a>
-      <a href="#phase3" class="nav-item">Phase 3: SRE, Reliability &amp; Automation</a>
-      <a href="#phase4" class="nav-item">Phase 4: Migration &amp; Hybrid Cloud</a>
-      <a href="#phase5" class="nav-item">Phase 5: Exam Sprint &amp; Drills</a>
-    </div>
-    <div class="nav-group">
-      <div class="nav-title">Cheat Sheets &amp; Blueprints</div>
-      <a href="#scp-blueprint" class="nav-item">Enterprise SCP Guardrails</a>
-      <a href="#networking-matrix" class="nav-item">Transit Gateway vs Direct Connect</a>
-      <a href="#dr-patterns" class="nav-item">Multi-Region DR (RTO / RPO)</a>
-      <a href="#sre-observability" class="nav-item">SLIs, SLOs &amp; Chaos Engineering</a>
-    </div>
-    <div class="nav-group">
-      <div class="nav-title">External Links</div>
-      <a href="https://docs.aws.amazon.com/pdfs/aws-certification/latest/solutions-architect-professional-02/solutions-architect-professional-02.pdf" target="_blank" class="nav-item">&rarr; Official SAP-C02 Exam Guide</a>
-      <a href="https://aws.amazon.com/architecture/well-architected/" target="_blank" class="nav-item">&rarr; Well-Architected Framework</a>
-      <a href="https://learn.cantrill.io/p/aws-certified-solutions-architect-professional" target="_blank" class="nav-item">&rarr; Adrian Cantrill Course</a>
-      <a href="https://tutorialsdojo.com/courses/aws-certified-solutions-architect-professional-practice-exams/" target="_blank" class="nav-item">&rarr; Tutorials Dojo Tests</a>
-    </div>
-  </div>
 
-  <div id="content">
-    <div class="content-container">
-      <header class="doc-header">
-        <h1>AWS Solutions Architect - Professional &amp; SRE Curriculum</h1>
-        <p style="font-size: 1.1rem; color: var(--text-muted);">
-          Comprehensive study guides, enterprise architecture blueprints, and hands-on SRE labs tailored for passing the AWS SAP-C02 exam and excelling in enterprise cloud engineering.
+  <!-- Topbar -->
+  <header class="topbar">
+    <div class="brand-group">
+      <div class="brand-logo">AWS SA PRO</div>
+      <div class="brand-title">Architect &amp; SRE Master Curriculum</div>
+      <div class="brand-domain">stanley-n.com</div>
+    </div>
+    <div class="top-links">
+      <div class="badge-live">Live Portal</div>
+      <a href="https://github.com/consultantstanleymn/aws-sa-pro-curriculum" target="_blank">GitHub Repository &rarr;</a>
+      <a href="https://docs.aws.amazon.com/pdfs/aws-certification/latest/solutions-architect-professional-02/solutions-architect-professional-02.pdf" target="_blank">SAP-C02 Exam Guide &rarr;</a>
+      <a href="https://aws.amazon.com/architecture/well-architected/" target="_blank">Well-Architected &rarr;</a>
+    </div>
+  </header>
+
+  <div class="app-container">
+    
+    <!-- Sidebar -->
+    <aside class="sidebar" id="sidebar">
+      <div class="search-box">
+        <input type="text" id="navSearch" class="search-input" placeholder="Search curriculum topics..." onkeyup="filterNav()">
+      </div>
+      
+      <div class="nav-section">
+        <div class="nav-section-title">Program Strategy</div>
+        <a href="#roadmap" class="nav-link">Roadmap &amp; 14-Week Plan</a>
+        <a href="#daily-schedule" class="nav-link">Day-by-Day Master Syllabus</a>
+        <a href="#exam-strategy" class="nav-link">Exam Technique &amp; Pacing</a>
+      </div>
+
+      <div class="nav-section">
+        <div class="nav-section-title">Curriculum Phases</div>
+        <a href="#phase1" class="nav-link">Phase 1: Multi-Account &amp; Networking</a>
+        <a href="#phase2" class="nav-link">Phase 2: Compute, Storage &amp; Data</a>
+        <a href="#phase3" class="nav-link">Phase 3: SRE, Observability &amp; DR</a>
+        <a href="#phase4" class="nav-link">Phase 4: Migration &amp; Hybrid Cloud</a>
+        <a href="#phase5" class="nav-link">Phase 5: Scenario Drill Bank</a>
+      </div>
+
+      <div class="nav-section">
+        <div class="nav-section-title">Production Blueprints</div>
+        <a href="#scp-blueprints" class="nav-link">Production SCP Guardrails</a>
+        <a href="#networking-matrix" class="nav-link">Transit Gateway vs DX Matrix</a>
+        <a href="#dr-decision-tree" class="nav-link">Multi-Region DR Decision Tree</a>
+        <a href="#sre-observability-stack" class="nav-link">SRE Observability Architecture</a>
+      </div>
+
+      <div class="nav-section">
+        <div class="nav-section-title">Curated Online Sources</div>
+        <a href="https://learn.cantrill.io/p/aws-certified-solutions-architect-professional" target="_blank" class="nav-link">&rarr; Adrian Cantrill Course</a>
+        <a href="https://tutorialsdojo.com/courses/aws-certified-solutions-architect-professional-practice-exams/" target="_blank" class="nav-link">&rarr; Tutorials Dojo Practice Exams</a>
+        <a href="https://catalog.workshops.aws/aws-resilience-hub-lab/en-US" target="_blank" class="nav-link">&rarr; AWS Resilience Hub Workshop</a>
+        <a href="https://docs.aws.amazon.com/wellarchitected/latest/security-pillar/welcome.html" target="_blank" class="nav-link">&rarr; Well-Architected Security Pillar</a>
+      </div>
+    </aside>
+
+    <!-- Main Viewport -->
+    <main class="main-viewport">
+      <div class="content-wrapper">
+
+        <!-- Hero Section -->
+        <h1 class="hero-title">AWS Solutions Architect - Professional &amp; SRE Master Curriculum</h1>
+        <p class="hero-subtitle">
+          Comprehensive, first-principles curriculum designed for passing the AWS Certified Solutions Architect – Professional (SAP-C02) exam and building production-grade Site Reliability Engineering (SRE) / DevOps infrastructure on AWS.
         </p>
-      </header>
 
-      <!-- Overview -->
-      <section id="overview">
-        <h2>Curriculum Overview &amp; Strategy</h2>
-        <div class="card card-highlight">
-          <h3>The Solutions Architect Pro (SAP-C02) Mindset</h3>
-          <p>
-            Unlike associate-level exams that test what a service is, the <strong>AWS Certified Solutions Architect – Professional</strong> tests complex multi-variable trade-offs:
-          </p>
-          <ul>
-            <li><strong>Organizational Complexity (26%):</strong> Multi-account structures, SCPs, cross-account IAM, centralized auditing.</li>
-            <li><strong>Design for New Solutions (29%):</strong> High availability, multi-region routing, decoupled event architecture, secure network ingress/egress.</li>
-            <li><strong>Continuous Improvement for Existing Solutions (25%):</strong> Migration methodologies, modernizing legacy monolithic architectures to microservices, cost optimization without compromising performance.</li>
-            <li><strong>Accelerate Workload Migration and Modernization (20%):</strong> Database and server migration tools, zero-downtime cutover strategies, hybrid storage solutions.</li>
-          </ul>
-        </div>
-      </section>
+        <!-- Section: Roadmap -->
+        <section id="roadmap" class="doc-section">
+          <h2 class="section-heading">1. 14-Week Architectural Roadmap</h2>
+          <div class="card card-accent">
+            <span class="pill pill-orange">Exam Strategy</span>
+            <span class="pill pill-blue">Career Transformation</span>
+            <h3 class="sub-heading">The Bridge from Developer to Solutions Architect / SRE</h3>
+            <p>
+              Associate certifications test individual service capabilities. The <strong>Solutions Architect – Professional</strong> tests multi-constraint optimization: balancing security guardrails, regional latency, blast-radius isolation, and RTO/RPO requirements while minimizing operational overhead.
+            </p>
+            <div class="table-container">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Phase</th>
+                    <th>Duration</th>
+                    <th>Core Domain Focus</th>
+                    <th>SRE &amp; DevOps Deliverable</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td><strong>Phase 1</strong></td>
+                    <td>Weeks 1–3</td>
+                    <td>Multi-Account Governance, Control Tower, SCPs &amp; Hybrid Networking</td>
+                    <td>Hub-and-Spoke Transit Gateway with inspection VPC &amp; baseline SCPs</td>
+                  </tr>
+                  <tr>
+                    <td><strong>Phase 2</strong></td>
+                    <td>Weeks 4–6</td>
+                    <td>Compute (ECS/EKS/Lambda), Storage Tiers &amp; Global Databases</td>
+                    <td>Zero-downtime Blue/Green container deployments &amp; Aurora Global DB</td>
+                  </tr>
+                  <tr>
+                    <td><strong>Phase 3</strong></td>
+                    <td>Weeks 7–9</td>
+                    <td>SRE Focus: Observability, Resilience, Chaos &amp; Disaster Recovery</td>
+                    <td>CloudWatch Synthetics SLOs, Chaos Game Days via AWS FIS, Route 53 ARC</td>
+                  </tr>
+                  <tr>
+                    <td><strong>Phase 4</strong></td>
+                    <td>Weeks 10–12</td>
+                    <td>Enterprise Migration, Hybrid Cloud &amp; Cost Optimization</td>
+                    <td>AWS Application Migration Service (MGN) &amp; DMS CDC pipeline cutovers</td>
+                  </tr>
+                  <tr>
+                    <td><strong>Phase 5</strong></td>
+                    <td>Weeks 13–14</td>
+                    <td>75-Question Timed Mock Exams, Distractor Analysis &amp; Exam Review</td>
+                    <td>Pass 5 full-length Tutorials Dojo mock exams with &gt;85% consistently</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
 
-      <!-- Phase 1 -->
-      <section id="phase1">
-        <h2>Phase 1: Multi-Account Governance &amp; Advanced Networking</h2>
-        <div class="card">
-          <span class="tag tag-orange">Governance</span>
-          <span class="tag tag-blue">Security</span>
-          <h3>AWS Organizations, Control Tower &amp; SCPs</h3>
-          <p>
-            Enterprise cloud architecture mandates isolation of concerns across accounts. Never run production and development workloads in the same AWS account.
-          </p>
-          <ul>
-            <li><strong>Core OUs:</strong> Security OU (Log Archive, Security Tooling), Infrastructure OU (Network Hub, Shared Services).</li>
-            <li><strong>Workload OUs:</strong> Production OU, Non-Production OU, Sandbox OU (with aggressive automated teardown).</li>
-            <li><strong>Service Control Policies (SCPs):</strong> Explicit deny guardrails. SCPs define the boundaries of what is possible; they do not grant permissions. The management account is never restricted by SCPs.</li>
-          </ul>
-        </div>
+        <!-- Section: Day-by-Day Master Syllabus -->
+        <section id="daily-schedule" class="doc-section">
+          <h2 class="section-heading">2. Day-by-Day Master Syllabus (70 Days)</h2>
+          <div class="card">
+            <p>
+              Daily structured 1.5–2 hour study routine. Each day includes <strong>Core Architecture Reading (45m)</strong>, <strong>Hands-on Practice (45m)</strong>, and <strong>Scenario Question Drills (20m)</strong>:
+            </p>
+            <div class="table-container">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Day</th>
+                    <th>Topic Focus</th>
+                    <th>Key Service Deep Dive</th>
+                    <th>Hands-on Lab / Practical Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td><strong>Day 1</strong></td>
+                    <td>Multi-Account Architecture &amp; Organizations</td>
+                    <td>AWS Organizations, OU Design, Root vs Child</td>
+                    <td>Draft an SCP hierarchy isolating Dev, Staging, and Production</td>
+                  </tr>
+                  <tr>
+                    <td><strong>Day 2</strong></td>
+                    <td>Service Control Policy (SCP) Mechanics</td>
+                    <td>Explicit Deny, FullAWSAccess, aws:RequestedRegion</td>
+                    <td>Write and validate a region-restriction SCP with global service exemptions</td>
+                  </tr>
+                  <tr>
+                    <td><strong>Day 3</strong></td>
+                    <td>AWS Control Tower &amp; Account Factory</td>
+                    <td>Control Tower, Mandatory/Elective Guardrails</td>
+                    <td>Review Account Factory for Terraform (AFT) baseline automation</td>
+                  </tr>
+                  <tr>
+                    <td><strong>Day 4</strong></td>
+                    <td>IAM Identity Center (AWS SSO) &amp; Federation</td>
+                    <td>SAML 2.0, Microsoft Entra ID / Okta Federation</td>
+                    <td>Configure permission sets and multi-account role assignment</td>
+                  </tr>
+                  <tr>
+                    <td><strong>Day 5</strong></td>
+                    <td>IAM Permission Boundaries &amp; STS</td>
+                    <td>AssumeRoleWithWebIdentity, STS session policies</td>
+                    <td>Create an IAM delegate admin role restricted by a permission boundary</td>
+                  </tr>
+                  <tr>
+                    <td><strong>Day 6</strong></td>
+                    <td>Resource Access Manager (RAM) &amp; VPC Sharing</td>
+                    <td>AWS RAM, shared subnets, cross-account security</td>
+                    <td>Share a centralized VPC subnet across multiple accounts via RAM</td>
+                  </tr>
+                  <tr>
+                    <td><strong>Day 7</strong></td>
+                    <td>Week 1 Synthesis &amp; Multi-Account Drill</td>
+                    <td>Domain 1 Review &amp; Architecture Diagrams</td>
+                    <td>Complete 15 scenario questions on AWS Organizations &amp; SCPs</td>
+                  </tr>
+                  <tr>
+                    <td><strong>Day 8</strong></td>
+                    <td>Transit Gateway (TGW) Core Routing</td>
+                    <td>TGW route tables, propagation, associations</td>
+                    <td>Build a hub-and-spoke VPC topology connecting 3 isolated VPCs</td>
+                  </tr>
+                  <tr>
+                    <td><strong>Day 9</strong></td>
+                    <td>Transit Gateway Peering &amp; Multi-Region</td>
+                    <td>Inter-region TGW peering, MTU limits, encryption</td>
+                    <td>Route traffic between us-east-1 and us-west-2 through peered TGWs</td>
+                  </tr>
+                  <tr>
+                    <td><strong>Day 10</strong></td>
+                    <td>AWS Network Firewall &amp; Centralized Egress</td>
+                    <td>Stateful/Stateless rules, Suricata syntax</td>
+                    <td>Route all outbound internet traffic through an inspection VPC with Network Firewall</td>
+                  </tr>
+                  <tr>
+                    <td><strong>Day 11</strong></td>
+                    <td>Direct Connect (DX) &amp; DX Gateway</td>
+                    <td>Private VIF, Transit VIF, Public VIF, BGP routing</td>
+                    <td>Design a redundant Direct Connect architecture with active/passive BGP failover</td>
+                  </tr>
+                  <tr>
+                    <td><strong>Day 12</strong></td>
+                    <td>AWS Route 53 Resolver (Hybrid DNS)</td>
+                    <td>Inbound endpoints, Outbound endpoints, forwarding rules</td>
+                    <td>Configure conditional forwarding between on-prem DNS and AWS Route 53</td>
+                  </tr>
+                  <tr>
+                    <td><strong>Day 13</strong></td>
+                    <td>AWS PrivateLink &amp; VPC Peering Comparison</td>
+                    <td>Interface Endpoints, Gateway Endpoints, Endpoint Policies</td>
+                    <td>Expose an internal microservice across accounts via PrivateLink without IP overlap</td>
+                  </tr>
+                  <tr>
+                    <td><strong>Day 14</strong></td>
+                    <td>Week 2 Synthesis &amp; Networking Lab Exam</td>
+                    <td>Complex Hybrid Network Architecture</td>
+                    <td>Complete 20 scenario questions on hybrid connectivity and DNS routing</td>
+                  </tr>
+                  <tr>
+                    <td><strong>Days 15–21</strong></td>
+                    <td>Compute Architecture &amp; Containers</td>
+                    <td>ECS Fargate, EKS, Auto Scaling lifecycle hooks</td>
+                    <td>Configure ALB path routing with Fargate spot &amp; lifecycle graceful shutdown</td>
+                  </tr>
+                  <tr>
+                    <td><strong>Days 22–28</strong></td>
+                    <td>High Availability Storage &amp; Databases</td>
+                    <td>Aurora Global Database, DynamoDB Global Tables</td>
+                    <td>Simulate an Aurora Global DB failover with sub-minute RTO</td>
+                  </tr>
+                  <tr>
+                    <td><strong>Days 29–42</strong></td>
+                    <td>SRE: Observability, Resilience &amp; DR</td>
+                    <td>CloudWatch Synthetics, X-Ray, FIS, Route 53 ARC</td>
+                    <td>Execute an AWS Fault Injection Simulator (FIS) chaos experiment on ECS</td>
+                  </tr>
+                  <tr>
+                    <td><strong>Days 43–56</strong></td>
+                    <td>Migration, Hybrid &amp; Cost Optimization</td>
+                    <td>MGN, DMS, DataSync, Storage Gateway, Savings Plans</td>
+                    <td>Architect a zero-downtime database migration from on-prem MySQL to Aurora</td>
+                  </tr>
+                  <tr>
+                    <td><strong>Days 57–70</strong></td>
+                    <td>Full-Length Practice Exams &amp; Pacing Drills</td>
+                    <td>Tutorials Dojo 75-question timed mock exams</td>
+                    <td>Complete 5 full timed mock exams (3 hours each) and analyze every distractor</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
 
-        <div class="card card-sre" id="scp-blueprint">
-          <h3>Production SCP Blueprint: Region &amp; Security Guardrail</h3>
-          <p>Below is an industry-standard SCP template that restricts resource provisioning outside approved regions while preserving global AWS services and preventing security tool tampering:</p>
-          <pre><code>{
+        <!-- Section: Phase 1 Deep Dive -->
+        <section id="phase1" class="doc-section">
+          <h2 class="section-heading">3. Phase 1: Enterprise Multi-Account &amp; Advanced Networking</h2>
+          
+          <div class="card card-accent" id="scp-blueprints">
+            <span class="pill pill-orange">Production Blueprint</span>
+            <h3 class="sub-heading">Enterprise Service Control Policy (SCP) Guardrails</h3>
+            <p>
+              In enterprise architectures, developers must have full administrative permissions inside their local sandboxes or development accounts, while the platform team enforces non-bypassable organizational guardrails at the OU level.
+            </p>
+            <p>
+              <strong>Critical SCP Rules for SAP-C02:</strong>
+            </p>
+            <ul>
+              <li>SCPs only filter permissions—they never grant access. A user must still be explicitly granted permission via an IAM policy.</li>
+              <li>The AWS Organizations Management (root) account is immune to SCPs.</li>
+              <li>When writing region-restricting SCPs, always exempt global services (IAM, Route 53, CloudFront, WAF, AWS Support) to prevent breaking account operations.</li>
+            </ul>
+            <pre><code>{
   "Version": "2012-10-17",
   "Statement": [
     {
-      "Sid": "DenyUnapprovedRegions",
+      "Sid": "DenyUnapprovedRegionsExemptingGlobals",
       "Effect": "Deny",
       "NotAction": [
         "cloudfront:*",
@@ -246,7 +657,8 @@
         "route53:*",
         "support:*",
         "wafv2:*",
-        "health:*"
+        "health:*",
+        "organizations:*"
       ],
       "Resource": "*",
       "Condition": {
@@ -259,122 +671,291 @@
       }
     },
     {
-      "Sid": "DenyDisablingCloudTrailOrConfig",
+      "Sid": "ProtectSecurityServices",
       "Effect": "Deny",
       "Action": [
         "cloudtrail:StopLogging",
         "cloudtrail:DeleteTrail",
         "config:DeleteConfigRule",
-        "config:StopConfigurationRecorder"
+        "config:StopConfigurationRecorder",
+        "guardduty:DeleteDetector",
+        "guardduty:DisassociateFromMasterAccount"
       ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "PreventLeavingOrganization",
+      "Effect": "Deny",
+      "Action": "organizations:LeaveOrganization",
       "Resource": "*"
     }
   ]
 }</code></pre>
-        </div>
-
-        <div class="card" id="networking-matrix">
-          <span class="tag tag-blue">Networking</span>
-          <h3>Enterprise Hybrid Networking</h3>
-          <p>Key routing primitives tested on SAP-C02:</p>
-          <ul>
-            <li><strong>AWS Transit Gateway (TGW):</strong> Hub-and-spoke model connecting thousands of VPCs and on-premises networks. Supports route tables per attachment for network segmentation (e.g. isolating Dev and Prod VPCs).</li>
-            <li><strong>Direct Connect (DX) + Gateway:</strong> Dedicated physical network link. Private VIF connects to a Direct Connect Gateway, which attaches to Transit Gateways across multiple AWS regions.</li>
-            <li><strong>AWS Route 53 Resolver:</strong> Inbound endpoints allow on-premises DNS servers to resolve AWS private hosted zones. Outbound endpoints forward AWS queries to corporate DNS servers.</li>
-            <li><strong>AWS PrivateLink:</strong> Securely expose microservices or access AWS services privately across VPCs without internet gateways, VPC peering, or CIDR overlap conflicts.</li>
-          </ul>
-        </div>
-      </section>
-
-      <!-- Phase 2 -->
-      <section id="phase2">
-        <h2>Phase 2: Compute, Storage &amp; Database Architectures</h2>
-        <div class="card">
-          <h3>Container Orchestration &amp; Serverless Design</h3>
-          <p>
-            Building resilient microservices with <strong>Amazon ECS (Fargate)</strong> and <strong>Amazon EKS</strong>:
-          </p>
-          <ul>
-            <li><strong>Fargate Spot:</strong> Cost-effective compute for fault-tolerant workers with graceful termination handling via SIGTERM and EventBridge notifications.</li>
-            <li><strong>Auto Scaling Lifecycle Hooks:</strong> Pause instance termination in an Auto Scaling Group to drain container connections, upload log buffers to S3, and complete in-flight transactions.</li>
-            <li><strong>Event-Driven Decoupling:</strong> Amazon EventBridge for cross-account schema-validated routing, Amazon SQS FIFO for strict deduplication and order preservation, Amazon SNS for fan-out architectures.</li>
-          </ul>
-        </div>
-
-        <div class="card card-highlight">
-          <h3>High-Performance Database Selection</h3>
-          <ul>
-            <li><strong>Amazon Aurora Global Database:</strong> Multi-region disaster recovery with sub-second replication latency and fast unassisted failover (RTO &lt; 1 minute).</li>
-            <li><strong>Amazon DynamoDB Global Tables:</strong> Active-Active multi-region replication with two-way reconciliation. Use DynamoDB Streams for real-time change data capture (CDC).</li>
-            <li><strong>Amazon ElastiCache (Redis OSS / Valkey):</strong> Write-through vs. Lazy loading caching patterns for sub-millisecond read access and session state offloading.</li>
-          </ul>
-        </div>
-      </section>
-
-      <!-- Phase 3 -->
-      <section id="phase3">
-        <h2>Phase 3: SRE, Reliability &amp; Observability</h2>
-        <div class="card card-sre" id="sre-observability">
-          <span class="tag tag-blue">SRE Focus</span>
-          <h3>Site Reliability Engineering in AWS</h3>
-          <p>
-            How SRE principles translate to AWS native services:
-          </p>
-          <ul>
-            <li><strong>Service Level Objectives (SLOs):</strong> Computed using CloudWatch Metric Math on CloudWatch Synthetics canary success rates and ALB 5XX error rates.</li>
-            <li><strong>Distributed Tracing:</strong> AWS X-Ray correlated across API Gateway, Lambda, and ECS via trace headers (<code>X-Amzn-Trace-Id</code>) to pinpoint latency bottlenecks.</li>
-            <li><strong>Incident Remediation:</strong> EventBridge rules triggering AWS Systems Manager Automation runbooks to reboot degraded nodes or rotate compromised keys.</li>
-            <li><strong>Chaos Engineering:</strong> AWS Fault Injection Simulator (FIS) to inject CPU spikes, terminate DB primary instances, and introduce cross-AZ network latency during game days.</li>
-          </ul>
-        </div>
-
-        <div class="card" id="dr-patterns">
-          <h3>Multi-Region Disaster Recovery Patterns</h3>
-          <p>Know the trade-offs between the four Well-Architected DR strategies:</p>
-          <ol>
-            <li><strong>Backup &amp; Restore:</strong> Highest RTO (hours) &amp; RPO (hours), lowest cost. S3 Cross-Region Replication (CRR) and AWS Backup.</li>
-            <li><strong>Pilot Light:</strong> Core data replicated in real-time (Aurora read replica, EBS snapshots), minimal compute scaled to zero until disaster. RTO: 10-30 mins.</li>
-            <li><strong>Warm Standby:</strong> Scaled-down version of full environment always running in secondary region. RTO: minutes. Route 53 DNS failover triggers Auto Scaling.</li>
-            <li><strong>Multi-Region Active-Active:</strong> Zero downtime, near-zero RPO/RTO. Traffic routed via Route 53 ARC or AWS Global Accelerator across two live regions. Highest cost and complexity.</li>
-          </ol>
-        </div>
-      </section>
-
-      <!-- Phase 4 -->
-      <section id="phase4">
-        <h2>Phase 4: Migration &amp; Hybrid Cloud</h2>
-        <div class="card">
-          <h3>Enterprise Migration Services</h3>
-          <ul>
-            <li><strong>AWS Application Migration Service (MGN):</strong> Block-level replication of on-premises physical, virtual, or cloud servers into AWS with minimal cutover downtime.</li>
-            <li><strong>AWS Database Migration Service (DMS):</strong> Homogeneous and heterogeneous database migration with continuous change data capture (CDC). Combine with AWS Schema Conversion Tool (SCT).</li>
-            <li><strong>AWS DataSync:</strong> Automated, encrypted data transfer for petabyte-scale NFS/SMB filesystems to S3, EFS, or FSx.</li>
-            <li><strong>AWS Storage Gateway:</strong> Volume Gateway (cached/stored), File Gateway (S3 / FSx), Tape Gateway for virtual tape libraries (VTL).</li>
-          </ul>
-        </div>
-      </section>
-
-      <!-- Phase 5 -->
-      <section id="phase5">
-        <h2>Phase 5: Practice Scenario Drills &amp; Exam Strategy</h2>
-        <div class="scenario-box">
-          <h3>Sample Exam Scenario Drill #1</h3>
-          <p>
-            <strong>Question:</strong> A financial institution runs a core banking platform on Amazon Aurora MySQL in us-east-1. The company has a strict RTO of 5 minutes and an RPO of 1 second for regional disaster recovery. The compliance department also requires that during normal operations, analytical reporting jobs must query read-only data in eu-west-1 without placing load on the primary transactional database in us-east-1. Which architecture fulfills these requirements with the LEAST operational overhead?
-          </p>
-          <ul>
-            <li><strong>A)</strong> Use AWS Database Migration Service (DMS) with continuous replication from us-east-1 to an Aurora cluster in eu-west-1. Configure Route 53 latency routing.</li>
-            <li><strong>B)</strong> Deploy an Aurora Global Database with the primary cluster in us-east-1 and a secondary cluster in eu-west-1. Direct analytical reporting to the reader endpoint in eu-west-1, and configure managed failover in Route 53 Application Recovery Controller (ARC).</li>
-            <li><strong>C)</strong> Set up S3 Cross-Region Replication for Aurora database snapshots, and use an automated Lambda function to restore snapshots in eu-west-1 every 15 minutes.</li>
-            <li><strong>D)</strong> Use an Aurora Multi-Master cluster spanned across us-east-1 and eu-west-1 with synchronous replication.</li>
-          </ul>
-          <div class="answer-box">
-            <strong>Correct Answer: B.</strong> Aurora Global Database uses storage-level replication with sub-second replication latency (RPO &lt; 1 sec) and supports cross-region promotion within 1 minute (RTO &lt; 5 mins). Secondary clusters can serve read traffic locally for analytics without impacting the primary cluster. (Multi-Master across regions is not supported, and snapshot restores take too long for a 5-minute RTO).
           </div>
-        </div>
-      </section>
 
-    </div>
+          <div class="card card-sre" id="networking-matrix">
+            <span class="pill pill-blue">Networking Matrix</span>
+            <h3 class="sub-heading">Hybrid Connectivity Decision Matrix</h3>
+            <div class="table-container">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Connection Type</th>
+                    <th>Bandwidth</th>
+                    <th>Latency / SLA</th>
+                    <th>Setup Time</th>
+                    <th>Primary Architectural Use Case</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td><strong>Site-to-Site VPN</strong></td>
+                    <td>Up to 1.25 Gbps per tunnel</td>
+                    <td>Variable (Public Internet)</td>
+                    <td>Minutes</td>
+                    <td>Backup for Direct Connect, quick POC, low-throughput workloads</td>
+                  </tr>
+                  <tr>
+                    <td><strong>Direct Connect (Dedicated)</strong></td>
+                    <td>1 Gbps, 10 Gbps, 100 Gbps</td>
+                    <td>Ultra-low, deterministic</td>
+                    <td>Weeks/Months</td>
+                    <td>Massive data migration, real-time trading, compliance requiring private physical wire</td>
+                  </tr>
+                  <tr>
+                    <td><strong>Direct Connect + Transit VIF</strong></td>
+                    <td>Up to 100 Gbps</td>
+                    <td>Ultra-low</td>
+                    <td>Weeks/Months</td>
+                    <td>Direct Connect Gateway connected to Transit Gateways across thousands of VPCs</td>
+                  </tr>
+                  <tr>
+                    <td><strong>AWS PrivateLink</strong></td>
+                    <td>Up to 100 Gbps per AZ</td>
+                    <td>Sub-millisecond</td>
+                    <td>Minutes</td>
+                    <td>Securely exposing services to customers or other VPCs with overlapping CIDR blocks</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- Section: Phase 2 Deep Dive -->
+        <section id="phase2" class="doc-section">
+          <h2 class="section-heading">4. Phase 2: High-Availability Compute, Storage &amp; Databases</h2>
+          
+          <div class="card card-accent">
+            <span class="pill pill-orange">Compute Architecture</span>
+            <h3 class="sub-heading">ECS Fargate &amp; EKS High-Availability Patterns</h3>
+            <ul>
+              <li><strong>Fargate Spot Strategy:</strong> Run baseline production traffic on Fargate On-Demand (e.g. 30%), and burst peak traffic onto Fargate Spot (70%). Handle the 2-minute SIGTERM warning via EventBridge to drain connections cleanly.</li>
+              <li><strong>Auto Scaling Lifecycle Hooks:</strong> When an EC2 instance in an ASG receives a termination signal, a lifecycle hook moves it to <code>Terminating:Wait</code>. A Lambda function triggers container connection draining and flushes local logs to S3 before signaling <code>CONTINUE</code>.</li>
+            </ul>
+          </div>
+
+          <div class="card card-sre">
+            <span class="pill pill-blue">Global Data Stores</span>
+            <h3 class="sub-heading">Aurora Global Database vs. DynamoDB Global Tables</h3>
+            <div class="table-container">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Feature</th>
+                    <th>Amazon Aurora Global Database</th>
+                    <th>Amazon DynamoDB Global Tables</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td><strong>Replication Model</strong></td>
+                    <td>Storage-level physical replication (&lt;1s latency)</td>
+                    <td>Two-way multi-active logical replication (Streams)</td>
+                  </tr>
+                  <tr>
+                    <td><strong>Write Topology</strong></td>
+                    <td>Single-region primary writer; cross-region read-only replicas</td>
+                    <td>Multi-region Active-Active (write to any region)</td>
+                  </tr>
+                  <tr>
+                    <td><strong>Disaster Recovery RTO</strong></td>
+                    <td>&lt; 1 minute (managed failover / promotion)</td>
+                    <td>Near-zero (seamless failover to other active regions)</td>
+                  </tr>
+                  <tr>
+                    <td><strong>Conflict Resolution</strong></td>
+                    <td>N/A (all writes route to primary cluster)</td>
+                    <td>Last-writer-wins based on timestamp</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- Section: Phase 3 SRE Focus -->
+        <section id="phase3" class="doc-section">
+          <h2 class="section-heading">5. Phase 3: SRE Focus — Reliability, Observability &amp; Disaster Recovery</h2>
+          
+          <div class="card card-sre" id="sre-observability-stack">
+            <span class="pill pill-blue">SRE Core</span>
+            <h3 class="sub-heading">Production Observability &amp; Incident Automation Stack</h3>
+            <p>
+              True SRE on AWS goes beyond passive dashboards. It couples active monitoring with automated remediation:
+            </p>
+            <ul>
+              <li><strong>SLI / SLO Engineering:</strong> Use <strong>CloudWatch Metric Math</strong> to divide successful canary requests by total requests over a rolling 30-day window to track your Error Budget.</li>
+              <li><strong>CloudWatch Synthetics:</strong> Deploy Node.js/Python Puppeteer canaries that simulate user checkout flows every 1 minute. Alarms fire on multi-step synthetic failure before real customers report outages.</li>
+              <li><strong>AWS Fault Injection Simulator (FIS):</strong> Conduct scheduled Chaos Engineering Game Days in staging:
+                <ul>
+                  <li>Inject 80% packet loss on cross-AZ network traffic.</li>
+                  <li>Force failover of the primary Aurora database cluster.</li>
+                  <li>Throttle API Gateway downstream endpoints to verify circuit breakers (via Amazon AppConfig &amp; AWS Lambda).</li>
+                </ul>
+              </li>
+            </ul>
+          </div>
+
+          <div class="card card-accent" id="dr-decision-tree">
+            <span class="pill pill-orange">Disaster Recovery</span>
+            <h3 class="sub-heading">Disaster Recovery (DR) Architectural Decision Matrix</h3>
+            <div class="table-container">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Strategy</th>
+                    <th>RTO (Recovery Time)</th>
+                    <th>RPO (Recovery Point)</th>
+                    <th>Relative Cost</th>
+                    <th>Key Implementation Services</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td><strong>Backup &amp; Restore</strong></td>
+                    <td>Hours to Days</td>
+                    <td>Hours to 24h</td>
+                    <td>$</td>
+                    <td>AWS Backup, S3 Cross-Region Replication (CRR), EBS snapshot copies</td>
+                  </tr>
+                  <tr>
+                    <td><strong>Pilot Light</strong></td>
+                    <td>10 to 30 Minutes</td>
+                    <td>Seconds to Minutes</td>
+                    <td>$$</td>
+                    <td>Aurora cross-region read replica, pre-baked AMIs, CloudFormation/Terraform IaC</td>
+                  </tr>
+                  <tr>
+                    <td><strong>Warm Standby</strong></td>
+                    <td>Minutes</td>
+                    <td>Sub-second to Seconds</td>
+                    <td>$$$</td>
+                    <td>Scaled-down EC2/ECS cluster running in DR region, Route 53 health check failover</td>
+                  </tr>
+                  <tr>
+                    <td><strong>Active-Active Multi-Region</strong></td>
+                    <td>Near-Zero</td>
+                    <td>Near-Zero</td>
+                    <td>$$$$$</td>
+                    <td>DynamoDB Global Tables, Route 53 ARC, AWS Global Accelerator, CloudFront</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- Section: Scenario Drill Bank -->
+        <section id="phase5" class="doc-section">
+          <h2 class="section-heading">6. Phase 5: SAP-C02 Scenario Drill Bank</h2>
+          
+          <!-- Scenario 1 -->
+          <div class="scenario-card">
+            <span class="pill pill-purple">Scenario Drill #1</span>
+            <div class="scenario-question">
+              <strong>Scenario:</strong> A global media platform streams video to millions of users. The platform runs on an Amazon EKS cluster in us-east-1. Due to regulatory requirements, user analytics data must be replicated to eu-west-1 within 10 seconds of creation. However, the analytics ingest workload must never experience backpressure or HTTP 500 errors during sudden 10x traffic spikes. What architecture meets these requirements with the LEAST operational overhead?
+            </div>
+            <div class="scenario-options">
+              <div class="scenario-option"><strong>A)</strong> Write analytics events directly to an Amazon S3 bucket in us-east-1 and configure S3 Cross-Region Replication (CRR) with Replication Time Control (RTC).</div>
+              <div class="scenario-option"><strong>B)</strong> Ingest events into an Amazon Kinesis Data Stream in us-east-1. Use AWS Lambda to process events and push to an Amazon DynamoDB Global Table replicated to eu-west-1.</div>
+              <div class="scenario-option"><strong>C)</strong> Publish events to an Amazon SNS topic in us-east-1 with cross-region subscriptions to an SQS queue in eu-west-1, processed by worker nodes on EKS.</div>
+              <div class="scenario-option"><strong>D)</strong> Write events directly to an Amazon Aurora MySQL database in us-east-1 with AWS Database Migration Service (DMS) replicating to eu-west-1.</div>
+            </div>
+            <button class="scenario-reveal-btn" onclick="toggleAnswer('ans1')">Reveal Answer &amp; Architectural Rationale</button>
+            <div id="ans1" class="scenario-explanation">
+              <strong>Correct Answer: B.</strong><br>
+              <strong>Rationale:</strong> Kinesis Data Streams reliably buffers massive ingestion spikes without dropping events or generating HTTP 500 backpressure. DynamoDB Global Tables provides fully managed, multi-region replication with sub-second replication latency (well within the 10-second SLA). Option A (S3 CRR with RTC) guarantees replication within 15 minutes, not 10 seconds. Option D creates database connection bottlenecks under 10x spikes.
+            </div>
+          </div>
+
+          <!-- Scenario 2 -->
+          <div class="scenario-card">
+            <span class="pill pill-purple">Scenario Drill #2</span>
+            <div class="scenario-question">
+              <strong>Scenario:</strong> An enterprise has 200 AWS accounts organized in AWS Organizations. Security auditors discover that developers have created public Amazon S3 buckets containing proprietary scripts. The CISO mandates that no user in any account (except the Security-Audit role in the Security account) can ever create a public S3 bucket or alter S3 Block Public Access settings. What solution enforces this with the LEAST administrative effort?
+            </div>
+            <div class="scenario-options">
+              <div class="scenario-option"><strong>A)</strong> Deploy an AWS Config rule <code>s3-bucket-public-read-prohibited</code> in every account with automatic remediation via AWS Systems Manager Automation.</div>
+              <div class="scenario-option"><strong>B)</strong> Attach a Service Control Policy (SCP) at the Organizations Root with an explicit Deny on <code>s3:PutBucketPublicAccessBlock</code> and <code>s3:PutAccountPublicAccessBlock</code> unless the caller identity is the Security-Audit role. Enable S3 Block Public Access at the Organization level.</div>
+              <div class="scenario-option"><strong>C)</strong> Write an Amazon EventBridge rule in every account that triggers an AWS Lambda function to delete any newly created public S3 bucket.</div>
+              <div class="scenario-option"><strong>D)</strong> Apply an IAM Permissions Boundary to all users across all accounts denying S3 public access actions.</div>
+            </div>
+            <button class="scenario-reveal-btn" onclick="toggleAnswer('ans2')">Reveal Answer &amp; Architectural Rationale</button>
+            <div id="ans2" class="scenario-explanation">
+              <strong>Correct Answer: B.</strong><br>
+              <strong>Rationale:</strong> An SCP applied at the Organization Root (or target OUs) provides a centralized, preventative guardrail that cannot be bypassed by individual account administrators. Options A and C are detective and reactive (the public bucket is briefly exposed before remediation). Option D requires managing and maintaining boundaries on every IAM entity in 200 accounts.
+            </div>
+          </div>
+
+          <!-- Scenario 3 -->
+          <div class="scenario-card">
+            <span class="pill pill-purple">Scenario Drill #3</span>
+            <div class="scenario-question">
+              <strong>Scenario:</strong> A retail enterprise operates an e-commerce application on Amazon EC2 across multiple Availability Zones. During flash sales, the database becomes saturated with read requests, causing checkout latency. 85% of these queries fetch product catalog details that change only once every 24 hours. The solutions architect must reduce database load and maintain sub-millisecond response times with the least cost and operational complexity.
+            </div>
+            <div class="scenario-options">
+              <div class="scenario-option"><strong>A)</strong> Upgrade the primary database instance to the largest memory-optimized Amazon RDS instance class and enable multi-AZ.</div>
+              <div class="scenario-option"><strong>B)</strong> Deploy an Amazon ElastiCache for Redis cluster in front of the database using a lazy-loading (cache-aside) pattern with a 24-hour TTL.</div>
+              <div class="scenario-option"><strong>C)</strong> Add 5 Amazon RDS read replicas and distribute queries using an Application Load Balancer.</div>
+              <div class="scenario-option"><strong>D)</strong> Migrate the relational database to Amazon DynamoDB and enable DynamoDB Accelerator (DAX).</div>
+            </div>
+            <button class="scenario-reveal-btn" onclick="toggleAnswer('ans3')">Reveal Answer &amp; Architectural Rationale</button>
+            <div id="ans3" class="scenario-explanation">
+              <strong>Correct Answer: B.</strong><br>
+              <strong>Rationale:</strong> ElastiCache (Redis) offloads repetitive static/slowly-changing queries directly from memory, delivering sub-millisecond response times and drastically reducing RDS CPU utilization. Lazy loading ensures only requested catalog items populate the cache. Option A is significantly more expensive and does not scale horizontally. Option C still queries disk storage and adds replica lag. Option D requires a complete data model rewrite.
+            </div>
+          </div>
+
+        </section>
+
+      </div>
+    </main>
   </div>
+
+  <script>
+    function toggleAnswer(id) {
+      var el = document.getElementById(id);
+      if (el.style.display === "block") {
+        el.style.display = "none";
+      } else {
+        el.style.display = "block";
+      }
+    }
+
+    function filterNav() {
+      var input = document.getElementById("navSearch");
+      var filter = input.value.toLowerCase();
+      var links = document.querySelectorAll(".sidebar .nav-link");
+      links.forEach(function(link) {
+        var text = link.textContent || link.innerText;
+        if (text.toLowerCase().indexOf(filter) > -1) {
+          link.style.display = "";
+        } else {
+          link.style.display = "none";
+        }
+      });
+    }
+  </script>
 </body>
 </html>
