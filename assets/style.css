@@ -18,6 +18,7 @@
   --font-heading: 'Space Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --font-body: 'Archivo', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
   --ease: cubic-bezier(0.16, 1, 0.3, 1);
+  --dot-color: rgba(255, 255, 255, 0.16);
 }
 :root[data-theme="light"] {
   --bg-primary: #fafafa;
@@ -29,6 +30,7 @@
   --border-color: #e4e4e7;
   --code-bg: #f4f4f5;
   --accent-blue: #2563eb;
+  --dot-color: rgba(0, 0, 0, 0.09);
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html { color-scheme: dark; scroll-behavior: smooth; font-size: var(--reading-scale, 100%); }
@@ -40,6 +42,8 @@ html[data-theme="light"] { color-scheme: light; }
 body {
   font-family: var(--font-body);
   background-color: var(--bg-primary);
+  background-image: radial-gradient(circle, var(--dot-color) 1.5px, transparent 1.6px);
+  background-size: 22px 22px;
   color: var(--text-main);
   line-height: 1.6;
   display: flex;
@@ -262,15 +266,13 @@ table.data-table a.day-link:hover { color: var(--accent-orange); }
 
 /* Day tracker widget */
 .tracker-card {
-  display: flex; align-items: center; gap: 20px; flex-wrap: wrap;
+  display: flex; align-items: center; gap: 28px; flex-wrap: wrap;
   background: var(--bg-card);
   border: 1px solid var(--border-color); border-radius: 12px; padding: 22px 24px; margin: 32px 0 40px;
   box-shadow: 0 1px 2px rgba(0,0,0,0.04);
 }
 .tracker-progress { flex: 1; min-width: 220px; }
 .tracker-progress strong { font-family: var(--font-heading); font-weight: 600; }
-.tracker-bar { height: 8px; background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 4px; overflow: hidden; margin-top: 10px; }
-.tracker-bar-fill { height: 100%; min-width: 6px; background: linear-gradient(90deg, var(--accent-orange), var(--accent-blue)); transition: width 300ms var(--ease); }
 .btn {
   display: inline-block; background-color: var(--text-main); color: var(--bg-primary); font-family: var(--font-heading); font-weight: 600;
   padding: 10px 18px; border-radius: 8px; border: none; cursor: pointer; font-size: 0.9rem; text-decoration: none; white-space: nowrap;
@@ -282,6 +284,18 @@ table.data-table a.day-link:hover { color: var(--accent-orange); }
 .btn-green { background-color: var(--accent-green); color: #04231a; }
 .btn[aria-disabled="true"] { background-color: var(--bg-secondary); color: var(--text-muted); cursor: default; }
 .btn[aria-disabled="true"]:hover { opacity: 1; transform: none; }
+.jump-select-wrap { position: relative; display: inline-flex; flex-shrink: 0; }
+select.jump-select {
+  appearance: none; -webkit-appearance: none; -moz-appearance: none;
+  font-family: var(--font-heading); padding-right: 36px;
+  max-width: 160px; overflow: hidden; text-overflow: ellipsis;
+}
+select.jump-select:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: 2px; }
+.jump-select-wrap::after {
+  content: ""; position: absolute; right: 16px; top: 50%; width: 7px; height: 7px;
+  border-right: 2px solid var(--text-muted); border-bottom: 2px solid var(--text-muted);
+  transform: translateY(-65%) rotate(45deg); pointer-events: none;
+}
 
 /* Day page header / nav */
 .day-meta { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 18px; }

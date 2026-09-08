@@ -79,24 +79,39 @@ function renderTracker(containerId, currentPageDay) {
     ctaHtml = `<a class="btn" href="${dayHref(day)}">Continue Studying &rarr;</a>`;
   }
 
+  const navLinks = Array.from(document.querySelectorAll('.nav-link[data-day]'));
+  const jumpOptions = navLinks.map(l =>
+    `<option value="${l.getAttribute('href')}" data-day="${l.dataset.day}">${l.textContent.trim()}</option>`
+  ).join('');
+  const jumpHtml = navLinks.length ? `
+    <div class="jump-select-wrap">
+      <select class="btn btn-outline jump-select" id="jumpSelect" aria-label="Jump to a specific day">
+        <option value="" disabled selected>Jump to day&hellip;</option>
+        ${jumpOptions}
+      </select>
+    </div>
+  ` : '';
+
   el.innerHTML = `
     <div class="tracker-progress">
       <strong>Day ${day} of ${TOTAL_DAYS}</strong> — ${pct}% through the 14-week plan
-      <div class="tracker-bar"><div class="tracker-bar-fill" style="width:${pct}%"></div></div>
     </div>
     ${ctaHtml}
-    <button class="btn btn-outline" id="jumpBtn" type="button">Jump to day&hellip;</button>
+    ${jumpHtml}
   `;
   if (onTrackedDay && !atEnd) {
     document.getElementById('continueBtn').addEventListener('click', () => setCurrentDay(nextDay));
   }
-  document.getElementById('jumpBtn').addEventListener('click', () => {
-    const n = prompt('Jump to which day? (1-' + TOTAL_DAYS + ')', String(day));
-    if (n && !isNaN(parseInt(n, 10))) {
-      const d = setCurrentDay(parseInt(n, 10));
-      window.location.href = dayHref(d);
-    }
-  });
+  const jumpSelect = document.getElementById('jumpSelect');
+  if (jumpSelect) {
+    jumpSelect.addEventListener('change', () => {
+      const opt = jumpSelect.selectedOptions[0];
+      if (!opt || !opt.value) return;
+      const d = parseInt(opt.dataset.day, 10);
+      if (d) setCurrentDay(d);
+      window.location.href = opt.value;
+    });
+  }
   if (typeof currentPageDay === 'number') {
     document.querySelectorAll('.nav-link[data-day]').forEach(l => {
       if (parseInt(l.dataset.day, 10) === currentPageDay) l.classList.add('current');
