@@ -391,6 +391,7 @@
       
       <div class="nav-section">
         <div class="nav-section-title">Program Strategy</div>
+        <a href="days/day-056.html" class="nav-link" style="color:var(--accent-orange);font-weight:700;">&#9733; Continue: Day 56 (Today)</a>
         <a href="#roadmap" class="nav-link">Roadmap &amp; 14-Week Plan</a>
         <a href="#daily-schedule" class="nav-link">Day-by-Day Master Syllabus</a>
         <a href="#exam-strategy" class="nav-link">Exam Technique &amp; Pacing</a>
@@ -496,130 +497,437 @@
             <p>
               Daily structured 1.5–2 hour study routine. Each day includes <strong>Core Architecture Reading (45m)</strong>, <strong>Hands-on Practice (45m)</strong>, and <strong>Scenario Question Drills (20m)</strong>:
             </p>
+            <div class="tracker-card" id="trackerHome"></div>
             <div class="table-container">
               <table class="data-table">
                 <thead>
                   <tr>
                     <th>Day</th>
                     <th>Topic Focus</th>
-                    <th>Key Service Deep Dive</th>
-                    <th>Hands-on Lab / Practical Action</th>
+                    <th>Week</th>
+                    <th>Phase</th>
                   </tr>
                 </thead>
-                <tbody>
-                  <tr>
+                <tbody id="dayTableBody">
+                  <tr data-day="1">
                     <td><strong>Day 1</strong></td>
-                    <td>Multi-Account Architecture &amp; Organizations</td>
-                    <td>AWS Organizations, OU Design, Root vs Child</td>
-                    <td>Draft an SCP hierarchy isolating Dev, Staging, and Production</td>
+                    <td><a class="day-link" href="days/day-001.html">Multi-Account Architecture &amp; AWS Organizations</a></td>
+                    <td>Week 1</td>
+                    <td>Multi-Account Governance &amp; Networking</td>
                   </tr>
-                  <tr>
+                  <tr data-day="2">
                     <td><strong>Day 2</strong></td>
-                    <td>Service Control Policy (SCP) Mechanics</td>
-                    <td>Explicit Deny, FullAWSAccess, aws:RequestedRegion</td>
-                    <td>Write and validate a region-restriction SCP with global service exemptions</td>
+                    <td><a class="day-link" href="days/day-002.html">Service Control Policy (SCP) Mechanics</a></td>
+                    <td>Week 1</td>
+                    <td>Multi-Account Governance &amp; Networking</td>
                   </tr>
-                  <tr>
+                  <tr data-day="3">
                     <td><strong>Day 3</strong></td>
-                    <td>AWS Control Tower &amp; Account Factory</td>
-                    <td>Control Tower, Mandatory/Elective Guardrails</td>
-                    <td>Review Account Factory for Terraform (AFT) baseline automation</td>
+                    <td><a class="day-link" href="days/day-003.html">AWS Control Tower &amp; Account Factory</a></td>
+                    <td>Week 1</td>
+                    <td>Multi-Account Governance &amp; Networking</td>
                   </tr>
-                  <tr>
+                  <tr data-day="4">
                     <td><strong>Day 4</strong></td>
-                    <td>IAM Identity Center (AWS SSO) &amp; Federation</td>
-                    <td>SAML 2.0, Microsoft Entra ID / Okta Federation</td>
-                    <td>Configure permission sets and multi-account role assignment</td>
+                    <td><a class="day-link" href="days/day-004.html">IAM Identity Center (AWS SSO) &amp; Federation</a></td>
+                    <td>Week 1</td>
+                    <td>Multi-Account Governance &amp; Networking</td>
                   </tr>
-                  <tr>
+                  <tr data-day="5">
                     <td><strong>Day 5</strong></td>
-                    <td>IAM Permission Boundaries &amp; STS</td>
-                    <td>AssumeRoleWithWebIdentity, STS session policies</td>
-                    <td>Create an IAM delegate admin role restricted by a permission boundary</td>
+                    <td><a class="day-link" href="days/day-005.html">IAM Permission Boundaries &amp; STS</a></td>
+                    <td>Week 1</td>
+                    <td>Multi-Account Governance &amp; Networking</td>
                   </tr>
-                  <tr>
+                  <tr data-day="6">
                     <td><strong>Day 6</strong></td>
-                    <td>Resource Access Manager (RAM) &amp; VPC Sharing</td>
-                    <td>AWS RAM, shared subnets, cross-account security</td>
-                    <td>Share a centralized VPC subnet across multiple accounts via RAM</td>
+                    <td><a class="day-link" href="days/day-006.html">Resource Access Manager (RAM) &amp; VPC Sharing</a></td>
+                    <td>Week 1</td>
+                    <td>Multi-Account Governance &amp; Networking</td>
                   </tr>
-                  <tr>
+                  <tr data-day="7">
                     <td><strong>Day 7</strong></td>
-                    <td>Week 1 Synthesis &amp; Multi-Account Drill</td>
-                    <td>Domain 1 Review &amp; Architecture Diagrams</td>
-                    <td>Complete 15 scenario questions on AWS Organizations &amp; SCPs</td>
+                    <td><a class="day-link" href="days/day-007.html">Week 1 Synthesis &amp; Multi-Account Drill</a></td>
+                    <td>Week 1</td>
+                    <td>Multi-Account Governance &amp; Networking</td>
                   </tr>
-                  <tr>
+                  <tr data-day="8">
                     <td><strong>Day 8</strong></td>
-                    <td>Transit Gateway (TGW) Core Routing</td>
-                    <td>TGW route tables, propagation, associations</td>
-                    <td>Build a hub-and-spoke VPC topology connecting 3 isolated VPCs</td>
+                    <td><a class="day-link" href="days/day-008.html">Transit Gateway (TGW) Core Routing</a></td>
+                    <td>Week 2</td>
+                    <td>Multi-Account Governance &amp; Networking</td>
                   </tr>
-                  <tr>
+                  <tr data-day="9">
                     <td><strong>Day 9</strong></td>
-                    <td>Transit Gateway Peering &amp; Multi-Region</td>
-                    <td>Inter-region TGW peering, MTU limits, encryption</td>
-                    <td>Route traffic between us-east-1 and us-west-2 through peered TGWs</td>
+                    <td><a class="day-link" href="days/day-009.html">Transit Gateway Peering &amp; Multi-Region</a></td>
+                    <td>Week 2</td>
+                    <td>Multi-Account Governance &amp; Networking</td>
                   </tr>
-                  <tr>
+                  <tr data-day="10">
                     <td><strong>Day 10</strong></td>
-                    <td>AWS Network Firewall &amp; Centralized Egress</td>
-                    <td>Stateful/Stateless rules, Suricata syntax</td>
-                    <td>Route all outbound internet traffic through an inspection VPC with Network Firewall</td>
+                    <td><a class="day-link" href="days/day-010.html">AWS Network Firewall &amp; Centralized Egress</a></td>
+                    <td>Week 2</td>
+                    <td>Multi-Account Governance &amp; Networking</td>
                   </tr>
-                  <tr>
+                  <tr data-day="11">
                     <td><strong>Day 11</strong></td>
-                    <td>Direct Connect (DX) &amp; DX Gateway</td>
-                    <td>Private VIF, Transit VIF, Public VIF, BGP routing</td>
-                    <td>Design a redundant Direct Connect architecture with active/passive BGP failover</td>
+                    <td><a class="day-link" href="days/day-011.html">Direct Connect (DX) &amp; DX Gateway</a></td>
+                    <td>Week 2</td>
+                    <td>Multi-Account Governance &amp; Networking</td>
                   </tr>
-                  <tr>
+                  <tr data-day="12">
                     <td><strong>Day 12</strong></td>
-                    <td>AWS Route 53 Resolver (Hybrid DNS)</td>
-                    <td>Inbound endpoints, Outbound endpoints, forwarding rules</td>
-                    <td>Configure conditional forwarding between on-prem DNS and AWS Route 53</td>
+                    <td><a class="day-link" href="days/day-012.html">AWS Route 53 Resolver (Hybrid DNS)</a></td>
+                    <td>Week 2</td>
+                    <td>Multi-Account Governance &amp; Networking</td>
                   </tr>
-                  <tr>
+                  <tr data-day="13">
                     <td><strong>Day 13</strong></td>
-                    <td>AWS PrivateLink &amp; VPC Peering Comparison</td>
-                    <td>Interface Endpoints, Gateway Endpoints, Endpoint Policies</td>
-                    <td>Expose an internal microservice across accounts via PrivateLink without IP overlap</td>
+                    <td><a class="day-link" href="days/day-013.html">AWS PrivateLink &amp; VPC Peering Comparison</a></td>
+                    <td>Week 2</td>
+                    <td>Multi-Account Governance &amp; Networking</td>
                   </tr>
-                  <tr>
+                  <tr data-day="14">
                     <td><strong>Day 14</strong></td>
-                    <td>Week 2 Synthesis &amp; Networking Lab Exam</td>
-                    <td>Complex Hybrid Network Architecture</td>
-                    <td>Complete 20 scenario questions on hybrid connectivity and DNS routing</td>
+                    <td><a class="day-link" href="days/day-014.html">Week 2 Synthesis &amp; Networking Lab Exam</a></td>
+                    <td>Week 2</td>
+                    <td>Multi-Account Governance &amp; Networking</td>
                   </tr>
-                  <tr>
-                    <td><strong>Days 15–21</strong></td>
-                    <td>Compute Architecture &amp; Containers</td>
-                    <td>ECS Fargate, EKS, Auto Scaling lifecycle hooks</td>
-                    <td>Configure ALB path routing with Fargate spot &amp; lifecycle graceful shutdown</td>
+                  <tr data-day="15">
+                    <td><strong>Day 15</strong></td>
+                    <td><a class="day-link" href="days/day-015.html">Amazon ECS Fargate Architecture &amp; Task Definitions</a></td>
+                    <td>Week 3</td>
+                    <td>Compute, Containers &amp; Global Databases</td>
                   </tr>
-                  <tr>
-                    <td><strong>Days 22–28</strong></td>
-                    <td>High Availability Storage &amp; Databases</td>
-                    <td>Aurora Global Database, DynamoDB Global Tables</td>
-                    <td>Simulate an Aurora Global DB failover with sub-minute RTO</td>
+                  <tr data-day="16">
+                    <td><strong>Day 16</strong></td>
+                    <td><a class="day-link" href="days/day-016.html">Amazon EKS Architecture &amp; Managed Node Groups vs Fargate</a></td>
+                    <td>Week 3</td>
+                    <td>Compute, Containers &amp; Global Databases</td>
                   </tr>
-                  <tr>
-                    <td><strong>Days 29–42</strong></td>
-                    <td>SRE: Observability, Resilience &amp; DR</td>
-                    <td>CloudWatch Synthetics, X-Ray, FIS, Route 53 ARC</td>
-                    <td>Execute an AWS Fault Injection Simulator (FIS) chaos experiment on ECS</td>
+                  <tr data-day="17">
+                    <td><strong>Day 17</strong></td>
+                    <td><a class="day-link" href="days/day-017.html">Auto Scaling Groups — Lifecycle Hooks &amp; Warm Pools</a></td>
+                    <td>Week 3</td>
+                    <td>Compute, Containers &amp; Global Databases</td>
                   </tr>
-                  <tr>
-                    <td><strong>Days 43–56</strong></td>
+                  <tr data-day="18">
+                    <td><strong>Day 18</strong></td>
+                    <td><a class="day-link" href="days/day-018.html">Application Load Balancer — Advanced Routing &amp; Target Groups</a></td>
+                    <td>Week 3</td>
+                    <td>Compute, Containers &amp; Global Databases</td>
+                  </tr>
+                  <tr data-day="19">
+                    <td><strong>Day 19</strong></td>
+                    <td><a class="day-link" href="days/day-019.html">AWS Lambda Advanced — Concurrency, VPC Networking &amp; Event Source Mapping</a></td>
+                    <td>Week 3</td>
+                    <td>Compute, Containers &amp; Global Databases</td>
+                  </tr>
+                  <tr data-day="20">
+                    <td><strong>Day 20</strong></td>
+                    <td><a class="day-link" href="days/day-020.html">Serverless Architectures — Step Functions &amp; API Gateway</a></td>
+                    <td>Week 3</td>
+                    <td>Compute, Containers &amp; Global Databases</td>
+                  </tr>
+                  <tr data-day="21">
+                    <td><strong>Day 21</strong></td>
+                    <td><a class="day-link" href="days/day-021.html">Week Synthesis — Compute Decision Matrix &amp; Scenario Drills</a></td>
+                    <td>Week 3</td>
+                    <td>Compute, Containers &amp; Global Databases</td>
+                  </tr>
+                  <tr data-day="22">
+                    <td><strong>Day 22</strong></td>
+                    <td><a class="day-link" href="days/day-022.html">Amazon Aurora Architecture &amp; Aurora Global Database</a></td>
+                    <td>Week 4</td>
+                    <td>Compute, Containers &amp; Global Databases</td>
+                  </tr>
+                  <tr data-day="23">
+                    <td><strong>Day 23</strong></td>
+                    <td><a class="day-link" href="days/day-023.html">Amazon RDS Multi-AZ vs Read Replicas &amp; Blue/Green Deployments</a></td>
+                    <td>Week 4</td>
+                    <td>Compute, Containers &amp; Global Databases</td>
+                  </tr>
+                  <tr data-day="24">
+                    <td><strong>Day 24</strong></td>
+                    <td><a class="day-link" href="days/day-024.html">Amazon DynamoDB Deep Dive — Partitioning &amp; Capacity Modes</a></td>
+                    <td>Week 4</td>
+                    <td>Compute, Containers &amp; Global Databases</td>
+                  </tr>
+                  <tr data-day="25">
+                    <td><strong>Day 25</strong></td>
+                    <td><a class="day-link" href="days/day-025.html">DynamoDB Global Tables &amp; DAX Caching</a></td>
+                    <td>Week 4</td>
+                    <td>Compute, Containers &amp; Global Databases</td>
+                  </tr>
+                  <tr data-day="26">
+                    <td><strong>Day 26</strong></td>
+                    <td><a class="day-link" href="days/day-026.html">Amazon S3 Storage Classes, Lifecycle &amp; Replication</a></td>
+                    <td>Week 4</td>
+                    <td>Compute, Containers &amp; Global Databases</td>
+                  </tr>
+                  <tr data-day="27">
+                    <td><strong>Day 27</strong></td>
+                    <td><a class="day-link" href="days/day-027.html">Amazon ElastiCache — Redis vs Memcached Architectures</a></td>
+                    <td>Week 4</td>
+                    <td>Compute, Containers &amp; Global Databases</td>
+                  </tr>
+                  <tr data-day="28">
+                    <td><strong>Day 28</strong></td>
+                    <td><a class="day-link" href="days/day-028.html">Week Synthesis — Database Selection Matrix &amp; Scenario Drills</a></td>
+                    <td>Week 4</td>
+                    <td>Compute, Containers &amp; Global Databases</td>
+                  </tr>
+                  <tr data-day="29">
+                    <td><strong>Day 29</strong></td>
+                    <td><a class="day-link" href="days/day-029.html">CloudWatch Metrics, Alarms &amp; Composite Alarms</a></td>
+                    <td>Week 5</td>
+                    <td>SRE Observability, Resilience &amp; DR</td>
+                  </tr>
+                  <tr data-day="30">
+                    <td><strong>Day 30</strong></td>
+                    <td><a class="day-link" href="days/day-030.html">CloudWatch Synthetics &amp; Canaries for SLO Monitoring</a></td>
+                    <td>Week 5</td>
+                    <td>SRE Observability, Resilience &amp; DR</td>
+                  </tr>
+                  <tr data-day="31">
+                    <td><strong>Day 31</strong></td>
+                    <td><a class="day-link" href="days/day-031.html">AWS X-Ray Distributed Tracing</a></td>
+                    <td>Week 5</td>
+                    <td>SRE Observability, Resilience &amp; DR</td>
+                  </tr>
+                  <tr data-day="32">
+                    <td><strong>Day 32</strong></td>
+                    <td><a class="day-link" href="days/day-032.html">Amazon CloudWatch Logs Insights &amp; Centralized Logging</a></td>
+                    <td>Week 5</td>
+                    <td>SRE Observability, Resilience &amp; DR</td>
+                  </tr>
+                  <tr data-day="33">
+                    <td><strong>Day 33</strong></td>
+                    <td><a class="day-link" href="days/day-033.html">AWS Fault Injection Service (FIS) — Chaos Engineering Fundamentals</a></td>
+                    <td>Week 5</td>
+                    <td>SRE Observability, Resilience &amp; DR</td>
+                  </tr>
+                  <tr data-day="34">
+                    <td><strong>Day 34</strong></td>
+                    <td><a class="day-link" href="days/day-034.html">Designing Game Days &amp; Chaos Experiments</a></td>
+                    <td>Week 5</td>
+                    <td>SRE Observability, Resilience &amp; DR</td>
+                  </tr>
+                  <tr data-day="35">
+                    <td><strong>Day 35</strong></td>
+                    <td><a class="day-link" href="days/day-035.html">Multi-Region Active-Active Architectures</a></td>
+                    <td>Week 6</td>
+                    <td>SRE Observability, Resilience &amp; DR</td>
+                  </tr>
+                  <tr data-day="36">
+                    <td><strong>Day 36</strong></td>
+                    <td><a class="day-link" href="days/day-036.html">Multi-Region Active-Passive &amp; Pilot Light Patterns</a></td>
+                    <td>Week 6</td>
+                    <td>SRE Observability, Resilience &amp; DR</td>
+                  </tr>
+                  <tr data-day="37">
+                    <td><strong>Day 37</strong></td>
+                    <td><a class="day-link" href="days/day-037.html">Route 53 Application Recovery Controller (ARC)</a></td>
+                    <td>Week 6</td>
+                    <td>SRE Observability, Resilience &amp; DR</td>
+                  </tr>
+                  <tr data-day="38">
+                    <td><strong>Day 38</strong></td>
+                    <td><a class="day-link" href="days/day-038.html">Route 53 Routing Policies &amp; Health Checks</a></td>
+                    <td>Week 6</td>
+                    <td>SRE Observability, Resilience &amp; DR</td>
+                  </tr>
+                  <tr data-day="39">
+                    <td><strong>Day 39</strong></td>
+                    <td><a class="day-link" href="days/day-039.html">RTO/RPO Design Patterns &amp; Backup Strategies (AWS Backup)</a></td>
+                    <td>Week 6</td>
+                    <td>SRE Observability, Resilience &amp; DR</td>
+                  </tr>
+                  <tr data-day="40">
+                    <td><strong>Day 40</strong></td>
+                    <td><a class="day-link" href="days/day-040.html">Well-Architected Reliability Pillar Deep Dive</a></td>
+                    <td>Week 6</td>
+                    <td>SRE Observability, Resilience &amp; DR</td>
+                  </tr>
+                  <tr data-day="41">
+                    <td><strong>Day 41</strong></td>
+                    <td><a class="day-link" href="days/day-041.html">Well-Architected Operational Excellence Pillar</a></td>
+                    <td>Week 6</td>
+                    <td>SRE Observability, Resilience &amp; DR</td>
+                  </tr>
+                  <tr data-day="42">
+                    <td><strong>Day 42</strong></td>
+                    <td><a class="day-link" href="days/day-042.html">Week Synthesis — SRE &amp; DR Scenario Drills</a></td>
+                    <td>Week 6</td>
+                    <td>SRE Observability, Resilience &amp; DR</td>
+                  </tr>
+                  <tr data-day="43">
+                    <td><strong>Day 43</strong></td>
+                    <td><a class="day-link" href="days/day-043.html">Migration Strategy Framework — The 7 Rs &amp; Migration Hub</a></td>
+                    <td>Week 7</td>
                     <td>Migration, Hybrid &amp; Cost Optimization</td>
-                    <td>MGN, DMS, DataSync, Storage Gateway, Savings Plans</td>
-                    <td>Architect a zero-downtime database migration from on-prem MySQL to Aurora</td>
                   </tr>
-                  <tr>
-                    <td><strong>Days 57–70</strong></td>
-                    <td>Full-Length Practice Exams &amp; Pacing Drills</td>
-                    <td>Tutorials Dojo 75-question timed mock exams</td>
-                    <td>Complete 5 full timed mock exams (3 hours each) and analyze every distractor</td>
+                  <tr data-day="44">
+                    <td><strong>Day 44</strong></td>
+                    <td><a class="day-link" href="days/day-044.html">AWS Application Discovery Service — Assessment &amp; Portfolio Analysis</a></td>
+                    <td>Week 7</td>
+                    <td>Migration, Hybrid &amp; Cost Optimization</td>
+                  </tr>
+                  <tr data-day="45">
+                    <td><strong>Day 45</strong></td>
+                    <td><a class="day-link" href="days/day-045.html">AWS Application Migration Service (MGN) — Lift-and-Shift Rehost</a></td>
+                    <td>Week 7</td>
+                    <td>Migration, Hybrid &amp; Cost Optimization</td>
+                  </tr>
+                  <tr data-day="46">
+                    <td><strong>Day 46</strong></td>
+                    <td><a class="day-link" href="days/day-046.html">AWS Schema Conversion Tool (SCT) — Heterogeneous Schema Conversion</a></td>
+                    <td>Week 7</td>
+                    <td>Migration, Hybrid &amp; Cost Optimization</td>
+                  </tr>
+                  <tr data-day="47">
+                    <td><strong>Day 47</strong></td>
+                    <td><a class="day-link" href="days/day-047.html">AWS DataSync — Hybrid File &amp; Object Transfer</a></td>
+                    <td>Week 7</td>
+                    <td>Migration, Hybrid &amp; Cost Optimization</td>
+                  </tr>
+                  <tr data-day="48">
+                    <td><strong>Day 48</strong></td>
+                    <td><a class="day-link" href="days/day-048.html">AWS Storage Gateway — File, Volume &amp; Tape Gateways</a></td>
+                    <td>Week 7</td>
+                    <td>Migration, Hybrid &amp; Cost Optimization</td>
+                  </tr>
+                  <tr data-day="49">
+                    <td><strong>Day 49</strong></td>
+                    <td><a class="day-link" href="days/day-049.html">AWS Snow Family — Snowball Edge, Snowcone &amp; Snowmobile</a></td>
+                    <td>Week 7</td>
+                    <td>Migration, Hybrid &amp; Cost Optimization</td>
+                  </tr>
+                  <tr data-day="50">
+                    <td><strong>Day 50</strong></td>
+                    <td><a class="day-link" href="days/day-050.html">Hybrid Cloud Compute — Outposts, Local Zones &amp; Wavelength</a></td>
+                    <td>Week 7</td>
+                    <td>Migration, Hybrid &amp; Cost Optimization</td>
+                  </tr>
+                  <tr data-day="51">
+                    <td><strong>Day 51</strong></td>
+                    <td><a class="day-link" href="days/day-051.html">VMware Cloud on AWS — Relocate Strategy</a></td>
+                    <td>Week 8</td>
+                    <td>Migration, Hybrid &amp; Cost Optimization</td>
+                  </tr>
+                  <tr data-day="52">
+                    <td><strong>Day 52</strong></td>
+                    <td><a class="day-link" href="days/day-052.html">Direct Connect Capacity Planning for Large-Scale Migration</a></td>
+                    <td>Week 8</td>
+                    <td>Migration, Hybrid &amp; Cost Optimization</td>
+                  </tr>
+                  <tr data-day="53">
+                    <td><strong>Day 53</strong></td>
+                    <td><a class="day-link" href="days/day-053.html">Cost Optimization — Savings Plans, RIs &amp; Spot Fleet Strategy</a></td>
+                    <td>Week 8</td>
+                    <td>Migration, Hybrid &amp; Cost Optimization</td>
+                  </tr>
+                  <tr data-day="54">
+                    <td><strong>Day 54</strong></td>
+                    <td><a class="day-link" href="days/day-054.html">AWS Compute Optimizer, Cost Explorer &amp; Trusted Advisor</a></td>
+                    <td>Week 8</td>
+                    <td>Migration, Hybrid &amp; Cost Optimization</td>
+                  </tr>
+                  <tr data-day="55">
+                    <td><strong>Day 55</strong></td>
+                    <td><a class="day-link" href="days/day-055.html">FinOps on AWS — Tagging, Budgets &amp; Cost Allocation Reports</a></td>
+                    <td>Week 8</td>
+                    <td>Migration, Hybrid &amp; Cost Optimization</td>
+                  </tr>
+                  <tr class="today-row" data-day="56">
+                    <td><strong>Day 56</strong> <span class="pill pill-red">TODAY</span></td>
+                    <td><a class="day-link" href="days/day-056.html">AWS Database Migration Service (DMS) — Homogeneous &amp; Heterogeneous Migration with CDC</a></td>
+                    <td>Week 8</td>
+                    <td>Migration, Hybrid &amp; Cost Optimization</td>
+                  </tr>
+                  <tr data-day="57">
+                    <td><strong>Day 57</strong></td>
+                    <td><a class="day-link" href="days/day-057.html">Full-Length Mock Exam 1 — 75 Questions Timed</a></td>
+                    <td>Week 8</td>
+                    <td>Practice Exams &amp; Exam Technique</td>
+                  </tr>
+                  <tr data-day="58">
+                    <td><strong>Day 58</strong></td>
+                    <td><a class="day-link" href="days/day-058.html">Mock Exam 1 Distractor Analysis &amp; Weak Domain Review</a></td>
+                    <td>Week 9</td>
+                    <td>Practice Exams &amp; Exam Technique</td>
+                  </tr>
+                  <tr data-day="59">
+                    <td><strong>Day 59</strong></td>
+                    <td><a class="day-link" href="days/day-059.html">Deep Review — Domain 1 Weak Areas (Org/Governance/Networking)</a></td>
+                    <td>Week 9</td>
+                    <td>Practice Exams &amp; Exam Technique</td>
+                  </tr>
+                  <tr data-day="60">
+                    <td><strong>Day 60</strong></td>
+                    <td><a class="day-link" href="days/day-060.html">Deep Review — Domain 2 Weak Areas (Resilient Architectures)</a></td>
+                    <td>Week 9</td>
+                    <td>Practice Exams &amp; Exam Technique</td>
+                  </tr>
+                  <tr data-day="61">
+                    <td><strong>Day 61</strong></td>
+                    <td><a class="day-link" href="days/day-061.html">Full-Length Mock Exam 2 — 75 Questions Timed</a></td>
+                    <td>Week 9</td>
+                    <td>Practice Exams &amp; Exam Technique</td>
+                  </tr>
+                  <tr data-day="62">
+                    <td><strong>Day 62</strong></td>
+                    <td><a class="day-link" href="days/day-062.html">Mock Exam 2 Distractor Analysis &amp; Weak Domain Review</a></td>
+                    <td>Week 9</td>
+                    <td>Practice Exams &amp; Exam Technique</td>
+                  </tr>
+                  <tr data-day="63">
+                    <td><strong>Day 63</strong></td>
+                    <td><a class="day-link" href="days/day-063.html">Deep Review — Domain 3 Weak Areas (Migration &amp; Modernization)</a></td>
+                    <td>Week 9</td>
+                    <td>Practice Exams &amp; Exam Technique</td>
+                  </tr>
+                  <tr data-day="64">
+                    <td><strong>Day 64</strong></td>
+                    <td><a class="day-link" href="days/day-064.html">Deep Review — Domain 4 Weak Areas (Cost Control)</a></td>
+                    <td>Week 9</td>
+                    <td>Practice Exams &amp; Exam Technique</td>
+                  </tr>
+                  <tr data-day="65">
+                    <td><strong>Day 65</strong></td>
+                    <td><a class="day-link" href="days/day-065.html">Full-Length Mock Exam 3 — 75 Questions Timed</a></td>
+                    <td>Week 9</td>
+                    <td>Practice Exams &amp; Exam Technique</td>
+                  </tr>
+                  <tr data-day="66">
+                    <td><strong>Day 66</strong></td>
+                    <td><a class="day-link" href="days/day-066.html">Mock Exam 3 Distractor Analysis &amp; Timing/Pacing Strategy</a></td>
+                    <td>Week 10</td>
+                    <td>Practice Exams &amp; Exam Technique</td>
+                  </tr>
+                  <tr data-day="67">
+                    <td><strong>Day 67</strong></td>
+                    <td><a class="day-link" href="days/day-067.html">Full-Length Mock Exam 4 — 75 Questions Timed</a></td>
+                    <td>Week 10</td>
+                    <td>Practice Exams &amp; Exam Technique</td>
+                  </tr>
+                  <tr data-day="68">
+                    <td><strong>Day 68</strong></td>
+                    <td><a class="day-link" href="days/day-068.html">Mock Exam 4 Distractor Analysis &amp; Flag-and-Review Technique</a></td>
+                    <td>Week 10</td>
+                    <td>Practice Exams &amp; Exam Technique</td>
+                  </tr>
+                  <tr data-day="69">
+                    <td><strong>Day 69</strong></td>
+                    <td><a class="day-link" href="days/day-069.html">Full-Length Mock Exam 5 — 75 Questions Timed</a></td>
+                    <td>Week 10</td>
+                    <td>Practice Exams &amp; Exam Technique</td>
+                  </tr>
+                  <tr data-day="70">
+                    <td><strong>Day 70</strong></td>
+                    <td><a class="day-link" href="days/day-070.html">Final Review — Exam Day Logistics, Pearson VUE Checklist &amp; Confidence Drills</a></td>
+                    <td>Week 10</td>
+                    <td>Practice Exams &amp; Exam Technique</td>
                   </tr>
                 </tbody>
               </table>
@@ -933,7 +1241,15 @@
     </main>
   </div>
 
+  <script src="assets/app.js"></script>
   <script>
+    renderTracker('trackerHome');
+    (function() {
+      var cur = getCurrentDay();
+      var row = document.querySelector('#dayTableBody tr[data-day="' + cur + '"]');
+      if (row) row.classList.add('today-row');
+    })();
+
     function toggleAnswer(id) {
       var el = document.getElementById(id);
       if (el.style.display === "block") {
