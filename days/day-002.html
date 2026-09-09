@@ -1,149 +1,250 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Day 2: Service Control Policy (SCP) Mechanics — AWS SA Pro Curriculum</title>
-<link rel="stylesheet" href="../assets/style.css">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Day 2: Service Control Policy (SCP) Mechanics & Condition Keys — AWS SA Pro & SRE Curriculum</title>
+  <link rel="stylesheet" href="../assets/style.css">
+  <script>window.SAPRO_BASE = '../';</script>
 </head>
 <body>
-<header class="topbar">
-  <div class="brand-group">
-    <a href="../index.html" class="brand-logo">AWS SA PRO</a>
-    <div class="brand-title">Day 2 of 70 &middot; Week 1</div>
-  </div>
-  <button class="mobile-nav-toggle" onclick="toggleTopLinks()">Menu</button>
-  <div class="top-links">
-    <a href="../index.html">&larr; Full Curriculum</a>
-    <a href="https://github.com/consultantstanleymn/aws-sa-pro-curriculum" target="_blank">GitHub &rarr;</a>
-  </div>
-</header>
-<div class="app-container">
-  <button class="sidebar-toggle btn btn-outline" onclick="toggleSidebar()" style="margin:12px 16px;">Browse all 70 days</button>
-  <aside class="sidebar" id="sidebar">
-    <div class="search-box"><input type="text" id="navSearch" class="search-input" placeholder="Search days..." onkeyup="filterNav()"></div>
-    <div class="nav-section">
-      <div class="nav-section-title">All Days</div>
-      <a href="day-001.html" class="nav-link" data-day="1">Day 1: Multi-Account Architecture &amp; AWS Organizations</a>
-      <a href="day-002.html" class="nav-link" data-day="2">Day 2: Service Control Policy (SCP) Mechanics</a>
-      <a href="day-003.html" class="nav-link" data-day="3">Day 3: AWS Control Tower &amp; Account Factory</a>
-      <a href="day-004.html" class="nav-link" data-day="4">Day 4: IAM Identity Center (AWS SSO) &amp; Federation</a>
-      <a href="day-005.html" class="nav-link" data-day="5">Day 5: IAM Permission Boundaries &amp; STS</a>
-      <a href="day-006.html" class="nav-link" data-day="6">Day 6: Resource Access Manager (RAM) &amp; VPC Sharing</a>
-      <a href="day-007.html" class="nav-link" data-day="7">Day 7: Week 1 Synthesis &amp; Multi-Account Drill</a>
-      <a href="day-008.html" class="nav-link" data-day="8">Day 8: Transit Gateway (TGW) Core Routing</a>
-      <a href="day-009.html" class="nav-link" data-day="9">Day 9: Transit Gateway Peering &amp; Multi-Region</a>
-      <a href="day-010.html" class="nav-link" data-day="10">Day 10: AWS Network Firewall &amp; Centralized Egress</a>
-      <a href="day-011.html" class="nav-link" data-day="11">Day 11: Direct Connect (DX) &amp; DX Gateway</a>
-      <a href="day-012.html" class="nav-link" data-day="12">Day 12: AWS Route 53 Resolver (Hybrid DNS)</a>
-      <a href="day-013.html" class="nav-link" data-day="13">Day 13: AWS PrivateLink &amp; VPC Peering Comparison</a>
-      <a href="day-014.html" class="nav-link" data-day="14">Day 14: Week 2 Synthesis &amp; Networking Lab Exam</a>
-      <a href="day-015.html" class="nav-link" data-day="15">Day 15: Amazon ECS Fargate Architecture &amp; Task Definitions</a>
-      <a href="day-016.html" class="nav-link" data-day="16">Day 16: Amazon EKS Architecture &amp; Managed Node Groups vs Fargate</a>
-      <a href="day-017.html" class="nav-link" data-day="17">Day 17: Auto Scaling Groups — Lifecycle Hooks &amp; Warm Pools</a>
-      <a href="day-018.html" class="nav-link" data-day="18">Day 18: Application Load Balancer — Advanced Routing &amp; Target Groups</a>
-      <a href="day-019.html" class="nav-link" data-day="19">Day 19: AWS Lambda Advanced — Concurrency, VPC Networking &amp; Event Source Mapping</a>
-      <a href="day-020.html" class="nav-link" data-day="20">Day 20: Serverless Architectures — Step Functions &amp; API Gateway</a>
-      <a href="day-021.html" class="nav-link" data-day="21">Day 21: Week Synthesis — Compute Decision Matrix &amp; Scenario Drills</a>
-      <a href="day-022.html" class="nav-link" data-day="22">Day 22: Amazon Aurora Architecture &amp; Aurora Global Database</a>
-      <a href="day-023.html" class="nav-link" data-day="23">Day 23: Amazon RDS Multi-AZ vs Read Replicas &amp; Blue/Green Deployments</a>
-      <a href="day-024.html" class="nav-link" data-day="24">Day 24: Amazon DynamoDB Deep Dive — Partitioning &amp; Capacity Modes</a>
-      <a href="day-025.html" class="nav-link" data-day="25">Day 25: DynamoDB Global Tables &amp; DAX Caching</a>
-      <a href="day-026.html" class="nav-link" data-day="26">Day 26: Amazon S3 Storage Classes, Lifecycle &amp; Replication</a>
-      <a href="day-027.html" class="nav-link" data-day="27">Day 27: Amazon ElastiCache — Redis vs Memcached Architectures</a>
-      <a href="day-028.html" class="nav-link" data-day="28">Day 28: Week Synthesis — Database Selection Matrix &amp; Scenario Drills</a>
-      <a href="day-029.html" class="nav-link" data-day="29">Day 29: CloudWatch Metrics, Alarms &amp; Composite Alarms</a>
-      <a href="day-030.html" class="nav-link" data-day="30">Day 30: CloudWatch Synthetics &amp; Canaries for SLO Monitoring</a>
-      <a href="day-031.html" class="nav-link" data-day="31">Day 31: AWS X-Ray Distributed Tracing</a>
-      <a href="day-032.html" class="nav-link" data-day="32">Day 32: Amazon CloudWatch Logs Insights &amp; Centralized Logging</a>
-      <a href="day-033.html" class="nav-link" data-day="33">Day 33: AWS Fault Injection Service (FIS) — Chaos Engineering Fundamentals</a>
-      <a href="day-034.html" class="nav-link" data-day="34">Day 34: Designing Game Days &amp; Chaos Experiments</a>
-      <a href="day-035.html" class="nav-link" data-day="35">Day 35: Multi-Region Active-Active Architectures</a>
-      <a href="day-036.html" class="nav-link" data-day="36">Day 36: Multi-Region Active-Passive &amp; Pilot Light Patterns</a>
-      <a href="day-037.html" class="nav-link" data-day="37">Day 37: Route 53 Application Recovery Controller (ARC)</a>
-      <a href="day-038.html" class="nav-link" data-day="38">Day 38: Route 53 Routing Policies &amp; Health Checks</a>
-      <a href="day-039.html" class="nav-link" data-day="39">Day 39: RTO/RPO Design Patterns &amp; Backup Strategies (AWS Backup)</a>
-      <a href="day-040.html" class="nav-link" data-day="40">Day 40: Well-Architected Reliability Pillar Deep Dive</a>
-      <a href="day-041.html" class="nav-link" data-day="41">Day 41: Well-Architected Operational Excellence Pillar</a>
-      <a href="day-042.html" class="nav-link" data-day="42">Day 42: Week Synthesis — SRE &amp; DR Scenario Drills</a>
-      <a href="day-043.html" class="nav-link" data-day="43">Day 43: Migration Strategy Framework — The 7 Rs &amp; Migration Hub</a>
-      <a href="day-044.html" class="nav-link" data-day="44">Day 44: AWS Application Discovery Service — Assessment &amp; Portfolio Analysis</a>
-      <a href="day-045.html" class="nav-link" data-day="45">Day 45: AWS Application Migration Service (MGN) — Lift-and-Shift Rehost</a>
-      <a href="day-046.html" class="nav-link" data-day="46">Day 46: AWS Schema Conversion Tool (SCT) — Heterogeneous Schema Conversion</a>
-      <a href="day-047.html" class="nav-link" data-day="47">Day 47: AWS DataSync — Hybrid File &amp; Object Transfer</a>
-      <a href="day-048.html" class="nav-link" data-day="48">Day 48: AWS Storage Gateway — File, Volume &amp; Tape Gateways</a>
-      <a href="day-049.html" class="nav-link" data-day="49">Day 49: AWS Snow Family — Snowball Edge, Snowcone &amp; Snowmobile</a>
-      <a href="day-050.html" class="nav-link" data-day="50">Day 50: Hybrid Cloud Compute — Outposts, Local Zones &amp; Wavelength</a>
-      <a href="day-051.html" class="nav-link" data-day="51">Day 51: VMware Cloud on AWS — Relocate Strategy</a>
-      <a href="day-052.html" class="nav-link" data-day="52">Day 52: Direct Connect Capacity Planning for Large-Scale Migration</a>
-      <a href="day-053.html" class="nav-link" data-day="53">Day 53: Cost Optimization — Savings Plans, RIs &amp; Spot Fleet Strategy</a>
-      <a href="day-054.html" class="nav-link" data-day="54">Day 54: AWS Compute Optimizer, Cost Explorer &amp; Trusted Advisor</a>
-      <a href="day-055.html" class="nav-link" data-day="55">Day 55: FinOps on AWS — Tagging, Budgets &amp; Cost Allocation Reports</a>
-      <a href="day-056.html" class="nav-link" data-day="56">Day 56: AWS Database Migration Service (DMS) — Homogeneous &amp; Heterogeneous Migration with CDC</a>
-      <a href="day-057.html" class="nav-link" data-day="57">Day 57: Full-Length Mock Exam 1 — 75 Questions Timed</a>
-      <a href="day-058.html" class="nav-link" data-day="58">Day 58: Mock Exam 1 Distractor Analysis &amp; Weak Domain Review</a>
-      <a href="day-059.html" class="nav-link" data-day="59">Day 59: Deep Review — Domain 1 Weak Areas (Org/Governance/Networking)</a>
-      <a href="day-060.html" class="nav-link" data-day="60">Day 60: Deep Review — Domain 2 Weak Areas (Resilient Architectures)</a>
-      <a href="day-061.html" class="nav-link" data-day="61">Day 61: Full-Length Mock Exam 2 — 75 Questions Timed</a>
-      <a href="day-062.html" class="nav-link" data-day="62">Day 62: Mock Exam 2 Distractor Analysis &amp; Weak Domain Review</a>
-      <a href="day-063.html" class="nav-link" data-day="63">Day 63: Deep Review — Domain 3 Weak Areas (Migration &amp; Modernization)</a>
-      <a href="day-064.html" class="nav-link" data-day="64">Day 64: Deep Review — Domain 4 Weak Areas (Cost Control)</a>
-      <a href="day-065.html" class="nav-link" data-day="65">Day 65: Full-Length Mock Exam 3 — 75 Questions Timed</a>
-      <a href="day-066.html" class="nav-link" data-day="66">Day 66: Mock Exam 3 Distractor Analysis &amp; Timing/Pacing Strategy</a>
-      <a href="day-067.html" class="nav-link" data-day="67">Day 67: Full-Length Mock Exam 4 — 75 Questions Timed</a>
-      <a href="day-068.html" class="nav-link" data-day="68">Day 68: Mock Exam 4 Distractor Analysis &amp; Flag-and-Review Technique</a>
-      <a href="day-069.html" class="nav-link" data-day="69">Day 69: Full-Length Mock Exam 5 — 75 Questions Timed</a>
-      <a href="day-070.html" class="nav-link" data-day="70">Day 70: Final Review — Exam Day Logistics, Pearson VUE Checklist &amp; Confidence Drills</a>
+
+  <!-- Reading progress bar -->
+  <div id="readProgressBar" style="position:fixed;top:0;left:0;height:3px;background:var(--accent-orange);width:0%;z-index:100;transition:width 0.1s;"></div>
+
+  <!-- Top Navigation -->
+  <header class="topbar">
+    <div class="brand-group">
+      <a href="../index.html" class="brand-logo">AWS SA PRO</a>
+      <div class="brand-title">Architect &amp; SRE Master Curriculum</div>
+      <div class="brand-domain">stanley-n.com</div>
     </div>
-  </aside>
-  <main class="main-viewport">
-    <div class="content-wrapper reading">
+    <div class="top-links">
+      <a href="../index.html">&larr; Back to Curriculum Hub</a>
+      <a href="https://docs.aws.amazon.com/pdfs/aws-certification/latest/solutions-architect-professional-02/solutions-architect-professional-02.pdf" target="_blank">SAP-C02 Exam Guide &rarr;</a>
+    </div>
+  </header>
+
+  <div class="app-container">
+    <main class="main-viewport" style="max-width: 860px; margin: 0 auto; padding: 40px 24px;">
+      
+      <!-- Day Header -->
       <div class="day-meta">
-        <span class="pill pill-orange">Day 2 / 70</span>
-        <span class="pill pill-blue">Week 1 of 14</span>
-        <span class="pill pill-green">Phase 1: Multi-Account Governance &amp; Networking</span>
+        <span class="pill pill-orange">Week 1 &bull; Day 2 of 70</span>
+        <span class="pill pill-blue">Phase 1: Multi-Account Governance &amp; Networking</span>
+        <span class="pill pill-purple">Domain 1: Organizational Complexity (26%)</span>
+        <span class="pill pill-green">Est. Read: 26 mins</span>
       </div>
-      <h1 class="hero-title">Service Control Policy (SCP) Mechanics</h1>
-      <div class="reading-meta">&#128337; ~3 min read &middot; 2 services covered</div>
+
+      <h1 class="hero-title" style="margin-top: 8px;">Service Control Policy (SCP) Mechanics &amp; Condition Keys</h1>
+      <p class="hero-subtitle">
+        Advanced condition keys (aws:PrincipalOrgID, aws:RequestTag, aws:SourceVpc), inheritance trees, and preventative organizational guardrails.
+      </p>
+
       <div class="services-grid">
-        <span class="service-tag">SCP</span>
-        <span class="service-tag">IAM</span>
+        <span class="service-tag">SCP Condition Keys</span>
+        <span class="service-tag">aws:PrincipalOrgID</span>
+        <span class="service-tag">Attribute-Based Access Control (ABAC)</span>
+        <span class="service-tag">Tag Policies</span>
+        <span class="service-tag">Resource Perimeters</span>
       </div>
-      <div id="tracker"></div>
+
+      <!-- Section 1 -->
       <section class="doc-section">
-        <h2 class="section-heading">Today's Concept</h2>
+        <h2 class="section-heading">1. Deep Architectural Mechanics: Advanced SCP Conditions</h2>
         <div class="card card-accent">
-          <p>SCPs are org-wide permission guardrails: they set the maximum available permissions for accounts in an OU but never grant access by themselves — an IAM identity still needs an allow. The default FullAWSAccess SCP allows everything until you attach explicit Deny statements. Region-restriction SCPs must exempt global services (IAM, Route 53, CloudFront, Support) or you will break account operations.</p>
+          <h3 class="sub-heading">Global Condition Keys in SCPs</h3>
+          <p>
+            Standard IAM policies evaluate conditions at the identity level. When used in SCPs, global condition keys act as <strong>organization-wide cryptographic and network barriers</strong>:
+          </p>
+          <ul>
+            <li><strong><code>aws:PrincipalOrgID</code>:</strong> Restricts resource access to identities belonging to your specific AWS Organization. Commonly used in S3 Bucket Policies and KMS Key Policies to allow access to all current and future accounts in your organization with a single condition block, eliminating manual account ARN updates.</li>
+            <li><strong><code>aws:RequestTag/${TagKey}</code> vs. <code>aws:ResourceTag/${TagKey}</code>:</strong>
+              <ul>
+                <li><code>aws:RequestTag</code>: Evaluates tags passed <em>in the API request</em> (e.g. creating an instance or volume). Used to mandate tag presence at creation time.</li>
+                <li><code>aws:ResourceTag</code>: Evaluates existing tags on resources. Used to control operations (e.g. start/stop/terminate) based on resource environment.</li>
+              </ul>
+            </li>
+            <li><strong><code>aws:SourceVpc</code> &amp; <code>aws:sourceVpc</code>:</strong> Restricts S3, KMS, and API operations so they can only be invoked from within designated private VPCs or via AWS PrivateLink VPC endpoints.</li>
+          </ul>
         </div>
-        <h3 class="sub-heading">Hands-on Lab / Practical Action (45 min)</h3>
-        <div class="card">
-          <p>Write and validate a region-restriction SCP that denies all actions outside two approved regions while exempting IAM, Route 53, CloudFront, and Support.</p>
+
+        <div class="card card-sre">
+          <h3 class="sub-heading">The Explicit Deny Inheritance Rules</h3>
+          <p>
+            Understanding policy inheritance across nested OUs is one of the most heavily tested topics on the SAP-C02:
+          </p>
+          <div class="table-container">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Attachment Level</th>
+                  <th>Policy Statement</th>
+                  <th>Inheritance Behavior in Child OU</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><strong>Root OU</strong></td>
+                  <td><code>FullAWSAccess</code> (Allow <code>*</code>)</td>
+                  <td>Baseline ceiling. Allows services unless a downstream policy denies them.</td>
+                </tr>
+                <tr>
+                  <td><strong>Parent OU</strong></td>
+                  <td>Explicit Deny on <code>s3:DeleteBucket</code></td>
+                  <td>Irreversible across all sub-OUs and member accounts. No child policy can ever grant <code>DeleteBucket</code>.</td>
+                </tr>
+                <tr>
+                  <td><strong>Child OU</strong></td>
+                  <td>Explicit Allow on <code>s3:DeleteBucket</code> with condition</td>
+                  <td>Completely ignored. Deny at parent level takes absolute precedence.</td>
+                </tr>
+                <tr>
+                  <td><strong>Member Account</strong></td>
+                  <td>IAM AdministratorAccess</td>
+                  <td>Constrained by parent SCP. The administrator cannot delete S3 buckets.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </div>
       </section>
+
+      <!-- Section 2: Blueprints -->
       <section class="doc-section">
-        <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
+        <h2 class="section-heading">2. Production SCP Blueprints (Copy-Pasteable JSON)</h2>
         
-      <div class="scenario-card">
-        <p class="scenario-question"><strong>Q1.</strong> A developer has an IAM policy granting s3:*, but an SCP on their OU denies s3:DeleteBucket. What happens if they call DeleteBucket?</p>
-        <div class="scenario-options" id="opts-d2q0">
-            <div class="scenario-option">A. It succeeds because IAM policies take precedence</div>
-            <div class="scenario-option">B. It is denied — SCPs set the ceiling and an explicit Deny always wins</div>
-            <div class="scenario-option">C. It succeeds only in the management account</div>
-            <div class="scenario-option">D. It depends on the S3 bucket policy</div>
+        <div class="card card-accent">
+          <h3 class="sub-heading">Blueprint 1: Mandatory Tag Enforcement on Resource Creation (ABAC)</h3>
+          <p>Denies creating EC2 instances or EBS volumes unless tagged with <code>Environment</code> (Prod, Stage, or Dev) and a valid <code>CostCenter</code>:</p>
+          <pre><code>{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "EnforceEnvironmentAndCostCenterTags",
+      "Effect": "Deny",
+      "Action": [
+        "ec2:RunInstances",
+        "ec2:CreateVolume"
+      ],
+      "Resource": [
+        "arn:aws:ec2:*:*:instance/*",
+        "arn:aws:ec2:*:*:volume/*"
+      ],
+      "Condition": {
+        "Null": {
+          "aws:RequestTag/Environment": "true",
+          "aws:RequestTag/CostCenter": "true"
+        }
+      }
+    },
+    {
+      "Sid": "EnforceValidEnvironmentValues",
+      "Effect": "Deny",
+      "Action": [
+        "ec2:RunInstances",
+        "ec2:CreateVolume"
+      ],
+      "Resource": [
+        "arn:aws:ec2:*:*:instance/*",
+        "arn:aws:ec2:*:*:volume/*"
+      ],
+      "Condition": {
+        "StringNotEquals": {
+          "aws:RequestTag/Environment": ["Prod", "Stage", "Dev"]
+        }
+      }
+    }
+  ]
+}</code></pre>
         </div>
-        <button class="scenario-reveal-btn" onclick="revealAnswer('d2q0', 1)">Reveal Answer</button>
-        <div class="scenario-explanation" id="exp-d2q0"><strong>Correct answer: B.</strong> The effective permission is the intersection of IAM and SCP; an explicit Deny in either always overrides an Allow.</div>
-      </div>
+
+        <div class="card card-sre">
+          <h3 class="sub-heading">Blueprint 2: Enforce S3 Encryption in Transit (TLS 1.2+) &amp; Block HTTP</h3>
+          <p>Attaching this guardrail guarantees that data in transit across all S3 buckets in member accounts cannot be intercepted via plain HTTP:</p>
+          <pre><code>{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "DenyNonSecureTransport",
+      "Effect": "Deny",
+      "Action": "s3:*",
+      "Resource": "*",
+      "Condition": {
+        "Bool": {
+          "aws:SecureTransport": "false"
+        }
+      }
+    }
+  ]
+}</code></pre>
+        </div>
       </section>
+
+      <!-- Section 3: Scenario Questions -->
+      <section class="doc-section">
+        <h2 class="section-heading">3. Comprehensive SAP-C02 Scenario Practice Questions</h2>
+
+        <!-- Q1 -->
+        <div class="scenario-card">
+          <span class="pill pill-purple">Scenario 1: aws:PrincipalOrgID for Shared S3 Buckets</span>
+          <div class="scenario-question">
+            An enterprise operates a centralized data lake bucket in a Shared Services account. Applications across 60 member accounts read datasets from this bucket. New AWS accounts are added weekly through automated pipelines. Currently, the S3 bucket policy explicitly lists all 60 account IDs in the Principal element, hitting the maximum 20 KB bucket policy size limit. How can the solutions architect refactor this policy to scale indefinitely with the LEAST operational maintenance?
+          </div>
+          <div class="scenario-options" id="opts-d2q1">
+            <div class="scenario-option">A) Create multiple replica buckets and partition accounts across them using Route 53 geolocation routing.</div>
+            <div class="scenario-option">B) Replace individual account IDs in the Principal element with Principal: "*" and add a condition StringEquals: { "aws:PrincipalOrgID": "o-xxxxxxxxxx" }.</div>
+            <div class="scenario-option">C) Create an IAM role in the Shared Services account and have applications in all member accounts assume it via STS.</div>
+            <div class="scenario-option">D) Deploy an AWS Lambda function triggered on account creation to compress the S3 bucket policy JSON.</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d2q1', 1)">Reveal Answer &amp; Architectural Rationale</button>
+          <div id="exp-d2q1" class="scenario-explanation">
+            <strong>Correct Answer: B.</strong><br>
+            <strong>Architectural Rationale:</strong> The <code>aws:PrincipalOrgID</code> global condition key checks whether the principal making the request belongs to an account in the specified organization. Setting <code>Principal: "*"</code> with <code>Condition: { StringEquals: { "aws:PrincipalOrgID": "o-xxxxxxxxxx" } }</code> allows all current and future accounts in the organization to access the bucket without ever editing the bucket policy again.
+          </div>
+        </div>
+
+        <!-- Q2 -->
+        <div class="scenario-card">
+          <span class="pill pill-purple">Scenario 2: Preventing Network Egress Bypasses</span>
+          <div class="scenario-question">
+            A regulated company requires all corporate S3 API calls to originate strictly through AWS PrivateLink Interface VPC Endpoints inside designated company VPCs. The architect wants to prevent developers from accessing S3 buckets over the public internet from home or unapproved networks. Which configuration accomplishes this?
+          </div>
+          <div class="scenario-options" id="opts-d2q2">
+            <div class="scenario-option">A) Attach an SCP denying s3:* with a condition StringNotEquals: { "aws:SourceVpce": "vpce-xxxxxxxx" }.</div>
+            <div class="scenario-option">B) Disable internet gateways on all corporate VPCs.</div>
+            <div class="scenario-option">C) Configure an AWS WAF rule on Amazon S3 with IP allowlists.</div>
+            <div class="scenario-option">D) Use Route 53 Private Hosted Zones for all S3 traffic.</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d2q2', 0)">Reveal Answer &amp; Architectural Rationale</button>
+          <div id="exp-d2q2" class="scenario-explanation">
+            <strong>Correct Answer: A.</strong><br>
+            <strong>Architectural Rationale:</strong> The condition key <code>aws:SourceVpce</code> matches the VPC endpoint ID through which the request arrived. When combined with an explicit Deny in an SCP, it prevents S3 operations unless they travel through the authorized PrivateLink VPC endpoint. (Note: WAF does not attach directly to S3 buckets).
+          </div>
+        </div>
+
+      </section>
+
+      <!-- Day Navigation -->
       <div class="day-nav">
-        <a href="day-001.html">&larr; Day 1: Multi-Account Architecture &amp; AWS Organizations</a>
-        <button class="btn btn-green" onclick="markComplete(2, 'day-003.html')">Mark Day 2 Complete &rarr;</button>
-        <a href="day-003.html">Day 3: AWS Control Tower &amp; Account Factory &rarr;</a>
+        <a href="day-001.html" class="btn btn-outline">&larr; Day 1: Organizations &amp; OUs</a>
+        <button class="btn btn-green" onclick="markComplete(2, 'day-003.html')">Mark Day 2 Complete &amp; Continue &rarr;</button>
+        <a href="day-003.html" class="btn">Day 3: Control Tower &amp; AFT &rarr;</a>
       </div>
-    </div>
-  </main>
-</div>
-<script src="../assets/app.js"></script>
-<script>renderTracker('tracker', 2);</script>
+
+    </main>
+  </div>
+
+  <script src="../assets/app.js"></script>
+  <script>
+    window.addEventListener('scroll', function() {
+      var h = document.documentElement, 
+          b = document.body,
+          st = 'scrollTop',
+          sh = 'scrollHeight';
+      var percent = (h[st]||b[st]) / ((h[sh]||b[sh]) - h.clientHeight) * 100;
+      document.getElementById('readProgressBar').style.width = percent + '%';
+    });
+  </script>
 </body>
 </html>
