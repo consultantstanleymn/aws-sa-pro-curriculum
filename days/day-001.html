@@ -1,161 +1,354 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Day 1: Multi-Account Architecture &amp; AWS Organizations — AWS SA Pro Curriculum</title>
-<link rel="stylesheet" href="../assets/style.css">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Day 1: Multi-Account Architecture & AWS Organizations — AWS SA Pro & SRE Curriculum</title>
+  <link rel="stylesheet" href="../assets/style.css">
+  <script>window.SAPRO_BASE = '../';</script>
 </head>
 <body>
-<header class="topbar">
-  <div class="brand-group">
-    <a href="../index.html" class="brand-logo">AWS SA PRO</a>
-    <div class="brand-title">Day 1 of 70 &middot; Week 1</div>
-  </div>
-  <button class="mobile-nav-toggle" onclick="toggleTopLinks()">Menu</button>
-  <div class="top-links">
-    <a href="../index.html">&larr; Full Curriculum</a>
-    <a href="https://github.com/consultantstanleymn/aws-sa-pro-curriculum" target="_blank">GitHub &rarr;</a>
-  </div>
-</header>
-<div class="app-container">
-  <button class="sidebar-toggle btn btn-outline" onclick="toggleSidebar()" style="margin:12px 16px;">Browse all 70 days</button>
-  <aside class="sidebar" id="sidebar">
-    <div class="search-box"><input type="text" id="navSearch" class="search-input" placeholder="Search days..." onkeyup="filterNav()"></div>
-    <div class="nav-section">
-      <div class="nav-section-title">All Days</div>
-      <a href="day-001.html" class="nav-link" data-day="1">Day 1: Multi-Account Architecture &amp; AWS Organizations</a>
-      <a href="day-002.html" class="nav-link" data-day="2">Day 2: Service Control Policy (SCP) Mechanics</a>
-      <a href="day-003.html" class="nav-link" data-day="3">Day 3: AWS Control Tower &amp; Account Factory</a>
-      <a href="day-004.html" class="nav-link" data-day="4">Day 4: IAM Identity Center (AWS SSO) &amp; Federation</a>
-      <a href="day-005.html" class="nav-link" data-day="5">Day 5: IAM Permission Boundaries &amp; STS</a>
-      <a href="day-006.html" class="nav-link" data-day="6">Day 6: Resource Access Manager (RAM) &amp; VPC Sharing</a>
-      <a href="day-007.html" class="nav-link" data-day="7">Day 7: Week 1 Synthesis &amp; Multi-Account Drill</a>
-      <a href="day-008.html" class="nav-link" data-day="8">Day 8: Transit Gateway (TGW) Core Routing</a>
-      <a href="day-009.html" class="nav-link" data-day="9">Day 9: Transit Gateway Peering &amp; Multi-Region</a>
-      <a href="day-010.html" class="nav-link" data-day="10">Day 10: AWS Network Firewall &amp; Centralized Egress</a>
-      <a href="day-011.html" class="nav-link" data-day="11">Day 11: Direct Connect (DX) &amp; DX Gateway</a>
-      <a href="day-012.html" class="nav-link" data-day="12">Day 12: AWS Route 53 Resolver (Hybrid DNS)</a>
-      <a href="day-013.html" class="nav-link" data-day="13">Day 13: AWS PrivateLink &amp; VPC Peering Comparison</a>
-      <a href="day-014.html" class="nav-link" data-day="14">Day 14: Week 2 Synthesis &amp; Networking Lab Exam</a>
-      <a href="day-015.html" class="nav-link" data-day="15">Day 15: Amazon ECS Fargate Architecture &amp; Task Definitions</a>
-      <a href="day-016.html" class="nav-link" data-day="16">Day 16: Amazon EKS Architecture &amp; Managed Node Groups vs Fargate</a>
-      <a href="day-017.html" class="nav-link" data-day="17">Day 17: Auto Scaling Groups — Lifecycle Hooks &amp; Warm Pools</a>
-      <a href="day-018.html" class="nav-link" data-day="18">Day 18: Application Load Balancer — Advanced Routing &amp; Target Groups</a>
-      <a href="day-019.html" class="nav-link" data-day="19">Day 19: AWS Lambda Advanced — Concurrency, VPC Networking &amp; Event Source Mapping</a>
-      <a href="day-020.html" class="nav-link" data-day="20">Day 20: Serverless Architectures — Step Functions &amp; API Gateway</a>
-      <a href="day-021.html" class="nav-link" data-day="21">Day 21: Week Synthesis — Compute Decision Matrix &amp; Scenario Drills</a>
-      <a href="day-022.html" class="nav-link" data-day="22">Day 22: Amazon Aurora Architecture &amp; Aurora Global Database</a>
-      <a href="day-023.html" class="nav-link" data-day="23">Day 23: Amazon RDS Multi-AZ vs Read Replicas &amp; Blue/Green Deployments</a>
-      <a href="day-024.html" class="nav-link" data-day="24">Day 24: Amazon DynamoDB Deep Dive — Partitioning &amp; Capacity Modes</a>
-      <a href="day-025.html" class="nav-link" data-day="25">Day 25: DynamoDB Global Tables &amp; DAX Caching</a>
-      <a href="day-026.html" class="nav-link" data-day="26">Day 26: Amazon S3 Storage Classes, Lifecycle &amp; Replication</a>
-      <a href="day-027.html" class="nav-link" data-day="27">Day 27: Amazon ElastiCache — Redis vs Memcached Architectures</a>
-      <a href="day-028.html" class="nav-link" data-day="28">Day 28: Week Synthesis — Database Selection Matrix &amp; Scenario Drills</a>
-      <a href="day-029.html" class="nav-link" data-day="29">Day 29: CloudWatch Metrics, Alarms &amp; Composite Alarms</a>
-      <a href="day-030.html" class="nav-link" data-day="30">Day 30: CloudWatch Synthetics &amp; Canaries for SLO Monitoring</a>
-      <a href="day-031.html" class="nav-link" data-day="31">Day 31: AWS X-Ray Distributed Tracing</a>
-      <a href="day-032.html" class="nav-link" data-day="32">Day 32: Amazon CloudWatch Logs Insights &amp; Centralized Logging</a>
-      <a href="day-033.html" class="nav-link" data-day="33">Day 33: AWS Fault Injection Service (FIS) — Chaos Engineering Fundamentals</a>
-      <a href="day-034.html" class="nav-link" data-day="34">Day 34: Designing Game Days &amp; Chaos Experiments</a>
-      <a href="day-035.html" class="nav-link" data-day="35">Day 35: Multi-Region Active-Active Architectures</a>
-      <a href="day-036.html" class="nav-link" data-day="36">Day 36: Multi-Region Active-Passive &amp; Pilot Light Patterns</a>
-      <a href="day-037.html" class="nav-link" data-day="37">Day 37: Route 53 Application Recovery Controller (ARC)</a>
-      <a href="day-038.html" class="nav-link" data-day="38">Day 38: Route 53 Routing Policies &amp; Health Checks</a>
-      <a href="day-039.html" class="nav-link" data-day="39">Day 39: RTO/RPO Design Patterns &amp; Backup Strategies (AWS Backup)</a>
-      <a href="day-040.html" class="nav-link" data-day="40">Day 40: Well-Architected Reliability Pillar Deep Dive</a>
-      <a href="day-041.html" class="nav-link" data-day="41">Day 41: Well-Architected Operational Excellence Pillar</a>
-      <a href="day-042.html" class="nav-link" data-day="42">Day 42: Week Synthesis — SRE &amp; DR Scenario Drills</a>
-      <a href="day-043.html" class="nav-link" data-day="43">Day 43: Migration Strategy Framework — The 7 Rs &amp; Migration Hub</a>
-      <a href="day-044.html" class="nav-link" data-day="44">Day 44: AWS Application Discovery Service — Assessment &amp; Portfolio Analysis</a>
-      <a href="day-045.html" class="nav-link" data-day="45">Day 45: AWS Application Migration Service (MGN) — Lift-and-Shift Rehost</a>
-      <a href="day-046.html" class="nav-link" data-day="46">Day 46: AWS Schema Conversion Tool (SCT) — Heterogeneous Schema Conversion</a>
-      <a href="day-047.html" class="nav-link" data-day="47">Day 47: AWS DataSync — Hybrid File &amp; Object Transfer</a>
-      <a href="day-048.html" class="nav-link" data-day="48">Day 48: AWS Storage Gateway — File, Volume &amp; Tape Gateways</a>
-      <a href="day-049.html" class="nav-link" data-day="49">Day 49: AWS Snow Family — Snowball Edge, Snowcone &amp; Snowmobile</a>
-      <a href="day-050.html" class="nav-link" data-day="50">Day 50: Hybrid Cloud Compute — Outposts, Local Zones &amp; Wavelength</a>
-      <a href="day-051.html" class="nav-link" data-day="51">Day 51: VMware Cloud on AWS — Relocate Strategy</a>
-      <a href="day-052.html" class="nav-link" data-day="52">Day 52: Direct Connect Capacity Planning for Large-Scale Migration</a>
-      <a href="day-053.html" class="nav-link" data-day="53">Day 53: Cost Optimization — Savings Plans, RIs &amp; Spot Fleet Strategy</a>
-      <a href="day-054.html" class="nav-link" data-day="54">Day 54: AWS Compute Optimizer, Cost Explorer &amp; Trusted Advisor</a>
-      <a href="day-055.html" class="nav-link" data-day="55">Day 55: FinOps on AWS — Tagging, Budgets &amp; Cost Allocation Reports</a>
-      <a href="day-056.html" class="nav-link" data-day="56">Day 56: AWS Database Migration Service (DMS) — Homogeneous &amp; Heterogeneous Migration with CDC</a>
-      <a href="day-057.html" class="nav-link" data-day="57">Day 57: Full-Length Mock Exam 1 — 75 Questions Timed</a>
-      <a href="day-058.html" class="nav-link" data-day="58">Day 58: Mock Exam 1 Distractor Analysis &amp; Weak Domain Review</a>
-      <a href="day-059.html" class="nav-link" data-day="59">Day 59: Deep Review — Domain 1 Weak Areas (Org/Governance/Networking)</a>
-      <a href="day-060.html" class="nav-link" data-day="60">Day 60: Deep Review — Domain 2 Weak Areas (Resilient Architectures)</a>
-      <a href="day-061.html" class="nav-link" data-day="61">Day 61: Full-Length Mock Exam 2 — 75 Questions Timed</a>
-      <a href="day-062.html" class="nav-link" data-day="62">Day 62: Mock Exam 2 Distractor Analysis &amp; Weak Domain Review</a>
-      <a href="day-063.html" class="nav-link" data-day="63">Day 63: Deep Review — Domain 3 Weak Areas (Migration &amp; Modernization)</a>
-      <a href="day-064.html" class="nav-link" data-day="64">Day 64: Deep Review — Domain 4 Weak Areas (Cost Control)</a>
-      <a href="day-065.html" class="nav-link" data-day="65">Day 65: Full-Length Mock Exam 3 — 75 Questions Timed</a>
-      <a href="day-066.html" class="nav-link" data-day="66">Day 66: Mock Exam 3 Distractor Analysis &amp; Timing/Pacing Strategy</a>
-      <a href="day-067.html" class="nav-link" data-day="67">Day 67: Full-Length Mock Exam 4 — 75 Questions Timed</a>
-      <a href="day-068.html" class="nav-link" data-day="68">Day 68: Mock Exam 4 Distractor Analysis &amp; Flag-and-Review Technique</a>
-      <a href="day-069.html" class="nav-link" data-day="69">Day 69: Full-Length Mock Exam 5 — 75 Questions Timed</a>
-      <a href="day-070.html" class="nav-link" data-day="70">Day 70: Final Review — Exam Day Logistics, Pearson VUE Checklist &amp; Confidence Drills</a>
+
+  <!-- Reading progress bar -->
+  <div id="readProgressBar" style="position:fixed;top:0;left:0;height:3px;background:var(--accent-orange);width:0%;z-index:100;transition:width 0.1s;"></div>
+
+  <!-- Top Navigation -->
+  <header class="topbar">
+    <div class="brand-group">
+      <a href="../index.html" class="brand-logo">AWS SA PRO</a>
+      <div class="brand-title">Architect &amp; SRE Master Curriculum</div>
+      <div class="brand-domain">stanley-n.com</div>
     </div>
-  </aside>
-  <main class="main-viewport">
-    <div class="content-wrapper reading">
+    <div class="top-links">
+      <a href="../index.html">&larr; Back to Curriculum Hub</a>
+      <a href="https://docs.aws.amazon.com/pdfs/aws-certification/latest/solutions-architect-professional-02/solutions-architect-professional-02.pdf" target="_blank">SAP-C02 Exam Guide &rarr;</a>
+    </div>
+  </header>
+
+  <div class="app-container">
+    <main class="main-viewport" style="max-width: 860px; margin: 0 auto; padding: 40px 24px;">
+      
+      <!-- Day Header -->
       <div class="day-meta">
-        <span class="pill pill-orange">Day 1 / 70</span>
-        <span class="pill pill-blue">Week 1 of 14</span>
-        <span class="pill pill-green">Phase 1: Multi-Account Governance &amp; Networking</span>
-      </div>
-      <h1 class="hero-title">Multi-Account Architecture &amp; AWS Organizations</h1>
-      <div class="reading-meta">&#128337; ~3 min read &middot; 2 services covered</div>
-      <div class="services-grid">
-        <span class="service-tag">AWS Organizations</span>
-        <span class="service-tag">Organizational Units</span>
-      </div>
-      <div id="tracker"></div>
-      <section class="doc-section">
-        <h2 class="section-heading">Today's Concept</h2>
-        <div class="card card-accent">
-          <p>AWS Organizations lets you centrally manage billing and policy across many AWS accounts, grouped into Organizational Units (OUs) that mirror your business or environment structure (e.g. Security, Infrastructure, Workloads/Prod, Workloads/Dev). The management (root) account should hold no workloads — it exists purely for consolidated billing and org-wide policy.</p>
-        </div>
-        <h3 class="sub-heading">Hands-on Lab / Practical Action (45 min)</h3>
-        <div class="card">
-          <p>Draft an OU hierarchy isolating Dev, Staging, and Production accounts under a Workloads OU, with a separate Security OU for log-archive and audit accounts.</p>
-        </div>
-      </section>
-      <section class="doc-section">
-        <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
-        
-      <div class="scenario-card">
-        <p class="scenario-question"><strong>Q1.</strong> A company wants a dedicated account that only aggregates CloudTrail logs from every other account and cannot be modified by workload teams. Where should this account live?</p>
-        <div class="scenario-options" id="opts-d1q0">
-            <div class="scenario-option">A. Directly under the root, alongside Production</div>
-            <div class="scenario-option">B. In a dedicated Security OU with a restrictive SCP</div>
-            <div class="scenario-option">C. Inside the Workloads/Prod OU for proximity to the data it audits</div>
-            <div class="scenario-option">D. In the management account itself</div>
-        </div>
-        <button class="scenario-reveal-btn" onclick="revealAnswer('d1q0', 1)">Reveal Answer</button>
-        <div class="scenario-explanation" id="exp-d1q0"><strong>Correct answer: B.</strong> Log-archive/audit accounts belong in a dedicated Security OU protected by SCPs that deny deletion or modification of logging resources, isolated from workload OUs.</div>
+        <span class="pill pill-orange">Week 1 &bull; Day 1 of 70</span>
+        <span class="pill pill-blue">Phase 1: Multi-Account Governance &amp; Networking</span>
+        <span class="pill pill-purple">Domain 1: Organizational Complexity (26%)</span>
+        <span class="pill pill-green">Est. Read: 28 mins</span>
       </div>
 
-      <div class="scenario-card">
-        <p class="scenario-question"><strong>Q2.</strong> Why should the AWS Organizations management account never run workloads?</p>
-        <div class="scenario-options" id="opts-d1q1">
-            <div class="scenario-option">A. It has a lower service quota by default</div>
-            <div class="scenario-option">B. SCPs cannot be applied to it, so it should be kept empty to reduce blast radius and support least privilege</div>
-            <div class="scenario-option">C. It is billed at a premium rate</div>
-            <div class="scenario-option">D. It cannot host EC2 instances</div>
+      <h1 class="hero-title" style="margin-top: 8px;">Multi-Account Architecture &amp; AWS Organizations</h1>
+      <p class="hero-subtitle">
+        Enterprise account boundary design, hierarchical Organizational Units (OUs), policy inheritance rules, and the SRE principle of blast-radius isolation.
+      </p>
+
+      <div class="services-grid">
+        <span class="service-tag">AWS Organizations</span>
+        <span class="service-tag">Organizational Units (OUs)</span>
+        <span class="service-tag">Service Control Policies (SCPs)</span>
+        <span class="service-tag">AWS STS</span>
+        <span class="service-tag">Consolidated Billing</span>
+        <span class="service-tag">Delegated Administrator</span>
+      </div>
+
+      <!-- Section 1 -->
+      <section class="doc-section">
+        <h2 class="section-heading">1. Deep Architectural Mechanics: AWS Organizations</h2>
+        <div class="card card-accent">
+          <h3 class="sub-heading">Account Separation Rationale (The SRE Blast-Radius Principle)</h3>
+          <p>
+            Enterprise workloads must never share an AWS account. Running production and non-production workloads in the same account introduces critical operational vulnerabilities:
+          </p>
+          <ul>
+            <li><strong>Hard API Quota Exhaustion:</strong> AWS service quotas (e.g., EC2 <code>RunInstances</code> rate limits, KMS cryptographic operations per second, NAT Gateway bandwidth) apply per account per region. A runaway load test or batch worker in a development environment will throttle API calls in production if hosted in the same account.</li>
+            <li><strong>IAM Blast Radius:</strong> Over-permissive IAM roles or credential leaks in testing environments can lead to data exfiltration or destructive changes in production.</li>
+            <li><strong>Consolidated Billing &amp; Cost Allocation:</strong> While AWS Organizations aggregates volume tiering discounts across all accounts to the Management account, cost allocation tags and Cost Explorer granularity require separate account boundaries for clean chargebacks.</li>
+          </ul>
         </div>
-        <button class="scenario-reveal-btn" onclick="revealAnswer('d1q1', 1)">Reveal Answer</button>
-        <div class="scenario-explanation" id="exp-d1q1"><strong>Correct answer: B.</strong> The management account is immune to SCPs, so best practice keeps it workload-free to minimize risk — it should only handle billing, Organizations, and org-wide services like IAM Identity Center.</div>
-      </div>
+
+        <div class="card card-sre">
+          <h3 class="sub-heading">Production Multi-Account OU Topology</h3>
+          <p>
+            The AWS Well-Architected Framework recommends a standardized set of core and workload OUs:
+          </p>
+          <div class="table-container">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Organizational Unit (OU)</th>
+                  <th>Contained Accounts</th>
+                  <th>Architectural Function &amp; SRE Guardrail</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><strong>Security OU</strong></td>
+                  <td>Log Archive, Security Tooling</td>
+                  <td>Immutable aggregation point for CloudTrail logs, AWS Config recorders, GuardDuty delegated administrator, and Security Hub findings. Root credentials stored in corporate physical vault.</td>
+                </tr>
+                <tr>
+                  <td><strong>Infrastructure OU</strong></td>
+                  <td>Network Hub, Shared Services</td>
+                  <td>Hosts AWS Transit Gateway, Direct Connect Gateways, Route 53 Resolver endpoints, and centralized egress inspection VPCs. No customer applications run here.</td>
+                </tr>
+                <tr>
+                  <td><strong>Workloads Prod OU</strong></td>
+                  <td>App1-Prod, App2-Prod</td>
+                  <td>Strictly guarded production workloads. Zero interactive developer access. All deployments occur via automated cross-account CI/CD pipelines.</td>
+                </tr>
+                <tr>
+                  <td><strong>Workloads Non-Prod OU</strong></td>
+                  <td>App1-Stage, App2-Dev</td>
+                  <td>Staging and development testing. Governed by regional SCPs and resource size limits.</td>
+                </tr>
+                <tr>
+                  <td><strong>Sandbox OU</strong></td>
+                  <td>Developer Sandboxes</td>
+                  <td>Unrestricted developer experimentation, strictly isolated from corporate networks with automated 30-day budget alarms and resource termination scripts.</td>
+                </tr>
+                <tr>
+                  <td><strong>Suspended OU</strong></td>
+                  <td>Quarantined Accounts</td>
+                  <td>Decommissioned or compromised accounts. SCP attached with an absolute explicit Deny on all actions (<code>*</code>) to prevent any resource launch or egress traffic.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
       </section>
+
+      <!-- Section 2 -->
+      <section class="doc-section">
+        <h2 class="section-heading">2. Service Control Policy (SCP) Evaluation Mechanics</h2>
+        <div class="card card-accent">
+          <h3 class="sub-heading">Crucial Exam Rule: SCPs Never Grant Access</h3>
+          <p>
+            SCPs act as guardrails or perimeter filters. They specify the <em>maximum allowed permissions</em> for an account or OU. Even if an SCP has an explicit Allow for <code>ec2:*</code>, an IAM user or role has <strong>zero</strong> access until an IAM identity policy explicitly grants <code>ec2:*</code>.
+          </p>
+          <h4 class="mini-heading">The Five-Layer Effective Permission Formula</h4>
+          <p>For an API call to be permitted in a member account, it must pass through five distinct policy filters:</p>
+          <pre><code>Effective Permission = (SCP Allow) ∩ (Permissions Boundary Allow) ∩ (Identity/Resource IAM Allow) - (Any Explicit Deny)</code></pre>
+          <ul>
+            <li><strong>Default SCP Behavior:</strong> Every new Organization attaches the AWS-managed <code>FullAWSAccess</code> policy (Allow <code>*</code> on <code>*</code>) at Root. As long as this remains attached, no actions are blocked by default.</li>
+            <li><strong>Deny-List Strategy (Recommended):</strong> Keep <code>FullAWSAccess</code> attached at the Root and all child OUs, and attach custom SCPs containing targeted <code>Effect: Deny</code> statements. Any explicit Deny anywhere in the hierarchy overrides all Allows.</li>
+            <li><strong>Allow-List Strategy:</strong> Remove <code>FullAWSAccess</code> and explicitly define allowed services at every level of the OU tree. This requires immense operational overhead and risks breaking newly released AWS features.</li>
+            <li><strong>The Management Account Exemption:</strong> SCPs do not restrict the AWS Organizations Management account (root account of the organization) or AWS service-linked roles.</li>
+          </ul>
+        </div>
+
+        <div class="card card-sre">
+          <h3 class="sub-heading">Production-Ready SCP Policy Blueprints</h3>
+          <p><strong>Blueprint 1: Multi-Region Deny with Global Service Exemptions:</strong></p>
+          <pre><code>{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "DenyAllExceptApprovedRegions",
+      "Effect": "Deny",
+      "NotAction": [
+        "a4b:*", "acm:*", "aws-portal:*", "budgets:*", "ce:*", "chime:*",
+        "cloudfront:*", "config:*", "cur:*", "directconnect:*",
+        "ec2:DescribeRegions", "ec2:DescribeTransitGateways", "fms:*",
+        "globalaccelerator:*", "health:*", "iam:*", "kms:*", "networkmanager:*",
+        "organizations:*", "pricing:*", "route53:*", "route53domains:*",
+        "route53-recovery-cluster:*", "route53-recovery-control-config:*",
+        "s3:GetAccountPublicAccessBlock", "s3:ListAllMyBuckets",
+        "s3:PutAccountPublicAccessBlock", "shield:*", "sts:*", "support:*",
+        "trustedadvisor:*", "waf:*", "waf-regional:*", "wafv2:*", "wellarchitected:*"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringNotEquals": {
+          "aws:RequestedRegion": ["us-east-1", "us-west-2"]
+        }
+      }
+    }
+  ]
+}</code></pre>
+
+          <p><strong>Blueprint 2: Immutable Observability &amp; Tamper Protection:</strong></p>
+          <pre><code>{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "PreventTamperingWithSecurityTooling",
+      "Effect": "Deny",
+      "Action": [
+        "cloudtrail:DeleteTrail", "cloudtrail:StopLogging", "cloudtrail:UpdateTrail",
+        "config:DeleteConfigRule", "config:DeleteConfigurationRecorder", "config:StopConfigurationRecorder",
+        "guardduty:DeleteDetector", "guardduty:DisassociateFromMasterAccount",
+        "securityhub:DeleteHub", "securityhub:DisableSecurityHub"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "DenyRootUserActionsInMemberAccounts",
+      "Effect": "Deny",
+      "Action": "*",
+      "Resource": "*",
+      "Condition": {
+        "StringLike": {
+          "aws:PrincipalArn": ["arn:aws:iam::*:root"]
+        }
+      }
+    }
+  ]
+}</code></pre>
+        </div>
+      </section>
+
+      <!-- Section 3 -->
+      <section class="doc-section">
+        <h2 class="section-heading">3. DevOps &amp; SRE Cross-Account Automation</h2>
+        <div class="card card-green">
+          <h3 class="sub-heading">Cross-Account CI/CD Pipeline Architecture</h3>
+          <p>
+            In mature DevOps environments, CI/CD pipelines run in a dedicated <strong>Shared Tools</strong> account and deploy artifacts into target accounts without static credentials:
+          </p>
+          <ol>
+            <li>The CI/CD runner (e.g., GitHub Actions runner or AWS CodeBuild) authenticates via OpenID Connect (OIDC) or native IAM role in the Shared Tools account.</li>
+            <li>The pipeline calls AWS STS <code>AssumeRole</code> to assume a pre-provisioned <code>DeploymentRole</code> in the target Workload account (Dev/Stage/Prod).</li>
+            <li>The target <code>DeploymentRole</code> trust policy restricts assumption strictly to the ARN of the pipeline role in the Shared Tools account and enforces external conditions (e.g., repository name, commit tag).</li>
+            <li>All actions taken by the assumed role are logged in the target account's CloudTrail with the caller identity traced back to the deployment pipeline.</li>
+          </ol>
+        </div>
+      </section>
+
+      <!-- Section 4: Hands-on Lab -->
+      <section class="doc-section">
+        <h2 class="section-heading">4. Hands-on Implementation Lab</h2>
+        <div class="card">
+          <h3 class="sub-heading">CLI Implementation Walkthrough</h3>
+          <ol>
+            <li>
+              <strong>Create an Organizational Unit:</strong>
+              <pre><code>aws organizations create-organizational-unit --parent-id r-xxxx --name "Workloads-Dev"</code></pre>
+            </li>
+            <li>
+              <strong>Create the Region-Restriction SCP:</strong>
+              <pre><code>aws organizations create-policy --content file://region-restriction.json --name "Enforce-US-Regions" --type SERVICE_CONTROL_POLICY --description "Denies all non-US regions except global services"</code></pre>
+            </li>
+            <li>
+              <strong>Attach Policy to Target OU:</strong>
+              <pre><code>aws organizations attach-policy --policy-id p-xxxxxxxx --target-id ou-xxxx-yyyyyyyy</code></pre>
+            </li>
+            <li>
+              <strong>Verify Enforcement from Member Account:</strong>
+              <pre><code># Should succeed in us-east-1:
+aws ec2 describe-instances --region us-east-1
+
+# Should fail with AccessDeniedException due to SCP:
+aws ec2 run-instances --image-id ami-0c55b159cbfafe1f0 --instance-type t3.micro --region eu-central-1</code></pre>
+            </li>
+          </ol>
+        </div>
+      </section>
+
+      <!-- Section 5: Scenario Practice Questions -->
+      <section class="doc-section">
+        <h2 class="section-heading">5. Comprehensive SAP-C02 Scenario Practice Questions</h2>
+
+        <!-- Q1 -->
+        <div class="scenario-card">
+          <span class="pill pill-purple">Scenario 1: Cross-Account KMS &amp; SCP Interaction</span>
+          <div class="scenario-question">
+            A financial enterprise has an AWS Organizations structure with multiple accounts. The security team manages customer master keys (CMKs) in a dedicated Security Account. A developer role in a Workload Account needs to encrypt and decrypt S3 objects using a CMK in the Security Account. The administrator has attached an SCP at the Workload OU allowing <code>kms:*</code>. The developer still receives an <code>AccessDenied</code> error when attempting to call <code>kms:GenerateDataKey</code>. What combination of actions will resolve this issue? (Select TWO.)
+          </div>
+          <div class="scenario-options" id="opts-q1">
+            <div class="scenario-option">A) Add an explicit Allow statement in the Security Account's SCP for the Workload Account ID.</div>
+            <div class="scenario-option">B) Update the KMS Key Policy in the Security Account to grant kms:GenerateDataKey and kms:Decrypt to the developer role ARN in the Workload Account.</div>
+            <div class="scenario-option">C) Attach an IAM policy to the developer role in the Workload Account allowing kms:GenerateDataKey on the target key ARN.</div>
+            <div class="scenario-option">D) Recreate the KMS key as an AWS Managed Key to bypass cross-account permissions.</div>
+            <div class="scenario-option">E) Disable the SCP on the Workload OU because SCPs block cross-account KMS operations by default.</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('q1', 1)">Reveal Answer &amp; Architectural Rationale</button>
+          <div id="exp-q1" class="scenario-explanation">
+            <strong>Correct Answers: B and C.</strong><br>
+            <strong>Architectural Rationale:</strong> Cross-account KMS access requires permissions in <em>both</em> the caller's account (identity-based policy, Option C) and the owner's account (resource-based key policy, Option B). An SCP does not grant permissions—it only establishes a permission ceiling. Option A is invalid because SCPs only apply within their own account hierarchy, not cross-account. Option D is false because AWS Managed Keys cannot be shared cross-account.
+          </div>
+        </div>
+
+        <!-- Q2 -->
+        <div class="scenario-card">
+          <span class="pill pill-purple">Scenario 2: Region Containment with Global Services</span>
+          <div class="scenario-question">
+            An enterprise mandates that compute and storage workloads must only be launched in <code>eu-west-1</code> and <code>eu-central-1</code>. A cloud architect applies an SCP denying all actions where <code>aws:RequestedRegion</code> is not in those regions. Immediately after attaching the policy, global administrators report they can no longer create IAM users, create Route 53 records, or update CloudFront distributions from the AWS Management Console. What is the root cause and how should it be rectified?
+          </div>
+          <div class="scenario-options" id="opts-q2">
+            <div class="scenario-option">A) Global services default to us-east-1. Add us-east-1 to the allowed regions condition.</div>
+            <div class="scenario-option">B) The SCP used an explicit Deny on * without exempting global services. Replace Action: "*" with a NotAction block listing global services such as iam:*, route53:*, and cloudfront:*.</div>
+            <div class="scenario-option">C) The administrators are operating from member accounts. Move the administrators to the Organizations Management account where SCPs do not apply.</div>
+            <div class="scenario-option">D) CloudFront and Route 53 require VPC endpoints. Configure Route 53 Resolver endpoints in eu-west-1.</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('q2', 1)">Reveal Answer &amp; Architectural Rationale</button>
+          <div id="exp-q2" class="scenario-explanation">
+            <strong>Correct Answer: B.</strong><br>
+            <strong>Architectural Rationale:</strong> Global AWS services (IAM, Route 53, CloudFront, WAF) operate globally or have their API endpoints anchored in us-east-1. When an SCP uses an explicit Deny with <code>StringNotEquals: { aws:RequestedRegion: [eu-west-1, eu-central-1] }</code>, calls to global APIs are evaluated as non-matching and blocked. The Well-Architected solution is to use a <code>NotAction</code> block to exempt all global services from the region restriction.
+          </div>
+        </div>
+
+        <!-- Q3 -->
+        <div class="scenario-card">
+          <span class="pill pill-purple">Scenario 3: Multi-OU SCP Inheritance &amp; Overrides</span>
+          <div class="scenario-question">
+            An AWS Organization has an OU hierarchy: <code>Root &rarr; Prod-OU &rarr; Finance-OU</code>. An account named <code>Fin-Ledger</code> resides inside <code>Finance-OU</code>.<br>
+            - An SCP attached at <code>Root</code> has an explicit Deny on <code>dynamodb:DeleteTable</code>.<br>
+            - An SCP attached at <code>Finance-OU</code> explicitly allows <code>dynamodb:*</code> with a condition allowing deletion only if tagged <code>Environment=Testing</code>.<br>
+            An administrator in the <code>Fin-Ledger</code> account attempts to delete a DynamoDB table tagged <code>Environment=Testing</code>. What will happen?
+          </div>
+          <div class="scenario-options" id="opts-q3">
+            <div class="scenario-option">A) The table deletion succeeds because child OU policies override parent OU policies in AWS Organizations.</div>
+            <div class="scenario-option">B) The table deletion fails with AccessDenied because an explicit Deny at any level in the hierarchy cannot be overridden by an Allow at a lower level.</div>
+            <div class="scenario-option">C) The table deletion succeeds because tag-based conditions take precedence over unconditional Deny statements.</div>
+            <div class="scenario-option">D) The table deletion fails because DynamoDB table deletion requires root account credentials.</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('q3', 1)">Reveal Answer &amp; Architectural Rationale</button>
+          <div id="exp-q3" class="scenario-explanation">
+            <strong>Correct Answer: B.</strong><br>
+            <strong>Architectural Rationale:</strong> In AWS Organizations, policy evaluation is strictly hierarchical and additive in restrictions: an explicit Deny anywhere in the inheritance tree (from Root down through intermediate OUs to the account itself) is absolute and permanent. Child OUs can further restrict permissions, but they can NEVER expand permissions beyond what parent OUs allow.
+          </div>
+        </div>
+
+        <!-- Q4 -->
+        <div class="scenario-card">
+          <span class="pill pill-purple">Scenario 4: Delegated Administrator &amp; Least Privilege</span>
+          <div class="scenario-question">
+            A company security policy dictates that the AWS Organizations Management account must only be used for organization management and consolidated billing. Security operations engineers should manage AWS GuardDuty, Security Hub, and AWS IAM Identity Center without accessing the Management account. Which feature should be implemented?
+          </div>
+          <div class="scenario-options" id="opts-q4">
+            <div class="scenario-option">A) Create cross-account IAM roles in the Management account and delegate them to security engineers.</div>
+            <div class="scenario-option">B) Register a dedicated Security Tooling member account as the Delegated Administrator for GuardDuty, Security Hub, and IAM Identity Center.</div>
+            <div class="scenario-option">C) Move the Security Tooling account to the Root of the organization and attach a policy granting management account rights.</div>
+            <div class="scenario-option">D) Use AWS Service Catalog in the Management account to publish security management portfolios.</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('q4', 1)">Reveal Answer &amp; Architectural Rationale</button>
+          <div id="exp-q4" class="scenario-explanation">
+            <strong>Correct Answer: B.</strong><br>
+            <strong>Architectural Rationale:</strong> AWS Delegated Administrator allows specific member accounts (typically within the Security OU) to administer organization-wide security and governance services without needing administrative access to the Management account, adhering strictly to the principle of least privilege.
+          </div>
+        </div>
+
+      </section>
+
+      <!-- Day Navigation -->
       <div class="day-nav">
-        <span></span>
-        <button class="btn btn-green" onclick="markComplete(1, 'day-002.html')">Mark Day 1 Complete &rarr;</button>
-        <a href="day-002.html">Day 2: Service Control Policy (SCP) Mechanics &rarr;</a>
+        <a href="../index.html" class="btn btn-outline">&larr; Back to Portal Overview</a>
+        <button class="btn btn-green" onclick="markComplete(1, 'day-002.html')">Mark Day 1 Complete &amp; Continue &rarr;</button>
+        <a href="day-002.html" class="btn">Day 2: SCP Mechanics &rarr;</a>
       </div>
-    </div>
-  </main>
-</div>
-<script src="../assets/app.js"></script>
-<script>renderTracker('tracker', 1);</script>
+
+    </main>
+  </div>
+
+  <script src="../assets/app.js"></script>
+  <script>
+    window.addEventListener('scroll', function() {
+      var h = document.documentElement, 
+          b = document.body,
+          st = 'scrollTop',
+          sh = 'scrollHeight';
+      var percent = (h[st]||b[st]) / ((h[sh]||b[sh]) - h.clientHeight) * 100;
+      document.getElementById('readProgressBar').style.width = percent + '%';
+    });
+  </script>
 </body>
 </html>
