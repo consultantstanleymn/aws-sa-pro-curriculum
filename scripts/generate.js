@@ -1,5 +1,6 @@
-// Generates days/day-XXX.html for every entry in data/days.json (except day 56, hand-authored),
-// and regenerates the day-by-day table + JS nav list fragments used by index.html.
+// Generates days/day-XXX.html for every entry in data/days.json whose entry is not
+// flagged "detailed": true (those are hand-authored, e.g. day 56 — see CONTRIBUTING.md).
+// Does NOT touch index.html; its day-by-day table is hand-maintained separately.
 const fs = require('fs');
 const path = require('path');
 
@@ -116,10 +117,11 @@ const daysDir = path.join(ROOT, 'days');
 let written = 0;
 for (let i = 0; i < days.length; i++) {
   const d = days[i];
-  if (d.day === 56) continue; // hand-authored, richer page
+  if (d.detailed) continue; // hand-authored, richer page — see CONTRIBUTING.md
   const prev = days[i - 1];
   const next = days[i + 1];
   fs.writeFileSync(path.join(daysDir, `day-${pad(d.day)}.html`), dayTemplate(d, prev, next));
   written++;
 }
-console.log(`Generated ${written} day pages (day 56 skipped — hand-authored).`);
+const skipped = days.length - written;
+console.log(`Generated ${written} day pages (${skipped} skipped — hand-authored, "detailed": true).`);
