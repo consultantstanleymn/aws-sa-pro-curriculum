@@ -155,9 +155,11 @@ function getScale() {
   } catch (e) {}
   return 100;
 }
+const tableScrollUpdaters = [];
 function applyScale(v) {
   document.documentElement.style.setProperty('--reading-scale', v + '%');
   try { localStorage.setItem(SCALE_KEY, String(v)); } catch (e) {}
+  requestAnimationFrame(() => tableScrollUpdaters.forEach(fn => fn()));
 }
 function stepScale(dir) {
   const cur = getScale();
@@ -189,6 +191,10 @@ function setSidebarOpen(open) {
   document.body.classList.toggle('sidebar-open', open);
   if (btn) btn.setAttribute('aria-expanded', String(open));
   if (backdrop) backdrop.classList.toggle('open', open);
+  if (open) {
+    const resume = document.querySelector('.resume-reading');
+    if (resume) resume.classList.remove('shown');
+  }
 }
 
 function ensureMobileControls() {
@@ -274,6 +280,7 @@ function enhanceTables() {
     const update = () => container.classList.toggle('is-scrollable', table.scrollWidth > container.clientWidth + 2);
     update();
     window.addEventListener('resize', update, { passive: true });
+    tableScrollUpdaters.push(update);
   });
 }
 
@@ -310,7 +317,7 @@ function initResumeReading() {
     ticking = true;
     requestAnimationFrame(() => {
       try { localStorage.setItem(key, String(getScrollRatio())); } catch (e) {}
-      if (prompt && getScrollRatio() > 0.08) prompt.classList.remove('shown');
+      if (prompt && getScrollRatio() > 0.15) prompt.classList.remove('shown');
       ticking = false;
     });
   }, { passive: true });
