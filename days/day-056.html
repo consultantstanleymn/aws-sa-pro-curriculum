@@ -25,17 +25,19 @@
     <div class="search-box"><input type="text" id="navSearch" class="search-input" placeholder="Search days..." onkeyup="filterNav()"></div>
     <div class="nav-section">
       <div class="nav-section-title">On This Page</div>
-      <a href="#overview" class="nav-link">Overview</a>
-      <a href="#architecture" class="nav-link">Core Architecture</a>
-      <a href="#migration-types" class="nav-link">Homogeneous vs Heterogeneous</a>
-      <a href="#load-methods" class="nav-link">Full Load / CDC / Full Load+CDC</a>
-      <a href="#sizing" class="nav-link">Instance Sizing &amp; Serverless</a>
-      <a href="#lob" class="nav-link">LOB Handling</a>
-      <a href="#validation" class="nav-link">Validation &amp; Monitoring</a>
+      <a href="#recap" class="nav-link">Recap of Day 55</a>
+      <a href="#why-exam" class="nav-link">Why DMS Is on the Exam</a>
+      <a href="#mechanism" class="nav-link">How DMS Actually Works</a>
+      <a href="#decision-boundary" class="nav-link">Homogeneous vs. Heterogeneous</a>
+      <a href="#config-modes" class="nav-link">Load Modes &amp; LOB Handling</a>
+      <a href="#sizing" class="nav-link">Sizing, Limits &amp; Quotas</a>
+      <a href="#failure-modes" class="nav-link">Failure Modes in Production</a>
+      <a href="#sre-angle" class="nav-link">Operational / SRE Angle</a>
       <a href="#gotchas" class="nav-link">Edge Cases &amp; Exam Gotchas</a>
-      <a href="#comparison" class="nav-link">DMS vs SCT vs MGN vs DataSync</a>
+      <a href="#comparison" class="nav-link">DMS vs. SCT vs. MGN vs. DataSync</a>
       <a href="#lab" class="nav-link">Hands-on Lab</a>
       <a href="#quiz" class="nav-link">15 Scenario Questions</a>
+      <a href="#preview" class="nav-link">Peek into Tomorrow</a>
       <a href="#sources" class="nav-link">Sources</a>
     </div>
     <div class="nav-section">
@@ -121,8 +123,8 @@
         <span class="pill pill-red">Today's Focus</span>
       </div>
       <h1 class="hero-title">AWS Database Migration Service (DMS) — Homogeneous &amp; Heterogeneous Migration with CDC</h1>
-      <div class="reading-meta">&#128337; ~22 min read &middot; 5 services covered &middot; 15 scenario questions</div>
-      <p class="hero-subtitle">DMS + SCT questions are among the most reliable topics on SAP-C02 — expect 3-4 direct or scenario-embedded questions. This lesson covers the full architecture, migration-type decision tree, load strategies, sizing, LOB handling, validation, and the exam's favorite edge cases, plus 15 practice questions.</p>
+      <div class="reading-meta">&#128337; ~58 min read &middot; 5 services covered &middot; 15 scenario questions</div>
+      <p class="hero-subtitle">DMS and SCT questions are among the most reliable topics on SAP-C02 — expect three or four direct or scenario-embedded questions. This lesson covers the architecture, the migration-type decision tree, load strategies, sizing, LOB handling, validation, and the edge cases the exam favors, plus 15 practice questions.</p>
       <div class="services-grid">
         <span class="service-tag">AWS DMS</span>
         <span class="service-tag">AWS SCT</span>
@@ -132,130 +134,152 @@
       </div>
       <div id="tracker"></div>
 
-      <section class="doc-section" id="overview">
-        <h2 class="section-heading">1. Overview — Why DMS Matters on the Exam</h2>
+      <section class="doc-section" id="recap">
+        <h2 class="section-heading">Recap of Day 55</h2>
         <div class="card card-accent">
-          <p>AWS Database Migration Service (DMS) migrates data from a source database into AWS (RDS, Aurora, Redshift, S3, OpenSearch, Kinesis, DynamoDB, and more) while the <strong>source database stays online and continues serving production traffic</strong>. That "source stays live" property is the whole point: it's what makes near-zero-downtime cutovers possible, and it's the detail most exam scenarios are testing for when they describe a company that "cannot tolerate extended downtime" during a database migration.</p>
-          <p>DMS is a <em>data-movement</em> engine. It does not, by itself, create or convert a target schema. Whether you need a companion tool to handle the schema depends entirely on whether the source and target run the same database engine — which is the single most important branching decision in this whole topic.</p>
+          <p>Day 55 closed out the cost-optimization thread with the machinery that makes AWS spend legible: cost allocation tags activated for billing, AWS Budgets watching both actual and forecasted spend, and the Cost and Usage Report as the granular line-item source that feeds custom FinOps tooling. The enforcement detail worth carrying forward is that tag hygiene is a governance problem before it is a reporting problem — a mandatory tagging policy backed by an SCP or a Config rule is what makes per-business-unit cost reports meaningful, because a report built on inconsistently tagged resources is just a more expensive way to be uncertain.</p>
+          <p>That work is about knowing what you are spending on infrastructure you already run. Today's topic is the adjacent concern on the same service-lifecycle thread: physically moving that infrastructure without breaking it. A migration project is where cost discipline and architectural discipline collide, because the decisions that determine whether a cutover succeeds — which load mode, how much replication capacity, whether the schema needs conversion — are made weeks before the first row moves, and the bill for getting them wrong is measured in downtime rather than dollars. The tagging and budgeting habits from Day 55 do not disappear during a migration; they are what let you attribute the cost of the parallel-running source and target, and what tell you when the old environment is finally safe to decommission.</p>
         </div>
       </section>
 
-      <section class="doc-section" id="architecture">
-        <h2 class="section-heading">2. Core Architecture</h2>
+      <section class="doc-section" id="why-exam">
+        <h2 class="section-heading">1. Why DMS Is on the Exam</h2>
+        <div class="card card-accent">
+          <p>AWS Database Migration Service exists to solve one specific architectural problem: moving a live database from one engine, platform, or region to another while the source continues serving production traffic. That constraint — the source stays online — is the entire reason the service exists, and it is the detail most exam scenarios are quietly testing for. When a question describes a company that "cannot tolerate extended downtime," "has a maintenance window of only a few minutes," or "must keep the legacy system available until cutover," the answer is almost always a DMS task configured for continuous replication rather than a one-shot export and import.</p>
+          <p>On SAP-C02 this maps most directly to the migration and modernization domain, where DMS appears both as a standalone question and as one component inside a larger migration narrative. A typical scenario will describe a portfolio of workloads, mention that one of them is a database with a specific engine pairing, and expect you to select the correct toolchain — which means recognizing that DMS moves data but does not convert schema, that SCT converts schema but does not move data, and that neither of them is the right answer when the question is actually about rehosting a server or syncing a file share. The exam rarely asks "what is DMS" in isolation; it asks you to place DMS correctly inside a decision tree that also contains MGN, DataSync, SCT, and the Snow family.</p>
+          <p>The second reason this topic carries weight is that it is unusually rich in failure modes that map cleanly onto exam distractors. Missing primary keys, unsynchronized sequences, triggers firing during migration, and undersized replication instances are all real production problems, and each one has a plausible-sounding but wrong answer sitting next to it. Understanding the mechanism well enough to predict which of those problems a given configuration will produce is what separates a candidate who memorized "use Full Load + CDC for low downtime" from one who can reason about a scenario the study guide never covered.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="mechanism">
+        <h2 class="section-heading">2. How DMS Actually Works</h2>
         <div class="card card-sre">
-          <h3 class="sub-heading">Replication Instance</h3>
-          <p>The compute engine that actually runs your migration task(s) — an AWS-managed EC2 instance running the DMS engine. Larger instance classes provide more memory (for caching changes/rows in flight) and more CPU (for transformation rules and, in heterogeneous migrations, data-type conversion). <strong>Undersized replication instances are the most common real-world DMS performance bottleneck</strong>, and a very common exam distractor. Place the replication instance in the same VPC/AZ as the target database to minimize network latency and avoid unnecessary cross-AZ data transfer charges.</p>
-          <h3 class="sub-heading">Endpoints</h3>
-          <p>Connection definitions for your source and target. DMS supports an extensive source/target catalog: Oracle, SQL Server, PostgreSQL, MySQL/MariaDB, MongoDB, SAP ASE, and on-prem or EC2-hosted databases as sources; RDS, Aurora, Redshift, OpenSearch Service, Kinesis Data Streams, S3, and DynamoDB as targets (and vice versa for many of these).</p>
-          <h3 class="sub-heading">Replication (Migration) Tasks</h3>
-          <p>A task defines <em>what</em> moves and <em>how</em>: table mappings (include/exclude rules, schema/table selection), transformation rules (rename, filter, or modify data in flight), and the migration type (full load, CDC, or full load + CDC — see below).</p>
+          <p>DMS is built from three primitives, and almost every configuration question reduces to understanding how they interact. The first is the replication instance: an AWS-managed compute resource, running the DMS engine, that performs the actual work of reading from the source and writing to the target. It is not a control-plane abstraction — it is a real instance with real CPU, memory, and network limits, and those limits are what determine how fast your migration can go. Memory matters more than most people expect, because the instance buffers rows and cached change records in flight; when memory pressure forces it to spill to disk, throughput collapses in a way that looks like a mysterious slowdown rather than an obvious resource exhaustion.</p>
+          <p>The second primitive is the endpoint, which is nothing more than a stored connection definition for a source or a target. DMS supports a broad catalog on both sides: Oracle, SQL Server, PostgreSQL, MySQL and MariaDB, MongoDB, and SAP ASE as sources, with RDS, Aurora, Redshift, OpenSearch Service, Kinesis Data Streams, S3, and DynamoDB among the targets. The important architectural point is that endpoints are directional and independent — a source endpoint is read from, a target endpoint is written to, and the same physical database can appear as both in different tasks. This is what makes patterns like ongoing replication into a data lake possible without any notion of a "cutover" at all.</p>
+          <p>The third primitive is the task, which is where the actual decisions live. A task binds a source endpoint to a target endpoint and then specifies three things: table mappings that select which schemas and tables participate, transformation rules that can rename or filter data in flight, and the migration type that determines whether the task takes a snapshot, streams changes, or does both. Tasks are also the unit of parallelism — a single task has a practical throughput ceiling, so high-volume migrations are split across multiple tasks, often one per large table or per partition, rather than scaled up on a single enormous replication instance.</p>
+          <p>Underneath all three, DMS reads from the source using whatever mechanism that engine exposes for change tracking — transaction logs, redo logs, binary logs, or change tables — and applies changes to the target as ordinary SQL. That detail matters because it explains most of the service's limitations: if the source engine cannot cheaply identify which row changed, DMS cannot either, and the cost of that identification shows up directly in replication latency.</p>
         </div>
       </section>
 
-      <section class="doc-section" id="migration-types">
-        <h2 class="section-heading">3. Homogeneous vs. Heterogeneous Migration — The Core Decision Tree</h2>
+      <section class="doc-section" id="decision-boundary">
+        <h2 class="section-heading">3. The Core Decision Boundary: Homogeneous vs. Heterogeneous</h2>
         <div class="card">
-          <p>The exam consistently tests whether you know when SCT is required. The rule is simple:</p>
+          <p>The single most consequential branching decision in any DMS migration is whether the source and target run the same database engine family. When they do — on-premises SQL Server to RDS SQL Server, or self-managed MySQL to Aurora MySQL — the migration is homogeneous, and no schema translation is required. When they do not — Oracle to Aurora PostgreSQL being the canonical example — the migration is heterogeneous, and the schema itself has to be rewritten before any data can move. The exam tests this boundary constantly, usually by describing an engine pairing in the middle of a longer scenario and expecting you to notice whether a conversion step is implied.</p>
+          <p>The reason this distinction carries so much weight is that it changes the toolchain, the timeline, and the risk profile all at once. A homogeneous migration is fundamentally a data-movement problem: pre-create the target schema using native tooling, point DMS at both sides, and let it run. A heterogeneous migration is a software-porting problem wearing a database costume, because stored procedures, views, functions, and triggers written against one engine's dialect have to be rewritten against another's, and that work is done by developers rather than by infrastructure.</p>
           <div class="table-container">
             <table class="data-table">
               <thead><tr><th>Characteristic</th><th>Homogeneous (same engine family)</th><th>Heterogeneous (cross-engine)</th></tr></thead>
               <tbody>
                 <tr><td>Example</td><td>On-prem SQL Server &rarr; RDS SQL Server</td><td>Oracle &rarr; Aurora PostgreSQL</td></tr>
-                <tr><td>Schema conversion needed?</td><td>No — but schema must be pre-created (native tools like pg_dump/restore, or native backup/restore, are typically faster than DMS for the initial load)</td><td><strong>Yes — AWS Schema Conversion Tool (SCT) required</strong> to convert tables, views, stored procedures, and functions</td></tr>
-                <tr><td>Secondary objects (indexes, FKs, triggers)</td><td>Not automatically migrated — must be scripted/migrated separately</td><td>SCT attempts conversion; complex procedural code often needs manual rework</td></tr>
-                <tr><td>Transformation rules</td><td>Limited</td><td>Full support — column/table renaming, data-type mapping, filtering</td></tr>
-                <tr><td>Relative cost/complexity</td><td>Lowest</td><td>Moderate to highest</td></tr>
+                <tr><td>Schema conversion</td><td>Not required, but the target schema must be pre-created with native tools (backup/restore, <code>pg_dump</code>, <code>mysqldump --no-data</code>)</td><td>Required — AWS SCT converts tables, views, stored procedures, and functions</td></tr>
+                <tr><td>Secondary objects (indexes, FKs, triggers)</td><td>Not migrated automatically; script them separately</td><td>SCT attempts conversion; complex procedural code usually needs manual rework</td></tr>
+                <tr><td>Transformation rules</td><td>Limited</td><td>Full support — renaming, data-type mapping, filtering</td></tr>
+                <tr><td>Relative cost and complexity</td><td>Lowest</td><td>Moderate to highest</td></tr>
               </tbody>
             </table>
           </div>
-          <p><strong>Exam gotcha:</strong> a 90-95% automatic SCT conversion rate <em>sounds</em> like the migration is basically done. It isn't — the remaining 5-10% is disproportionately the hardest part (complex stored procedures, triggers, proprietary SQL extensions) and needs manual developer remediation before cutover. Never pick an answer implying a heterogeneous migration is "fully automated."</p>
+          <p>The trap here is the conversion percentage. SCT reports how much of the schema it converted automatically, and a figure in the low nineties sounds like the migration is essentially finished. It is not. The objects SCT cannot convert are disproportionately the complex ones — stored procedures with proprietary extensions, intricate triggers, engine-specific functions — and they are exactly the objects that carry business logic. A 93% automatic conversion rate means the remaining 7% is the part that needs a developer who understands both dialects, and no exam answer that implies a heterogeneous migration completes unattended is correct.</p>
         </div>
       </section>
 
-      <section class="doc-section" id="load-methods">
-        <h2 class="section-heading">4. Full Load vs. CDC vs. Full Load + CDC</h2>
+      <section class="doc-section" id="config-modes">
+        <h2 class="section-heading">4. Configuration Modes and Their Tradeoffs</h2>
         <div class="card card-green">
-          <ul>
-            <li><strong>Full Load Only</strong> — migrates a point-in-time snapshot of existing data. Simplest option, but the source is effectively frozen (or you accept data drift) for the duration, so it implies real downtime for the cutover.</li>
-            <li><strong>CDC Only</strong> — replicates ongoing changes from a defined start point (e.g. a transaction log position), assuming the base data already exists at the target (perhaps loaded natively). Used for ongoing replication or as the second half of a two-step migration.</li>
-            <li><strong>Full Load + CDC</strong> — the standard near-zero-downtime pattern: DMS takes a full-load snapshot while <em>simultaneously</em> caching changes that occur during the load, applies the cached changes once the load completes, then keeps streaming CDC until you're ready to cut over. The cutover maintenance window shrinks to <strong>seconds to a few minutes</strong> — just long enough to stop writes to the source, let final CDC changes apply, and repoint the application.</li>
-          </ul>
-          <p><strong>Exam pattern:</strong> any scenario stressing "minimal downtime," "cannot take the database offline," or "near-zero downtime cutover" is pointing you at <strong>Full Load + CDC</strong>.</p>
+          <p>Once you have decided whether the migration is homogeneous or heterogeneous, the next set of knobs determines how much downtime the cutover actually costs. DMS offers three migration types, and the difference between them is entirely about what happens to writes that occur while the initial data is being copied. Full Load only takes a point-in-time snapshot of the existing data and writes it to the target. It is the simplest configuration and the fastest to reason about, but it has no mechanism for capturing changes that happen during the copy, which means the source has to be effectively frozen for the duration or you accept that the target is already stale by the time the load finishes. In practice this implies a real maintenance window proportional to the size of the dataset.</p>
+          <p>CDC only is the mirror image: it replicates ongoing changes from a defined starting point, assuming the base data already exists on the target. This is the right choice when you have loaded the initial dataset through some other means — a native backup and restore, a snapshot, or a previous full load — and now need to keep the target synchronized. It is also the configuration behind the pattern where DMS is not a migration tool at all but a permanent replication feed, streaming database changes into a data lake or analytics target indefinitely with no cutover ever planned.</p>
+          <p>Full Load plus CDC is the combination that most exam scenarios are pointing at, and it is worth understanding why it works rather than just memorizing it. DMS takes the full-load snapshot while simultaneously caching the changes that occur during the load. When the snapshot completes, it applies the cached changes to bring the target current, then continues streaming CDC from that point forward. The result is that the target stays within seconds of the source indefinitely, and the actual cutover window shrinks to the time it takes to stop writes on the source, let the final changes apply, and repoint the application — seconds to a few minutes regardless of how large the dataset is. Any scenario that stresses minimal downtime, an inability to take the database offline, or a near-zero-downtime cutover is describing this configuration.</p>
+          <p>Large object handling is a separate axis with its own tradeoff, and it is the one most often gotten wrong. Full LOB mode migrates complete objects of any size but processes rows sequentially, which is slow. Limited LOB mode sets a size threshold and truncates anything above it, which enables parallel processing and is fast — but the truncation is silent, so a threshold set too low loses data without failing loudly. Inline LOB mode handles objects under the threshold inline with the row and migrates larger ones in a second pass, which gets both speed and completeness when the distribution of object sizes is favorable. The exam pattern is a scenario that tells you most LOBs are under some size like 64KB; the correct answer is inline mode at that threshold, not limited mode, because limited mode would discard the occasional larger object.</p>
         </div>
       </section>
 
       <section class="doc-section" id="sizing">
-        <h2 class="section-heading">5. Replication Instance Sizing &amp; DMS Serverless</h2>
+        <h2 class="section-heading">5. Sizing, Limits and Quotas</h2>
         <div class="card">
-          <p>Monitor <code>CPUUtilization</code>, <code>FreeableMemory</code>, and <code>SwapUsage</code> on the replication instance. Memory pressure causes the instance to spill to disk, tanking throughput; CPU saturation shows up during heavy transformation rules or high-volume CDC apply. A single task rarely exceeds ~100,000 rows/second — for higher aggregate throughput, parallelize across multiple tasks (e.g. one task per large table, or partitioned table mappings).</p>
-          <p><strong>DMS Serverless</strong> removes manual instance sizing by auto-provisioning and auto-scaling DMS Capacity Units (DCUs) based on workload. Rough starting guidance: under 100GB &rarr; 2-4 DCU minimum; 100GB-1TB &rarr; 4-8 DCU minimum; over 1TB &rarr; 8-16 DCU minimum, scaling to 64+ DCU as needed. This is the right answer whenever a scenario emphasizes unpredictable migration workloads or wanting to avoid capacity planning.</p>
-          <p>Also monitor <code>CDCLatencySource</code> and <code>CDCLatencyTarget</code>: source-side latency points to slow reads from the source transaction log; target-side latency points to slow apply on the target (often an undersized target instance or missing indexes).</p>
+          <p>Sizing a DMS migration is a matter of matching replication capacity to the volume and change rate of the data, and the failure mode of getting it wrong is a migration that runs but never converges. The replication instance is the unit of capacity in the classic model, and the metrics that tell you whether it is adequate are CPU utilization, freeable memory, and swap usage. Memory is the one people underestimate: the instance buffers rows and cached change records in flight, and when it runs out it spills to disk, which shows up as a throughput cliff rather than a gradual degradation. CPU saturation tends to appear during heavy transformation rules or high-volume CDC apply, where the instance is doing real work per row rather than just moving bytes.</p>
+          <p>There is also a practical per-task ceiling to plan around. A single DMS task rarely exceeds roughly 100,000 rows per second, which means that very high-volume migrations are parallelized across multiple tasks rather than scaled up on one larger instance. The common patterns are one task per large table, or partitioned table mappings that split a single large table across several tasks. This is worth internalizing because it inverts the intuition that bigger instance equals faster migration; past a certain point the constraint is the task, not the hardware.</p>
+          <p>DMS Serverless removes the sizing decision entirely by auto-provisioning and auto-scaling DMS Capacity Units based on the workload. The published starting guidance is roughly 2 to 4 DCUs for datasets under 100GB, 4 to 8 DCUs for 100GB to 1TB, and 8 to 16 DCUs above 1TB, scaling upward from there as the workload demands. The exam signal for serverless is a scenario that emphasizes unpredictable or variable migration volume, or that explicitly wants to avoid capacity planning — the same reasoning that makes serverless attractive for any spiky workload.</p>
+          <div class="table-container">
+            <table class="data-table">
+              <thead><tr><th>Signal in the scenario</th><th>Configuration to choose</th></tr></thead>
+              <tbody>
+                <tr><td>Dataset under 100GB, steady volume</td><td>Provisioned replication instance, small class</td></tr>
+                <tr><td>100GB to 1TB</td><td>Provisioned instance, mid class, or DMS Serverless starting around 4-8 DCU</td></tr>
+                <tr><td>Over 1TB</td><td>Provisioned instance sized for peak, or DMS Serverless starting around 8-16 DCU</td></tr>
+                <tr><td>Unpredictable or highly variable volume</td><td>DMS Serverless — auto-scales DCUs, no capacity planning</td></tr>
+                <tr><td>Aggregate throughput above ~100,000 rows/sec</td><td>Parallelize across multiple tasks (per table or per partition)</td></tr>
+              </tbody>
+            </table>
+          </div>
         </div>
       </section>
 
-      <section class="doc-section" id="lob">
-        <h2 class="section-heading">6. Large Object (LOB) Handling</h2>
-        <div class="card card-purple">
-          <ul>
-            <li><strong>Full LOB Mode</strong> — migrates complete LOBs of any size, but processes rows sequentially (piece by piece), which is slow.</li>
-            <li><strong>Limited LOB Mode</strong> — truncates LOBs above a size threshold you set, enabling parallel processing (fast) — but any LOB larger than the threshold is silently truncated, risking data loss if set too low.</li>
-            <li><strong>Inline LOB Mode</strong> — handles LOBs under a set size threshold inline with the row (fast); larger ones are migrated separately in a second pass. This gets you both speed <em>and</em> completeness when most LOBs are small.</li>
-          </ul>
-          <p><strong>Exam tip:</strong> if a scenario says "profile the source data first and most LOB columns are under 64KB," the correct configuration is Inline LOB Mode with a 64KB threshold — not Limited LOB Mode (which would truncate/lose the occasional larger object) and not Full LOB Mode (needlessly slow).</p>
+      <section class="doc-section" id="failure-modes">
+        <h2 class="section-heading">6. Failure Modes and What They Look Like in Production</h2>
+        <div class="card card-sre">
+          <p>The most instructive DMS failures are the ones that do not announce themselves. A migration task that is running but falling further behind looks identical in the console to one that is keeping up, unless you are watching the right metric. The two that matter most are CDCLatencySource and CDCLatencyTarget, which split replication lag into its two halves: source-side latency measures how long it takes DMS to read changes out of the source transaction log, and target-side latency measures how long it takes to apply them. When a migration is falling behind, the first diagnostic move is always to check which of those two is growing, because the remediation is completely different depending on the answer.</p>
+          <p>Rising source-side latency usually means DMS cannot read the change stream fast enough. The classic cause is a table without a primary key or unique index, which forces DMS to identify changed rows by scanning rather than by direct lookup; the cost of that identification grows with table size, so the symptom is a migration that starts fine and degrades as the dataset grows. Rising target-side latency points at the apply side instead, and the usual culprits are an undersized target instance, missing indexes on the target that make each apply expensive, or triggers on the target firing for every replicated row. Both of these are diagnosable from the metrics alone, which is why the exam likes them: the scenario gives you a symptom and expects you to name the metric that would distinguish the two causes.</p>
+          <p>A third class of failure is silent data loss rather than lag. Limited LOB mode with a threshold set below the actual maximum object size will truncate data without failing the task, and a partitioned table that is not explicitly configured in the table mappings can be partially or entirely skipped. These are the failures that surface after cutover, when the source has already been decommissioned and the discrepancy is discovered by an application rather than by monitoring. The defense is validation, which is covered in the next section, and the reason it is worth calling out here is that these failures are invisible to every metric DMS publishes — the task reports success while having moved the wrong data.</p>
         </div>
       </section>
 
-      <section class="doc-section" id="validation">
-        <h2 class="section-heading">7. Validation &amp; Monitoring</h2>
+      <section class="doc-section" id="sre-angle">
+        <h2 class="section-heading">7. Operational and SRE Angle</h2>
         <div class="card">
-          <p>Enable <strong>DMS data validation</strong> to automatically compare row counts and checksums between source and target after (or during, for CDC) migration. For business-critical cutovers, supplement this with application-level queries that exercise real business logic, and consider continuous validation during the CDC phase to catch discrepancies within minutes rather than discovering them post-cutover.</p>
+          <p>Treating a DMS migration as an operational event rather than a one-off task is what separates a cutover that goes smoothly from one that becomes an incident. The monitoring baseline is straightforward: replication instance CPU, freeable memory, and swap usage for capacity; CDCLatencySource and CDCLatencyTarget for replication health; and the task-level error and warning counts for anything that has failed outright. The alarms worth configuring before the migration starts are on the two latency metrics, because they are the leading indicator that the target is drifting away from the source, and on freeable memory, because the spill-to-disk cliff is much cheaper to prevent than to recover from mid-migration.</p>
+          <p>Validation deserves to be treated as a first-class part of the runbook rather than an afterthought. DMS data validation compares row counts and checksums between source and target, and it can run continuously during the CDC phase rather than only at the end. For anything business-critical, that automated comparison should be supplemented with application-level queries that exercise real business logic — a checksum match on a table does not prove that a stored procedure behaves the same way on the new engine. Running validation continuously during CDC means discrepancies surface within minutes, while the source is still authoritative and the migration can still be corrected, rather than after cutover when the only remaining option is a rollback.</p>
+          <p>The cutover itself should be a written, rehearsed sequence with a defined rollback point. The shape is consistent across migrations: confirm CDC lag is near zero, stop writes to the source, wait for the final changes to apply, verify validation is clean, repoint the application connection string, resume writes, and only then begin the post-migration cleanup. That cleanup is easy to forget and expensive to skip — auto-increment and sequence values on the target need to be advanced past the highest migrated identifier or new inserts will collide, and any triggers disabled before the migration need to be re-enabled. A dry run against a non-production copy of the target is the cheapest way to find the steps the runbook is missing, and it is the same discipline that Day 34's Game Day material applies to failure scenarios generally.</p>
         </div>
       </section>
 
       <section class="doc-section" id="gotchas">
-        <h2 class="section-heading">8. Edge Cases &amp; Exam Gotchas (Memorize These)</h2>
+        <h2 class="section-heading">8. Edge Cases and Exam Gotchas</h2>
         <div class="card card-accent">
+          <p>These are the details that turn a correct-sounding answer into a wrong one, and they are worth committing to memory because the exam returns to them repeatedly. The unifying theme is that DMS moves rows, and anything that depends on state outside the rows themselves — identity counters, triggers, secondary schema objects — is not carried along automatically. Every one of the items below is a real production failure that has a plausible distractor sitting next to it on the exam.</p>
           <ul>
-            <li><strong>Tables without a primary key</strong> — CDC needs a way to identify which row changed. Without a PK (or at least a unique index), DMS falls back to full-table scans per change, which can degrade CDC performance by orders of magnitude. Add a PK/unique index before migrating, or expect this to be the "why is CDC so slow" answer.</li>
-            <li><strong>Sequences / identity columns</strong> — values do not auto-synchronize between source and target. After cutover, you must run a post-migration script to reset sequence values above the highest migrated ID, or new inserts will collide.</li>
-            <li><strong>Triggers and computed columns</strong> — can fire during migration and cause duplicate writes or constraint violations. Standard practice: disable triggers before migration, re-enable after cutover.</li>
-            <li><strong>Partitioned tables</strong> — need explicit configuration in table mappings; mishandling silently skips data or fails in confusing ways.</li>
-            <li><strong>Homogeneous ≠ everything migrates</strong> — homogeneous migrations do not automatically bring over secondary objects (indexes, foreign keys, triggers, stored procedures); these need separate handling even when no engine conversion is happening.</li>
-            <li><strong>DMS does not create the target schema</strong> — for homogeneous migrations you must pre-create the schema (native tools are typical); for heterogeneous migrations, SCT's schema-conversion output is applied to the target before DMS moves data.</li>
+            <li><strong>Tables without a primary key.</strong> CDC needs a way to identify which row changed. Without a primary key or at least a unique index, DMS falls back to full-table scans per change, which degrades CDC performance by orders of magnitude as the table grows. Add a key before migrating, or expect this to be the answer to "why is CDC so slow."</li>
+            <li><strong>Sequences and identity columns.</strong> Values do not synchronize between source and target. After cutover, a post-migration script must advance the target's sequence above the highest migrated identifier, or new inserts collide with existing rows.</li>
+            <li><strong>Triggers and computed columns.</strong> These can fire during migration and produce duplicate writes or constraint violations. The standard practice is to disable triggers before the migration and re-enable them after cutover.</li>
+            <li><strong>Partitioned tables.</strong> These require explicit configuration in the table mappings. Mishandling them silently skips data or fails in ways that are hard to diagnose from the task status alone.</li>
+            <li><strong>Homogeneous does not mean everything migrates.</strong> Even with no engine conversion, secondary objects — indexes, foreign keys, triggers, stored procedures — are not brought over automatically and need separate handling.</li>
+            <li><strong>DMS does not create the target schema.</strong> Homogeneous migrations require the schema to be pre-created with native tools; heterogeneous migrations require SCT's converted schema to be applied to the target before DMS moves any data.</li>
           </ul>
         </div>
       </section>
 
       <section class="doc-section" id="comparison">
-        <h2 class="section-heading">9. DMS vs. SCT vs. MGN vs. DataSync — Don't Mix These Up</h2>
+        <h2 class="section-heading">9. This vs. the Services It Gets Confused With</h2>
         <div class="card card-sre">
+          <p>The migration toolchain contains four services that are easy to conflate because they all move something from on-premises to AWS, and the exam exploits that overlap deliberately. The clean way to keep them apart is to ask what unit of work each one operates on: DMS operates on database rows, SCT operates on schema and code, MGN operates on whole servers, and DataSync operates on files and objects. Once you have identified the unit, the correct tool follows almost mechanically, and the distractors stop being tempting.</p>
+          <p>The pairing that matters most is DMS with SCT, because they are complementary rather than alternatives. A heterogeneous migration needs both, in sequence: SCT converts the schema and reports what it could not convert, a developer remediates the remainder, the converted schema is applied to the target, and then DMS moves the data with CDC to keep downtime minimal. Scenarios that describe an engine change and then offer DMS alone as an answer are testing whether you noticed that the schema conversion step is missing.</p>
           <div class="table-container">
             <table class="data-table">
-              <thead><tr><th>Service</th><th>What it actually does</th></tr></thead>
+              <thead><tr><th>Service</th><th>Unit of work</th><th>Pick it when…</th></tr></thead>
               <tbody>
-                <tr><td><strong>AWS DMS</strong></td><td>Moves <em>data</em> between databases (or database-to-analytics targets), optionally with CDC. Doesn't convert schema.</td></tr>
-                <tr><td><strong>AWS SCT</strong></td><td>Converts <em>schema and code</em> (tables, views, stored procedures) for heterogeneous migrations. Doesn't move data — DMS does that part.</td></tr>
-                <tr><td><strong>AWS MGN</strong></td><td>Rehosts entire <em>servers/applications</em> (continuous block-level replication) to EC2 — not database-specific.</td></tr>
-                <tr><td><strong>AWS DataSync</strong></td><td>Transfers <em>files/objects</em> (NFS, SMB, HDFS) between on-prem storage and AWS storage — not database-aware.</td></tr>
+                <tr><td><strong>AWS DMS</strong></td><td>Database rows, optionally with CDC</td><td>You need to move data between databases, or stream database changes continuously, with minimal downtime. It does not convert schema.</td></tr>
+                <tr><td><strong>AWS SCT</strong></td><td>Schema and code objects</td><td>The source and target engines differ and stored procedures, views, or functions need conversion. It does not move data.</td></tr>
+                <tr><td><strong>AWS MGN</strong></td><td>Whole servers and applications</td><td>You are rehosting a server or application to EC2 with continuous block-level replication and no application changes.</td></tr>
+                <tr><td><strong>AWS DataSync</strong></td><td>Files and objects</td><td>You are moving NFS, SMB, or HDFS data to S3, EFS, or FSx on a schedule. It is not database-aware.</td></tr>
               </tbody>
             </table>
           </div>
-          <p>Exam scenarios love disguising "we need to migrate our Oracle database to Aurora PostgreSQL" behind extra detail — the answer is always the <strong>SCT (schema) + DMS (data, with CDC for low downtime)</strong> pair, never MGN or DataSync.</p>
+          <p>The exam's favorite disguise is a scenario that buries the engine pairing in a paragraph of unrelated detail and then offers MGN or DataSync as plausible answers. If the question is about a database and the engines differ, the answer is SCT plus DMS. If the question is about a database and the engines match, the answer is DMS alone with a pre-created schema. If the question is about a server or a file share, neither DMS nor SCT belongs in the answer at all.</p>
         </div>
       </section>
 
       <section class="doc-section" id="lab">
         <h2 class="section-heading">10. Hands-on Lab (45 min)</h2>
         <div class="card card-green">
-          <p><strong>Architect a zero-downtime database migration from on-prem MySQL to Aurora MySQL:</strong></p>
+          <p><strong>Architect and rehearse a zero-downtime migration from on-premises MySQL to Aurora MySQL.</strong></p>
+          <p>This lab is deliberately homogeneous, because the point is to isolate the operational mechanics of a cutover from the schema-conversion work that a heterogeneous migration would add. Work through it end to end, including the dry run, and write down every step you had to discover rather than look up — those are the steps your runbook is missing.</p>
           <ol>
-            <li>Provision a DMS replication instance sized for the source data volume (or use DMS Serverless) inside the target VPC.</li>
-            <li>Since this is <em>homogeneous</em> (MySQL &rarr; Aurora MySQL), pre-create the target schema (mysqldump --no-data, or native export/import) — no SCT needed.</li>
-            <li>Create source and target endpoints, then a migration task set to <strong>Full Load + CDC</strong>.</li>
-            <li>Enable data validation on the task.</li>
-            <li>Start the task; monitor <code>CDCLatencySource</code>/<code>CDCLatencyTarget</code> until CDC lag is near-zero.</li>
-            <li>Plan the cutover window: stop writes to source &rarr; wait for final CDC apply &rarr; repoint application connection string to Aurora &rarr; resume writes.</li>
-            <li>Post-cutover: reset any auto-increment columns above their migrated max value, and re-enable any triggers disabled pre-migration.</li>
+            <li>Provision a DMS replication instance inside the target VPC, in the same Availability Zone as the Aurora cluster, sized for the source data volume. If you want to compare approaches, provision a second configuration using DMS Serverless and note the DCU range it selects.</li>
+            <li>Because this is homogeneous, pre-create the target schema with native tooling — <code>mysqldump --no-data</code> against the source, applied to Aurora. Confirm that indexes, foreign keys, and triggers exist on the target before any data moves, since DMS will not create them.</li>
+            <li>Create the source and target endpoints and test each connection. A failing endpoint test is far cheaper to diagnose now than mid-migration.</li>
+            <li>Create a migration task set to <strong>Full Load + CDC</strong>, with table mappings that include the schemas you intend to migrate and exclude anything you do not. Enable data validation on the task.</li>
+            <li>Start the task and watch the full load complete. While it runs, generate write traffic against the source so there are real changes for CDC to capture.</li>
+            <li>Once the full load finishes, confirm that CDC has caught up by watching <code>CDCLatencySource</code> and <code>CDCLatencyTarget</code> settle near zero. If either climbs, diagnose which side is lagging before proceeding.</li>
+            <li>Run a dry cutover against a non-production copy of the application: stop writes, wait for the final CDC apply, confirm validation is clean, repoint the connection string, and resume writes. Time the window and record it.</li>
+            <li>Perform the post-migration cleanup: advance every auto-increment and sequence value on the target above the highest migrated identifier, and re-enable any triggers that were disabled. Then run an application-level query that exercises real business logic, not just a row count.</li>
           </ol>
         </div>
       </section>
@@ -265,194 +289,208 @@
 
         <div class="scenario-card">
           <p class="scenario-question"><strong>Q1.</strong> A company is migrating an on-premises Oracle database to Amazon Aurora PostgreSQL. Stored procedures make heavy use of Oracle-specific PL/SQL extensions. What is the correct migration approach?</p>
-          <div class="scenario-options" id="opts-q1">
+          <div class="scenario-options" id="opts-d56q1">
             <div class="scenario-option">A. Use AWS DMS alone with transformation rules</div>
-            <div class="scenario-option">B. Use AWS SCT to convert the schema and code first, remediate any objects SCT can't auto-convert, then use AWS DMS (Full Load + CDC) to migrate the data</div>
+            <div class="scenario-option">B. Use AWS SCT to convert the schema and code first, remediate any objects SCT cannot auto-convert, then use AWS DMS with Full Load + CDC to migrate the data</div>
             <div class="scenario-option">C. Use AWS MGN to rehost the database server as-is</div>
             <div class="scenario-option">D. Manually export and import the data using SQL scripts only</div>
           </div>
-          <button class="scenario-reveal-btn" onclick="revealAnswer('q1', 1)">Reveal Answer</button>
-          <div class="scenario-explanation" id="exp-q1"><strong>Correct answer: B.</strong> This is a heterogeneous migration (Oracle to PostgreSQL), so SCT must convert schema/code first; DMS handles the data with CDC for minimal downtime. Expect PL/SQL-heavy stored procedures to require manual remediation after SCT's automated pass.</div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d56q1', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d56q1"><strong>Correct answer: B.</strong> This is a heterogeneous migration, so SCT must convert schema and code before DMS moves data. Option A fails because DMS does not convert schema; option C rehosts the server without modernizing the engine, which is not what was asked; option D ignores the schema conversion problem entirely and offers no low-downtime path.</div>
         </div>
 
         <div class="scenario-card">
           <p class="scenario-question"><strong>Q2.</strong> A migration task shows healthy full-load throughput, but once CDC begins, apply latency on the target climbs steadily. The source table has no primary key. What is the most likely cause?</p>
-          <div class="scenario-options" id="opts-q2">
+          <div class="scenario-options" id="opts-d56q2">
             <div class="scenario-option">A. The replication instance is in the wrong region</div>
-            <div class="scenario-option">B. Without a primary key or unique index, DMS must full-scan the target table to locate each changed row during CDC apply</div>
+            <div class="scenario-option">B. Without a primary key or unique index, DMS must scan the target table to locate each changed row during CDC apply</div>
             <div class="scenario-option">C. CDC does not support MySQL as a source</div>
             <div class="scenario-option">D. The target endpoint SSL certificate expired</div>
           </div>
-          <button class="scenario-reveal-btn" onclick="revealAnswer('q2', 1)">Reveal Answer</button>
-          <div class="scenario-explanation" id="exp-q2"><strong>Correct answer: B.</strong> Missing primary keys/unique indexes force DMS into full-table scans to apply each CDC change, degrading performance by orders of magnitude as the table grows.</div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d56q2', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d56q2"><strong>Correct answer: B.</strong> Missing primary keys or unique indexes force DMS into full-table scans to apply each change, and the cost grows with table size. Option A would affect both full load and CDC, not just CDC; option C is false; option D would fail the endpoint test outright rather than degrade apply latency.</div>
         </div>
 
         <div class="scenario-card">
-          <p class="scenario-question"><strong>Q3.</strong> Which migration type minimizes the cutover downtime window to seconds or a few minutes?</p>
-          <div class="scenario-options" id="opts-q3">
+          <p class="scenario-question"><strong>Q3.</strong> A company must migrate a 4TB production database with a maintenance window of no more than five minutes. Which migration type satisfies that constraint?</p>
+          <div class="scenario-options" id="opts-d56q3">
             <div class="scenario-option">A. Full Load only</div>
             <div class="scenario-option">B. CDC only, with no prior full load</div>
             <div class="scenario-option">C. Full Load + CDC</div>
             <div class="scenario-option">D. Schema conversion only</div>
           </div>
-          <button class="scenario-reveal-btn" onclick="revealAnswer('q3', 2)">Reveal Answer</button>
-          <div class="scenario-explanation" id="exp-q3"><strong>Correct answer: C.</strong> Full Load + CDC captures changes during the initial snapshot and continues streaming them, so the actual cutover is just stopping writes briefly and letting the last CDC changes apply.</div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d56q3', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d56q3"><strong>Correct answer: C.</strong> Full Load + CDC captures changes during the initial snapshot and keeps streaming them, so the cutover window is just the time to stop writes and let the final changes apply. Option A requires the source to be frozen for the entire 4TB load; option B assumes the base data already exists on the target; option D is not a migration type at all.</div>
         </div>
 
         <div class="scenario-card">
           <p class="scenario-question"><strong>Q4.</strong> After a successful DMS migration and cutover, new rows inserted into the target Aurora MySQL database are failing with duplicate key errors on the auto-increment primary key. What was missed?</p>
-          <div class="scenario-options" id="opts-q4">
+          <div class="scenario-options" id="opts-d56q4">
             <div class="scenario-option">A. Data validation was never enabled</div>
-            <div class="scenario-option">B. The target's AUTO_INCREMENT counter was never reset above the highest migrated ID</div>
+            <div class="scenario-option">B. The target's AUTO_INCREMENT counter was never advanced above the highest migrated ID</div>
             <div class="scenario-option">C. The replication instance was undersized</div>
             <div class="scenario-option">D. LOB mode was set incorrectly</div>
           </div>
-          <button class="scenario-reveal-btn" onclick="revealAnswer('q4', 1)">Reveal Answer</button>
-          <div class="scenario-explanation" id="exp-q4"><strong>Correct answer: B.</strong> Sequence/identity/auto-increment values don't auto-synchronize with DMS; a post-migration step must advance the counter past the highest migrated value.</div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d56q4', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d56q4"><strong>Correct answer: B.</strong> Sequence and identity values do not synchronize with DMS, so a post-migration step must advance the counter past the highest migrated value. Option A would have caught data discrepancies but not this; option C affects throughput, not key collisions; option D is unrelated to primary key behavior.</div>
         </div>
 
         <div class="scenario-card">
           <p class="scenario-question"><strong>Q5.</strong> A profiling step shows 99% of LOB columns in the source table are under 64KB, with a rare few reaching 10MB. Which LOB setting is most efficient without losing data?</p>
-          <div class="scenario-options" id="opts-q5">
+          <div class="scenario-options" id="opts-d56q5">
             <div class="scenario-option">A. Full LOB mode</div>
             <div class="scenario-option">B. Limited LOB mode with a 64KB max size</div>
             <div class="scenario-option">C. Inline LOB mode with a 64KB inline threshold</div>
             <div class="scenario-option">D. Disable LOB migration entirely</div>
           </div>
-          <button class="scenario-reveal-btn" onclick="revealAnswer('q5', 2)">Reveal Answer</button>
-          <div class="scenario-explanation" id="exp-q5"><strong>Correct answer: C.</strong> Inline mode migrates small LOBs fast (inline with the row) while still fully migrating the rare large ones in a second pass — Limited mode would truncate/lose the 10MB objects.</div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d56q5', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d56q5"><strong>Correct answer: C.</strong> Inline mode migrates small objects fast while still fully migrating the rare large ones in a second pass. Option A works but is needlessly slow because it processes rows sequentially; option B would silently truncate the 10MB objects; option D loses data outright.</div>
         </div>
 
         <div class="scenario-card">
-          <p class="scenario-question"><strong>Q6.</strong> A company migrating on-prem SQL Server to RDS SQL Server (same engine) is surprised that after the DMS migration, none of their indexes, foreign keys, or stored procedures exist on the target. Why?</p>
-          <div class="scenario-options" id="opts-q6">
+          <p class="scenario-question"><strong>Q6.</strong> A company migrating on-premises SQL Server to RDS SQL Server is surprised that after the DMS migration, none of their indexes, foreign keys, or stored procedures exist on the target. Why?</p>
+          <div class="scenario-options" id="opts-d56q6">
             <div class="scenario-option">A. DMS failed silently</div>
-            <div class="scenario-option">B. Homogeneous migrations don't automatically migrate secondary schema objects — only data</div>
+            <div class="scenario-option">B. Homogeneous migrations do not automatically migrate secondary schema objects — only data</div>
             <div class="scenario-option">C. SCT should have been used instead</div>
             <div class="scenario-option">D. CDC mode must be enabled to migrate indexes</div>
           </div>
-          <button class="scenario-reveal-btn" onclick="revealAnswer('q6', 1)">Reveal Answer</button>
-          <div class="scenario-explanation" id="exp-q6"><strong>Correct answer: B.</strong> Even in homogeneous migrations, DMS moves data, not the full schema/secondary objects. Native tools (backup/restore, scripted DDL) should migrate indexes, FKs, triggers, and procedures.</div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d56q6', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d56q6"><strong>Correct answer: B.</strong> Even in homogeneous migrations, DMS moves data rather than the full schema, so secondary objects need separate handling with native tools. Option A is wrong because the task reported success; option C is wrong because no engine conversion is needed here; option D is false — CDC does not migrate indexes.</div>
         </div>
 
         <div class="scenario-card">
-          <p class="scenario-question"><strong>Q7.</strong> Which CloudWatch metrics are most useful for determining whether CDC lag originates from reading the source or applying to the target?</p>
-          <div class="scenario-options" id="opts-q7">
+          <p class="scenario-question"><strong>Q7.</strong> A CDC task is falling behind and you need to determine whether the bottleneck is reading from the source or applying to the target. Which metrics distinguish the two?</p>
+          <div class="scenario-options" id="opts-d56q7">
             <div class="scenario-option">A. CPUUtilization and FreeableMemory only</div>
             <div class="scenario-option">B. CDCLatencySource and CDCLatencyTarget</div>
             <div class="scenario-option">C. NetworkIn and NetworkOut</div>
             <div class="scenario-option">D. FreeStorageSpace</div>
           </div>
-          <button class="scenario-reveal-btn" onclick="revealAnswer('q7', 1)">Reveal Answer</button>
-          <div class="scenario-explanation" id="exp-q7"><strong>Correct answer: B.</strong> CDCLatencySource isolates read-side delay from the source transaction log; CDCLatencyTarget isolates apply-side delay on the target — together they pinpoint where the bottleneck is.</div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d56q7', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d56q7"><strong>Correct answer: B.</strong> CDCLatencySource isolates read-side delay from the source transaction log, and CDCLatencyTarget isolates apply-side delay on the target. Option A tells you about instance capacity but not which side is lagging; option C is too coarse to attribute the delay; option D relates to disk pressure rather than replication position.</div>
         </div>
 
         <div class="scenario-card">
           <p class="scenario-question"><strong>Q8.</strong> A migration workload's data volume is highly unpredictable week to week, and the team wants to avoid manually sizing and re-sizing a replication instance. What should they use?</p>
-          <div class="scenario-options" id="opts-q8">
+          <div class="scenario-options" id="opts-d56q8">
             <div class="scenario-option">A. A dms.r6i.24xlarge provisioned instance, sized for peak</div>
             <div class="scenario-option">B. DMS Serverless, which auto-scales DMS Capacity Units to match workload</div>
             <div class="scenario-option">C. Multiple small provisioned instances running in parallel</div>
             <div class="scenario-option">D. AWS DataSync instead of DMS</div>
           </div>
-          <button class="scenario-reveal-btn" onclick="revealAnswer('q8', 1)">Reveal Answer</button>
-          <div class="scenario-explanation" id="exp-q8"><strong>Correct answer: B.</strong> DMS Serverless is designed exactly for unpredictable/variable workloads, removing manual capacity planning by auto-scaling DCUs.</div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d56q8', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d56q8"><strong>Correct answer: B.</strong> DMS Serverless is designed for variable workloads and removes manual capacity planning by auto-scaling DCUs. Option A over-provisions for the average case and still requires manual sizing; option C adds operational complexity without removing the sizing decision; option D is the wrong tool for database migration.</div>
         </div>
 
         <div class="scenario-card">
           <p class="scenario-question"><strong>Q9.</strong> During a heterogeneous migration, SCT reports a 93% automatic schema conversion rate. What is the correct interpretation?</p>
-          <div class="scenario-options" id="opts-q9">
+          <div class="scenario-options" id="opts-d56q9">
             <div class="scenario-option">A. The migration is essentially finished; proceed straight to cutover</div>
-            <div class="scenario-option">B. 7% of objects (often the most complex, e.g. certain stored procedures) still require manual remediation before the migration is production-ready</div>
+            <div class="scenario-option">B. The remaining 7% of objects, often the most complex, still require manual remediation before the migration is production-ready</div>
             <div class="scenario-option">C. 7% of the data will be permanently lost</div>
             <div class="scenario-option">D. SCT should be re-run with different settings until it reaches 100%</div>
           </div>
-          <button class="scenario-reveal-btn" onclick="revealAnswer('q9', 1)">Reveal Answer</button>
-          <div class="scenario-explanation" id="exp-q9"><strong>Correct answer: B.</strong> The unconverted percentage is usually the hardest, most complex objects and needs manual developer work — a high conversion percentage does not mean the migration is complete.</div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d56q9', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d56q9"><strong>Correct answer: B.</strong> The unconverted objects are disproportionately the complex ones — stored procedures with proprietary extensions, intricate triggers — and they carry business logic. Option A skips the hardest work; option C confuses schema objects with data; option D is not how SCT works, since some objects are simply not auto-convertible.</div>
         </div>
 
         <div class="scenario-card">
-          <p class="scenario-question"><strong>Q10.</strong> A single DMS task is capped at roughly how many rows/second of throughput, meaning very high-volume migrations should be split across multiple tasks?</p>
-          <div class="scenario-options" id="opts-q10">
-            <div class="scenario-option">A. ~1,000 rows/second</div>
-            <div class="scenario-option">B. ~100,000 rows/second</div>
-            <div class="scenario-option">C. ~10 million rows/second</div>
-            <div class="scenario-option">D. There is no practical per-task limit</div>
+          <p class="scenario-question"><strong>Q10.</strong> A migration must sustain well above 100,000 rows per second in aggregate. What is the correct approach?</p>
+          <div class="scenario-options" id="opts-d56q10">
+            <div class="scenario-option">A. Provision the largest available replication instance and run a single task</div>
+            <div class="scenario-option">B. Parallelize across multiple tasks, for example one per large table or per partition</div>
+            <div class="scenario-option">C. Switch to CDC-only mode</div>
+            <div class="scenario-option">D. Use AWS DataSync to move the rows instead</div>
           </div>
-          <button class="scenario-reveal-btn" onclick="revealAnswer('q10', 1)">Reveal Answer</button>
-          <div class="scenario-explanation" id="exp-q10"><strong>Correct answer: B.</strong> A single task rarely exceeds ~100,000 rows/second; higher aggregate throughput requires parallelizing across multiple tasks (e.g. per large table or partition).</div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d56q10', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d56q10"><strong>Correct answer: B.</strong> A single task rarely exceeds roughly 100,000 rows per second, so aggregate throughput above that ceiling requires multiple tasks. Option A hits the per-task limit regardless of instance size; option C changes what is replicated, not how fast; option D is the wrong tool for database rows.</div>
         </div>
 
         <div class="scenario-card">
-          <p class="scenario-question"><strong>Q11.</strong> Which tool should be used to move a large on-prem NFS file share into Amazon EFS as part of a broader migration project that also includes a DMS database migration?</p>
-          <div class="scenario-options" id="opts-q11">
+          <p class="scenario-question"><strong>Q11.</strong> A migration project includes both a database migration and a large on-premises NFS file share that must land in Amazon EFS. Which tool handles the file share?</p>
+          <div class="scenario-options" id="opts-d56q11">
             <div class="scenario-option">A. AWS DMS, configured for file targets</div>
             <div class="scenario-option">B. AWS DataSync</div>
             <div class="scenario-option">C. AWS SCT</div>
             <div class="scenario-option">D. AWS MGN</div>
           </div>
-          <button class="scenario-reveal-btn" onclick="revealAnswer('q11', 1)">Reveal Answer</button>
-          <div class="scenario-explanation" id="exp-q11"><strong>Correct answer: B.</strong> DataSync is the file/object transfer tool (NFS/SMB/HDFS to S3/EFS/FSx); DMS is database-specific and doesn't move general file shares.</div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d56q11', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d56q11"><strong>Correct answer: B.</strong> DataSync transfers files and objects between on-premises storage and AWS storage services such as EFS, FSx, and S3. Option A is database-specific and has no file-share target; option C converts schema; option D rehosts servers.</div>
         </div>
 
         <div class="scenario-card">
           <p class="scenario-question"><strong>Q12.</strong> A table has triggers that fire on INSERT to enforce business logic. During a Full Load + CDC migration, duplicate side effects are observed on the target. What is the standard remediation?</p>
-          <div class="scenario-options" id="opts-q12">
+          <div class="scenario-options" id="opts-d56q12">
             <div class="scenario-option">A. Switch to CDC-only mode</div>
             <div class="scenario-option">B. Disable the triggers before migration and re-enable them after cutover</div>
             <div class="scenario-option">C. Increase the replication instance size</div>
             <div class="scenario-option">D. Enable Limited LOB mode</div>
           </div>
-          <button class="scenario-reveal-btn" onclick="revealAnswer('q12', 1)">Reveal Answer</button>
-          <div class="scenario-explanation" id="exp-q12"><strong>Correct answer: B.</strong> Triggers fire during migration unless explicitly disabled, causing duplicate side effects or constraint violations as DMS writes rows; disable before migration, re-enable post-cutover.</div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d56q12', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d56q12"><strong>Correct answer: B.</strong> Triggers fire during migration unless explicitly disabled, producing duplicate side effects or constraint violations as DMS writes rows. Option A does not stop triggers from firing; option C addresses throughput, not correctness; option D is unrelated to trigger behavior.</div>
         </div>
 
         <div class="scenario-card">
-          <p class="scenario-question"><strong>Q13.</strong> Which combination correctly matches tool to purpose for a heterogeneous database migration?</p>
-          <div class="scenario-options" id="opts-q13">
+          <p class="scenario-question"><strong>Q13.</strong> Which pairing correctly matches tool to purpose for a heterogeneous database migration?</p>
+          <div class="scenario-options" id="opts-d56q13">
             <div class="scenario-option">A. DMS converts schema; SCT moves data</div>
             <div class="scenario-option">B. SCT converts schema and code; DMS moves the data</div>
             <div class="scenario-option">C. MGN converts schema; DataSync moves data</div>
             <div class="scenario-option">D. A single DMS task handles both automatically with no other tools</div>
           </div>
-          <button class="scenario-reveal-btn" onclick="revealAnswer('q13', 1)">Reveal Answer</button>
-          <div class="scenario-explanation" id="exp-q13"><strong>Correct answer: B.</strong> SCT = schema/code conversion. DMS = data movement (with optional CDC). This pairing is the single most tested DMS fact on the exam.</div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d56q13', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d56q13"><strong>Correct answer: B.</strong> SCT converts schema and code, and DMS moves data with optional CDC. Option A reverses the two; option C names tools that do not perform either job; option D ignores the schema conversion step that a heterogeneous migration requires.</div>
         </div>
 
         <div class="scenario-card">
-          <p class="scenario-question"><strong>Q14.</strong> A company wants ongoing, continuous replication from an on-prem Oracle database into an S3 data lake in Parquet format for analytics, with no plan to ever cut over the source. What DMS configuration fits?</p>
-          <div class="scenario-options" id="opts-q14">
+          <p class="scenario-question"><strong>Q14.</strong> A company wants ongoing, continuous replication from an on-premises Oracle database into an S3 data lake in Parquet format for analytics, with no plan to ever cut over the source. What DMS configuration fits?</p>
+          <div class="scenario-options" id="opts-d56q14">
             <div class="scenario-option">A. Full Load only, re-run daily</div>
             <div class="scenario-option">B. Full Load + CDC targeting S3, used as an ongoing CDC pipeline rather than a one-time cutover</div>
             <div class="scenario-option">C. AWS SCT alone</div>
             <div class="scenario-option">D. AWS Snowball for a one-time export</div>
           </div>
-          <button class="scenario-reveal-btn" onclick="revealAnswer('q14', 1)">Reveal Answer</button>
-          <div class="scenario-explanation" id="exp-q14"><strong>Correct answer: B.</strong> DMS to S3 is a common CDC-pipeline pattern for streaming database changes into a data lake continuously — the source database is never cut over, it's a permanent replication feed.</div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d56q14', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d56q14"><strong>Correct answer: B.</strong> DMS to S3 is a common pattern for streaming database changes into a data lake continuously, with no cutover ever planned. Option A re-runs a full snapshot daily and cannot keep up with continuous change; option C converts schema but moves no data; option D is a one-time offline transfer with no ongoing replication.</div>
         </div>
 
         <div class="scenario-card">
           <p class="scenario-question"><strong>Q15.</strong> Where should the DMS replication instance be placed relative to the target database to minimize latency and cross-AZ data transfer cost?</p>
-          <div class="scenario-options" id="opts-q15">
+          <div class="scenario-options" id="opts-d56q15">
             <div class="scenario-option">A. In a separate region from both source and target</div>
-            <div class="scenario-option">B. In the same VPC/AZ as the target database</div>
-            <div class="scenario-option">C. In the same VPC/AZ as the source database, regardless of target location</div>
-            <div class="scenario-option">D. Placement doesn't affect performance or cost</div>
+            <div class="scenario-option">B. In the same VPC and Availability Zone as the target database</div>
+            <div class="scenario-option">C. In the same VPC and Availability Zone as the source database, regardless of target location</div>
+            <div class="scenario-option">D. Placement does not affect performance or cost</div>
           </div>
-          <button class="scenario-reveal-btn" onclick="revealAnswer('q15', 1)">Reveal Answer</button>
-          <div class="scenario-explanation" id="exp-q15"><strong>Correct answer: B.</strong> Co-locating the replication instance with the target minimizes apply-side latency and avoids unnecessary cross-AZ data transfer charges on the (typically larger) volume of data being written.</div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d56q15', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d56q15"><strong>Correct answer: B.</strong> Co-locating the replication instance with the target minimizes apply-side latency and avoids cross-AZ transfer charges on the larger volume of data being written. Option A adds cross-region latency and cost; option C optimizes the read side at the expense of the write side; option D is false.</div>
+        </div>
+      </section>
+
+      <section class="doc-section" id="preview">
+        <h2 class="section-heading">12. Peek into Tomorrow</h2>
+        <div class="card card-purple">
+          <p>Day 56 is the last new-topic day of Phase 4, and it closes the migration and cost-optimization arc that began with the 7 Rs on Day 43. Everything from here forward is practice, review, and exam technique — which sounds like a relief until you consider what it actually tests. The decision tree in this lesson is not difficult to recall when you have unlimited time, a page of notes, and a single question in front of you. You can reason from the engine pairing to the toolchain, from the downtime requirement to the load mode, from the LOB distribution to the threshold, and arrive at the right answer deliberately.</p>
+          <p>The mock exam removes all of that scaffolding. Seventy-five questions in 180 minutes is roughly 2.4 minutes per question on average, and the DMS question will not announce itself as a DMS question — it will arrive as a paragraph about a company with a legacy Oracle system, a compliance deadline, and a constraint buried in the third sentence, sitting between a Transit Gateway routing question and a Savings Plans question. The retrieval has to happen in seconds, under time pressure, while three unrelated services from the previous 55 days are also competing for the same mental bandwidth. That is a different skill from understanding, and it is the skill Phase 5 exists to build.</p>
         </div>
       </section>
 
       <section class="doc-section" id="sources">
-        <h2 class="section-heading">12. Sources</h2>
+        <h2 class="section-heading">13. Sources</h2>
         <div class="card">
-          <p class="source-list">Researched from current, publicly available AWS certification study resources (not just AWS docs alone) to keep this grounded in what the exam actually tests, current as of September 2026:</p>
+          <p class="source-list">Researched from current, publicly available AWS documentation and reputable certification study resources, to keep this grounded in what the exam actually tests. Current as of September 2026.</p>
           <ul class="source-list">
-            <li><a href="https://www.awscertificationhandbook.com/guides/aws-database-migration-service/" target="_blank">AWS Certification Handbook — Deep Dive into AWS Database Migration Service (AWS DMS)</a></li>
-            <li><a href="https://sailor.sh/blog/sap-c02-migration-strategies-guide/" target="_blank">Sailor.sh — AWS Migration Strategies for SAP-C02: The 7Rs Framework</a></li>
+            <li><a href="https://docs.aws.amazon.com/dms/latest/userguide/Welcome.html" target="_blank">AWS Documentation — AWS Database Migration Service User Guide</a></li>
+            <li><a href="https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Tasks.Creating.html" target="_blank">AWS Documentation — Creating a DMS Migration Task (migration types, table mappings)</a></li>
+            <li><a href="https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Tasks.LOBSupport.html" target="_blank">AWS Documentation — DMS LOB Support (full, limited, and inline LOB modes)</a></li>
+            <li><a href="https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Monitoring.html" target="_blank">AWS Documentation — Monitoring DMS Tasks (CDCLatencySource, CDCLatencyTarget, instance metrics)</a></li>
+            <li><a href="https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Serverless.html" target="_blank">AWS Documentation — DMS Serverless (capacity units and auto-scaling)</a></li>
+            <li><a href="https://docs.aws.amazon.com/SchemaConversionTool/latest/userguide/CHAP_Welcome.html" target="_blank">AWS Documentation — AWS Schema Conversion Tool User Guide</a></li>
+            <li><a href="https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Validating.html" target="_blank">AWS Documentation — DMS Data Validation</a></li>
+            <li><a href="https://docs.aws.amazon.com/prescriptive-guidance/latest/migration-database-strategy/welcome.html" target="_blank">AWS Prescriptive Guidance — Database Migration Strategy</a></li>
             <li><a href="https://jayendrapatil.com/aws-data-migration-service-dms/" target="_blank">Jayendra Patil — AWS DMS: Database Migration Service, CDC &amp; Schema Conversion</a></li>
-            <li><a href="https://docs.aws.amazon.com/dms/latest/userguide/Welcome.html" target="_blank">AWS Official Documentation — AWS Database Migration Service User Guide</a></li>
+            <li><a href="https://sailor.sh/blog/sap-c02-migration-strategies-guide/" target="_blank">Sailor.sh — AWS Migration Strategies for SAP-C02: The 7Rs Framework</a></li>
           </ul>
         </div>
       </section>
