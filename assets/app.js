@@ -46,10 +46,17 @@ function filterNav() {
 }
 
 function toggleSidebar() {
-  document.getElementById('sidebar').classList.toggle('open');
+  const sidebar = document.getElementById('sidebar');
+  if (!sidebar) return;
+  setSidebarOpen(!sidebar.classList.contains('open'));
 }
 function toggleTopLinks() {
-  document.querySelector('.top-links').classList.toggle('open');
+  const links = document.querySelector('.top-links');
+  const btn = document.querySelector('.mobile-nav-toggle');
+  if (!links) return;
+  const isOpen = links.classList.toggle('open');
+  document.body.classList.toggle('top-links-open', isOpen);
+  if (btn) btn.setAttribute('aria-expanded', String(isOpen));
 }
 
 function renderTracker(containerId, currentPageDay) {
@@ -127,6 +134,7 @@ function markComplete(dayNum, nextHref) {
 // --- Reading tools: theme toggle, font-size scale, scroll progress ---
 const THEME_KEY = 'sapro_theme';
 const SCALE_KEY = 'sapro_reading_scale';
+const SCROLL_KEY_PREFIX = 'sapro_scroll_';
 const SCALE_STEPS = [90, 100, 110, 120, 130];
 
 function getTheme() {
@@ -147,9 +155,11 @@ function getScale() {
   } catch (e) {}
   return 100;
 }
+const tableScrollUpdaters = [];
 function applyScale(v) {
   document.documentElement.style.setProperty('--reading-scale', v + '%');
   try { localStorage.setItem(SCALE_KEY, String(v)); } catch (e) {}
+  requestAnimationFrame(() => tableScrollUpdaters.forEach(fn => fn()));
 }
 function stepScale(dir) {
   const cur = getScale();
@@ -158,19 +168,176 @@ function stepScale(dir) {
   applyScale(next);
 }
 
+function storagePathKey() {
+  return SCROLL_KEY_PREFIX + window.location.pathname.replace(/[^a-z0-9_-]+/gi, '_');
+}
+
+function getScrollRatio() {
+  const h = document.documentElement;
+  const max = h.scrollHeight - h.clientHeight;
+  return max > 0 ? h.scrollTop / max : 0;
+}
+
+function updateReadingProgress(bar) {
+  bar.style.width = (getScrollRatio() * 100) + '%';
+}
+
+function setSidebarOpen(open) {
+  const sidebar = document.getElementById('sidebar');
+  const btn = document.querySelector('.sidebar-toggle');
+  const backdrop = document.querySelector('.sidebar-backdrop');
+  if (!sidebar) return;
+  sidebar.classList.toggle('open', open);
+  document.body.classList.toggle('sidebar-open', open);
+  if (btn) btn.setAttribute('aria-expanded', String(open));
+  if (backdrop) backdrop.classList.toggle('open', open);
+  if (open) {
+    const resume = document.querySelector('.resume-reading');
+    if (resume) resume.classList.remove('shown');
+  }
+}
+
+function ensureMobileControls() {
+  const topbar = document.querySelector('header.topbar');
+  const topLinks = document.querySelector('.top-links');
+  if (topbar && topLinks && !document.querySelector('.mobile-nav-toggle')) {
+    const menu = document.createElement('button');
+    menu.type = 'button';
+    menu.className = 'mobile-nav-toggle';
+    menu.textContent = 'Menu';
+    menu.setAttribute('aria-controls', 'topLinks');
+    menu.setAttribute('aria-expanded', 'false');
+    menu.addEventListener('click', toggleTopLinks);
+    topLinks.id = topLinks.id || 'topLinks';
+    topbar.insertBefore(menu, topLinks);
+  } else {
+    const existing = document.querySelector('.mobile-nav-toggle');
+    if (existing) {
+      existing.type = 'button';
+      existing.setAttribute('aria-expanded', topLinks && topLinks.classList.contains('open') ? 'true' : 'false');
+      if (topLinks) {
+        topLinks.id = topLinks.id || 'topLinks';
+        existing.setAttribute('aria-controls', topLinks.id);
+      }
+    }
+  }
+
+  const sidebar = document.getElementById('sidebar');
+  if (sidebar && !document.querySelector('.sidebar-toggle')) {
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'sidebar-toggle btn btn-outline';
+    toggle.textContent = 'Browse sections';
+    toggle.setAttribute('aria-controls', 'sidebar');
+    toggle.setAttribute('aria-expanded', 'false');
+    toggle.addEventListener('click', toggleSidebar);
+    sidebar.parentNode.insertBefore(toggle, sidebar);
+  } else {
+    const existing = document.querySelector('.sidebar-toggle');
+    if (existing) {
+      existing.type = 'button';
+      existing.setAttribute('aria-controls', 'sidebar');
+      existing.setAttribute('aria-expanded', sidebar && sidebar.classList.contains('open') ? 'true' : 'false');
+    }
+  }
+
+  if (sidebar && !document.querySelector('.sidebar-backdrop')) {
+    const backdrop = document.createElement('button');
+    backdrop.type = 'button';
+    backdrop.className = 'sidebar-backdrop';
+    backdrop.setAttribute('aria-label', 'Close navigation');
+    backdrop.addEventListener('click', () => setSidebarOpen(false));
+    document.body.appendChild(backdrop);
+  }
+
+  document.querySelectorAll('.sidebar .nav-link').forEach(link => {
+    link.addEventListener('click', () => {
+      if (window.matchMedia('(max-width: 900px)').matches) setSidebarOpen(false);
+    });
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    setSidebarOpen(false);
+    const links = document.querySelector('.top-links');
+    const menu = document.querySelector('.mobile-nav-toggle');
+    if (links) links.classList.remove('open');
+    document.body.classList.remove('top-links-open');
+    if (menu) menu.setAttribute('aria-expanded', 'false');
+  });
+}
+
+function enhanceTables() {
+  document.querySelectorAll('table.data-table').forEach(table => {
+    const headers = Array.from(table.querySelectorAll('thead th')).map(th => th.textContent.trim());
+    table.querySelectorAll('tbody tr').forEach(row => {
+      Array.from(row.children).forEach((cell, idx) => {
+        if (headers[idx]) cell.setAttribute('data-label', headers[idx]);
+      });
+    });
+    const container = table.closest('.table-container');
+    if (!container) return;
+    const update = () => container.classList.toggle('is-scrollable', table.scrollWidth > container.clientWidth + 2);
+    update();
+    window.addEventListener('resize', update, { passive: true });
+    tableScrollUpdaters.push(update);
+  });
+}
+
+function initResumeReading() {
+  const key = storagePathKey();
+  let saved = 0;
+  try { saved = parseFloat(localStorage.getItem(key) || '0'); } catch (e) {}
+
+  const canResume = saved > 0.12 && saved < 0.92 && document.documentElement.scrollHeight > window.innerHeight * 1.8;
+  let prompt;
+  if (canResume) {
+    prompt = document.createElement('div');
+    prompt.className = 'resume-reading';
+    prompt.setAttribute('role', 'status');
+    prompt.innerHTML = `
+      <span>Resume at ${Math.round(saved * 100)}%</span>
+      <button type="button" class="btn btn-green" id="resumeReadingBtn">Resume</button>
+      <button type="button" class="resume-dismiss" id="resumeDismissBtn" aria-label="Dismiss resume prompt">&times;</button>
+    `;
+    document.body.appendChild(prompt);
+    requestAnimationFrame(() => prompt.classList.add('shown'));
+    window.setTimeout(() => prompt.classList.remove('shown'), 12000);
+    document.getElementById('resumeReadingBtn').addEventListener('click', () => {
+      const h = document.documentElement;
+      window.scrollTo({ top: saved * (h.scrollHeight - h.clientHeight), behavior: 'smooth' });
+      prompt.classList.remove('shown');
+    });
+    document.getElementById('resumeDismissBtn').addEventListener('click', () => prompt.classList.remove('shown'));
+  }
+
+  let ticking = false;
+  window.addEventListener('scroll', () => {
+    if (ticking) return;
+    ticking = true;
+    requestAnimationFrame(() => {
+      try { localStorage.setItem(key, String(getScrollRatio())); } catch (e) {}
+      if (prompt && getScrollRatio() > 0.15) prompt.classList.remove('shown');
+      ticking = false;
+    });
+  }, { passive: true });
+}
+
 function initReadingTools() {
   applyTheme(getTheme());
   applyScale(getScale());
+  ensureMobileControls();
+  enhanceTables();
+  initResumeReading();
   const bar = document.createElement('div');
   bar.className = 'reading-progress';
   bar.id = 'readingProgressBar';
   document.body.appendChild(bar);
+  updateReadingProgress(bar);
   window.addEventListener('scroll', () => {
-    const h = document.documentElement;
-    const scrolled = h.scrollTop;
-    const max = h.scrollHeight - h.clientHeight;
-    bar.style.width = (max > 0 ? (scrolled / max) * 100 : 0) + '%';
+    updateReadingProgress(bar);
   }, { passive: true });
+  window.addEventListener('resize', () => updateReadingProgress(bar));
 
   const widget = document.createElement('div');
   widget.className = 'reading-tools';
