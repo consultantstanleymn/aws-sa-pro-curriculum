@@ -4,18 +4,22 @@ Welcome to the comprehensive, self-paced 14-week study curriculum for the AWS So
 
 ## Live Study Portal
 Access the fully styled, interactive documentation portal live at:
-👉 **[https://stanley-n.com/sa-pro](https://stanley-n.com/sa-pro)**
+👉 **[http://stanley-n.com/aws-sa-pro-curriculum/](http://stanley-n.com/aws-sa-pro-curriculum/)**
 
-*(stanley-n.com's root is reserved for a separate portfolio site. This repo is the source of truth for the curriculum and is mirrored into the `/sa-pro/` folder of [consultantstanleymn/consultantstanleymn.github.io](https://github.com/consultantstanleymn/consultantstanleymn.github.io) — re-copy this repo's `index.html`, `assets/`, `days/`, and `data/` into that repo's `sa-pro/` folder whenever this repo is updated, then push.)*
+*(This repo has its own GitHub Pages site, built automatically from `main` on every push — no separate mirror step. It previously lived at `stanley-n.com/sa-pro` as a folder inside [consultantstanleymn/consultantstanleymn.github.io](https://github.com/consultantstanleymn/consultantstanleymn.github.io), but was split out into this standalone repo; that portfolio repo now only holds the root portfolio site.)*
 
 ## Day-by-Day Study System
-Every day of the 14-week / 70-day plan has its own page at `days/day-NNN.html` — topic summary, hands-on lab, and scenario question drills, generated from `data/days.json` via `scripts/generate.js`. To add or edit a day's content, edit `data/days.json` then run:
-```bash
-node scripts/generate.js
-```
-Day 56 (`days/day-056.html`) is hand-authored with full depth as the template for what every other day should eventually become — regenerate it manually if `data/days.json`'s day-56 entry changes.
+Every day of the 14-week / 70-day plan has its own hand-authored page at `days/day-NNN.html`: a recap tying back to the previous day, a full narrative lesson body, a hands-on lab, a scenario quiz, and a preview of the next day. All 70 days are flagged `"detailed": true` in `data/days.json`, which tells `scripts/generate.js` to leave them alone — the generator only fills in a thin placeholder page for a day that doesn't have that flag set yet (there currently aren't any).
 
-The homepage and every day page include a local progress tracker (`assets/app.js`, browser `localStorage` only — not shared across devices) defaulting to Day 56.
+Four content archetypes, assigned per day in `data/days.json`'s `archetype` field:
+- **A** (51 days) — a full service/pattern deep dive: recap, nine narrative subsections, lab, 15-question quiz, preview, sources.
+- **B** (5 days, the weekly syntheses) — cross-service decision matrices over the week just finished, 25-question mixed quiz.
+- **C** (5 days, the full-length mock exams) — a sitting protocol plus a genuine 75-question timed practice exam and scoring guide.
+- **D** (9 days, distractor analysis / deep review) — 12-18 short "tempting wrong answer / why it's tempting / the tell" pattern entries, 15-question drill.
+
+Cross-day continuity (each day's recap/preview referencing specific, concrete details from its neighbors) is driven by `data/continuity-ledger.json` — a per-day takeaway, a handful of memorable hooks, a narrative thread name, and a recap relationship type, generated once so that days written independently still read as one connected story. `scripts/gen-day-brief.js` turns the ledger plus a day's `data/days.json` entry into that day's generation brief; `scripts/verify-day.js <day>` checks a rewritten day's structure (quiz wiring, nav/tracker preservation, banned boilerplate phrases, word-count floor) before it's trusted.
+
+The homepage and every day page include a local progress tracker (`assets/app.js`, browser `localStorage` only — not shared across devices) defaulting to Day 1.
 
 ## Curriculum Architecture
 * **Phase 1 (Weeks 1–3):** Multi-Account Governance, Control Tower, Service Control Policies (SCPs) & Advanced Hybrid Networking (Transit Gateway, Direct Connect, Route 53 Resolver, PrivateLink).
