@@ -104,38 +104,354 @@
         <span class="pill pill-green">Phase 2: Compute, Containers &amp; Global Databases</span>
       </div>
       <h1 class="hero-title">Amazon S3 Storage Classes, Lifecycle &amp; Replication</h1>
-      <div class="reading-meta">&#128337; ~3 min read &middot; 3 services covered</div>
+      <div class="reading-meta">&#128337; ~58 min read &middot; 3 services covered</div>
       <div class="services-grid">
         <span class="service-tag">S3 Storage Classes</span>
         <span class="service-tag">Lifecycle Policies</span>
         <span class="service-tag">S3 Replication (CRR/SRR)</span>
       </div>
       <div id="tracker"></div>
-      <section class="doc-section">
-        <h2 class="section-heading">Today's Concept</h2>
+
+      <section class="doc-section" id="recap">
+        <h2 class="section-heading">Recap: Where We Left Off</h2>
         <div class="card card-accent">
-          <p>S3 storage classes trade cost for retrieval latency/availability (Standard, Intelligent-Tiering, Standard-IA, One Zone-IA, Glacier Instant/Flexible/Deep Archive). Lifecycle rules automate transitions and expirations. Cross-Region Replication (CRR) and Same-Region Replication (SRR) replicate objects asynchronously, commonly for DR or compliance data residency.</p>
-        </div>
-        <h3 class="sub-heading">Hands-on Lab / Practical Action (45 min)</h3>
-        <div class="card">
-          <p>Design an S3 lifecycle policy transitioning logs to Standard-IA at 30 days, Glacier Flexible Retrieval at 90 days, and expiring them at 400 days.</p>
+          <p>Day 25 closed out the DynamoDB arc with two mechanisms that solve different halves of the same latency problem. Global Tables gave us multi-region multi-active replication with last-writer-wins conflict resolution, which means every region can accept writes and the system converges without a coordinator. DAX gave us a read-through/write-through cache that drops read latency from milliseconds to microseconds for hot items, at the cost of an extra hop and a cache that can serve stale data within its TTL. Both answers assume the data is small, mutable, and queried by key.</p>
+          <p>Today contrasts with that directly. S3 is not a key-value store with a latency problem to shave; it is an object store whose entire design premise is that objects are large, immutable once written, and read far less often than they are stored. There is no conflict resolution because there is no concurrent write path to the same object version. There is no cache tier because the access pattern is not hot-key. What replaces those concerns is a cost-versus-retrieval-time spectrum across storage classes, and a replication model that is asynchronous and one-directional per rule. The mental shift is from "how fast can I read this" to "how much am I willing to pay to keep this, and how long can I wait to get it back."</p>
         </div>
       </section>
-      <section class="doc-section">
-        <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
-        
-      <div class="scenario-card">
-        <p class="scenario-question"><strong>Q1.</strong> An object needs the lowest storage cost, is rarely accessed, and a 12-hour retrieval time is acceptable, but it must survive loss of an entire AZ.</p>
-        <div class="scenario-options" id="opts-d26q0">
+
+      <section class="doc-section" id="why-on-exam">
+        <h2 class="section-heading">1. Why This Is on the Exam</h2>
+        <p>S3 appears in more SAP-C02 scenarios than any other single service, and it almost never appears as the headline answer. It shows up as a constraint inside a larger architecture question: the DR strategy needs a replicated copy of the data, the compliance requirement needs objects retained for seven years and immutable, the cost optimization question needs a storage tiering plan, or the analytics pipeline needs a landing zone that a second account can read. The exam is testing whether you can pick the right storage class and the right replication topology for a stated access pattern and a stated recovery objective, and whether you understand that these two decisions are independent.</p>
+        <p>The domain mapping is split. Storage class selection and lifecycle design land squarely in Domain 4, cost optimization, because the difference between leaving 400 TB in S3 Standard and transitioning it correctly is the single largest line-item saving available in most accounts. Replication design lands in Domain 2, resilient architectures, because CRR is one of the standard answers to a cross-region DR requirement, and in Domain 1 when the requirement is data residency or cross-account access. Lifecycle rules also touch Domain 3, since a migration that lands data in S3 without a retention plan is an incomplete migration.</p>
+        <p>The reason this topic produces so many wrong answers is that the distractors are all technically valid S3 configurations. A question that asks for the lowest-cost option for rarely accessed data that must survive an AZ loss will offer One Zone-IA, which is cheaper but fails the durability clause, and Glacier Flexible Retrieval, which is more expensive than Deep Archive for the same retrieval tolerance. The correct answer is not the cheapest class in isolation; it is the cheapest class that still satisfies every stated constraint. Reading the constraints as a filter rather than as background is the skill being tested.</p>
+        <p>There is also a recurring pattern where the exam describes a workload that is already using S3 correctly and asks what is missing. The answer is usually a lifecycle rule, a replication rule, or a bucket policy — not a different storage class. Recognizing when the storage class is fine and the governance layer is absent is worth as much as knowing the class table.</p>
+      </section>
+
+      <section class="doc-section" id="mechanism">
+        <h2 class="section-heading">2. How S3 Actually Stores and Serves Objects</h2>
+        <p>S3 is a flat namespace of buckets, each of which holds an unbounded number of objects addressed by key. There is no hierarchy; the console's folder view is a rendering of key prefixes, and the delimiter character is a convention rather than a structural element. Every object is stored with its data, its metadata, and a version identifier. When versioning is enabled, a write to an existing key does not overwrite the previous object — it creates a new version and the old version remains retrievable by version ID. This is the property that makes S3 fundamentally different from the DynamoDB model we just finished: an object version is immutable, so there is no write-write conflict to resolve and no need for last-writer-wins semantics.</p>
+        <p>Durability comes from replication within a region. S3 Standard, Standard-IA, Intelligent-Tiering, and all Glacier classes store object data redundantly across a minimum of three Availability Zones. One Zone-IA is the deliberate exception: it stores data in a single AZ, which is why it is cheaper and why it is disqualified the moment a scenario mentions AZ failure tolerance. The durability figure AWS publishes for the multi-AZ classes is eleven nines of annual durability, which is a statement about the probability of losing an object over a year, not a guarantee about availability. Availability and durability are separate numbers and the exam will separate them.</p>
+        <p>Retrieval behavior is where the classes diverge most sharply. Standard, Intelligent-Tiering, Standard-IA, and One Zone-IA all serve data immediately on request. Glacier Instant Retrieval also serves immediately, which is what distinguishes it from the rest of the Glacier family. Glacier Flexible Retrieval offers three retrieval tiers — Expedited, Standard, and Bulk — with different latencies and different per-request costs. Glacier Deep Archive offers only Standard and Bulk, with the longest retrieval times in the family. The important mechanical detail is that a retrieval from an archival class is a two-step operation: you initiate a restore job, S3 copies the object into a temporary Standard-class copy with a lifespan you specify, and only then can you read it. The object itself never leaves its class.</p>
+        <p>Lifecycle rules are evaluated by S3 on a schedule, not on write. A transition rule that says "move to Standard-IA after 30 days" is applied by a background process that scans for eligible objects; it is not triggered by the object's age crossing a threshold in real time. This matters operationally because transitions are not instantaneous and because the transition itself is billed as a lifecycle transition request. Expiration rules delete objects, and with versioning enabled an expiration rule on the current version creates a delete marker rather than removing data — a separate noncurrent-version expiration rule is required to actually reclaim the space.</p>
+      </section>
+
+      <section class="doc-section" id="decision-boundary">
+        <h2 class="section-heading">3. The Core Decision Boundary: Access Pattern vs. Retrieval Tolerance</h2>
+        <p>Every storage class question reduces to two independent axes. The first is how often the object is read and how quickly the reader expects a response. The second is how long the business can tolerate waiting for a retrieval when the object is needed. A class is correct only if it satisfies both axes simultaneously, and the exam's distractors are almost always classes that satisfy one and violate the other. The most common trap is choosing a class that is cheap on the retrieval axis but wrong on the access axis — for example, putting frequently read data in Standard-IA because it "looks" infrequent, which incurs per-GB retrieval charges on every read.</p>
+        <p>The second-order consideration is the minimum storage duration charge. Every class below Standard imposes a minimum billable storage period, and deleting or transitioning an object before that period elapses still bills you for the remainder. This is the mechanism that makes aggressive lifecycle rules counterproductive: a rule that transitions objects to Glacier Deep Archive after 30 days and expires them at 60 days will bill 180 days of Deep Archive storage for objects that only existed for 60. The exam tests this indirectly by describing a workload with a short retention requirement and offering an archival class as a distractor.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Class</th><th>Access pattern</th><th>Retrieval latency</th><th>AZs</th><th>Min. storage duration</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>S3 Standard</td><td>Frequent, unpredictable</td><td>Immediate</td><td>&ge;3</td><td>None</td></tr>
+              <tr><td>S3 Intelligent-Tiering</td><td>Unknown or changing</td><td>Immediate</td><td>&ge;3</td><td>None</td></tr>
+              <tr><td>S3 Standard-IA</td><td>Infrequent, rapid when needed</td><td>Immediate</td><td>&ge;3</td><td>30 days</td></tr>
+              <tr><td>S3 One Zone-IA</td><td>Infrequent, reproducible</td><td>Immediate</td><td>1</td><td>30 days</td></tr>
+              <tr><td>S3 Glacier Instant Retrieval</td><td>Rare, millisecond access</td><td>Immediate</td><td>&ge;3</td><td>90 days</td></tr>
+              <tr><td>S3 Glacier Flexible Retrieval</td><td>Archive, minutes to hours</td><td>Minutes to hours</td><td>&ge;3</td><td>90 days</td></tr>
+              <tr><td>S3 Glacier Deep Archive</td><td>Archive, hours acceptable</td><td>Up to 12 hours</td><td>&ge;3</td><td>180 days</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The decision procedure that survives exam pressure is to read the scenario for three signals in order: is the data read more than roughly once a month, can the reader wait, and must the data survive an AZ loss. Frequent reads eliminate every IA and Glacier class. A reader that cannot wait eliminates Glacier Flexible and Deep Archive. An AZ-loss requirement eliminates One Zone-IA. Whatever remains is the answer, and if more than one class remains, the tiebreaker is cost, which almost always favors the colder class.</p>
+      </section>
+
+      <section class="doc-section" id="config-tradeoffs">
+        <h2 class="section-heading">4. Lifecycle Configuration and Its Tradeoffs</h2>
+        <p>A lifecycle configuration is a set of rules attached to a bucket. Each rule has a scope — either the whole bucket or a filter on prefix, object tags, or object size — and a set of actions. The actions are transition, expiration, and for versioned buckets, noncurrent-version transition and noncurrent-version expiration, plus abort-incomplete-multipart-upload. Rules can be applied to current versions, noncurrent versions, or both, and the scope filter is what lets you apply different policies to logs, backups, and user uploads within the same bucket.</p>
+        <p>The first real tradeoff is transition cost against storage cost. Every transition action generates a lifecycle transition request, and the per-request price is not uniform across target classes. Transitioning a very large number of small objects to an archival class can cost more in transition requests than it saves in storage, which is why the exam sometimes describes a bucket of millions of tiny objects and expects you to recognize that lifecycle tiering is not automatically the right answer. The second tradeoff is the minimum storage duration charge described earlier: a transition into a class with a 90-day minimum followed by an expiration at 60 days is strictly worse than never transitioning at all.</p>
+        <p>The third tradeoff is retrieval cost, which is the one most often overlooked. Standard-IA, One Zone-IA, Glacier Instant Retrieval, and both Glacier Flexible and Deep Archive all charge per GB retrieved. A workload that reads 10% of its Standard-IA data every month can end up paying more than it would have in Standard. This is the specific reason Intelligent-Tiering exists: it moves objects between a frequent-access tier and an infrequent-access tier automatically based on observed access, charging a small per-object monitoring fee instead of requiring you to predict the pattern. The tradeoff is that the monitoring fee is per object, so Intelligent-Tiering on a bucket of billions of tiny objects is expensive, while on a bucket of large, moderately numerous objects it is usually the correct default.</p>
+        <p>Replication configuration is a separate rule set with its own tradeoffs. A replication rule names a source prefix or tag filter, a destination bucket (which may be in another account or another region), an IAM role that S3 assumes to perform the copy, and optionally a storage class override, a replica modification sync setting, and a metrics or replication-time-control configuration. Replication is asynchronous and one-directional per rule; if you want bidirectional replication you configure two rules, and S3 will not detect or resolve conflicts between them. Replication requires versioning on both buckets, and it replicates only objects written after the rule is enabled unless you use S3 Batch Replication to backfill existing objects.</p>
+      </section>
+
+      <section class="doc-section" id="sizing-limits">
+        <h2 class="section-heading">5. Sizing, Limits and Quotas</h2>
+        <p>The numbers that matter for exam reasoning are the minimum storage durations, the retrieval latencies, and the request-rate characteristics. Minimum storage durations are 30 days for Standard-IA and One Zone-IA, 90 days for Glacier Instant Retrieval and Glacier Flexible Retrieval, and 180 days for Glacier Deep Archive. Retrieval latencies are immediate for everything through Glacier Instant Retrieval, minutes for Glacier Flexible Expedited, three to five hours for Glacier Flexible Standard, five to twelve hours for Glacier Flexible Bulk, and up to twelve hours for Deep Archive Standard with Bulk running longer. These are the figures the exam expects you to filter on, and they are published on the S3 storage classes documentation page.</p>
+        <p>Object size limits are also load-bearing. A single PUT can carry up to 5 GB; anything larger requires multipart upload, which supports objects up to 5 TB with parts between 5 MB and 5 GB and a maximum of 10,000 parts. The 5 MB minimum part size is the reason a naive multipart implementation with tiny parts fails, and the 10,000-part ceiling is the reason very large objects need parts sized in the hundreds of megabytes. Lifecycle rules can abort incomplete multipart uploads after a specified number of days, which is the standard hygiene control for buckets that receive large uploads — orphaned parts are billed as storage and are invisible in the console's object listing.</p>
+        <p>Request rate behavior differs by prefix. S3 partitions a bucket's key space and scales request throughput per partition, and AWS's published guidance is that a bucket supports a substantial request rate per prefix without pre-warming, with the practical implication that spreading keys across many prefixes avoids hot-partition throttling. This is the S3 analogue of the DynamoDB partition-key problem from Day 24, and the exam uses the same shape of scenario: a workload writing at high rate to a single sequential prefix and seeing 503 SlowDown responses. The fix is key-name randomization or prefix spreading, not a different storage class.</p>
+        <p>Replication has its own limits worth knowing. Replication is not retroactive by default, so a newly enabled rule does not copy pre-existing objects. Replication Time Control provides a service-level agreement of 99.99% of objects replicated within 15 minutes, and it is a separately billed feature. Replication metrics report pending operations, bytes pending replication, and replication latency, which are the three CloudWatch metrics you would alarm on. Cross-region replication does not replicate objects that are themselves replicas unless replica modification sync is enabled, which prevents replication loops.</p>
+      </section>
+
+      <section class="doc-section" id="failure-modes">
+        <h2 class="section-heading">6. Failure Modes and What They Look Like in Production</h2>
+        <p>The most common production failure is silent cost growth from a lifecycle rule that does not do what the author believed. The classic shape is a bucket with versioning enabled and an expiration rule on current versions only. The rule fires, creates delete markers, and the console shows the objects as gone — but every noncurrent version is still stored and still billed. The symptom is a storage bill that does not drop after a cleanup, and the first diagnostic move is to list object versions rather than objects, or to check the bucket's storage metrics broken down by storage class and version status. The fix is a noncurrent-version expiration rule with a retention period.</p>
+        <p>The second failure mode is replication that appears configured but is not running. Replication requires versioning on both source and destination, an IAM role with the correct permissions, and a rule whose filter actually matches the objects being written. When any of these is wrong, S3 does not fail the PUT — it accepts the write and simply does not replicate it, recording the failure in the replication metrics and optionally in S3 Event Notifications. The symptom is a DR drill that discovers the destination bucket is missing the last six months of data. The first diagnostic move is to check the ReplicationLatency and OperationsPending metrics on the rule, and to verify that the source objects were written after the rule was created.</p>
+        <p>The third failure mode is retrieval cost shock. A team archives a large dataset to Glacier Deep Archive, then a compliance audit requests a broad sample of it. Each restore is billed per GB retrieved plus per request, and a bulk restore of a large fraction of the archive can cost more than a year of Standard storage would have. The symptom is a single-day cost spike in Cost Explorer attributed to S3 requests. The first diagnostic move is to check whether the restore was initiated with the Bulk tier and whether the restored copy's lifespan was set longer than necessary — a restored copy left in Standard for 30 days is billed as Standard for 30 days.</p>
+        <p>The fourth is throttling on a hot prefix, described above, and the fifth is accidental public exposure through a bucket policy or ACL that was loosened for a one-off integration and never tightened. S3 Block Public Access at the account level is the control that prevents the fifth, and it is the reason the exam treats account-level block public access as a default-on governance control rather than an optional hardening step.</p>
+      </section>
+
+      <section class="doc-section" id="sre-angle">
+        <h2 class="section-heading">7. The Operational and SRE Angle</h2>
+        <p>S3 is a managed service with an availability SLA, so the operational work is not about keeping the storage layer up. It is about keeping the cost curve and the data lifecycle under control, and about being able to answer "where is this object and can I get it back" quickly during an incident. The metrics worth alarming on are the replication metrics on each rule, the bucket size and object count metrics broken down by storage class, and the request metrics for 4xx and 5xx error rates on buckets that front user-facing traffic. Replication latency is the one that maps most directly to an SLO: if the DR objective is a four-hour RPO, a replication latency alarm at a fraction of that budget is the control that keeps the objective honest.</p>
+        <p>The runbook shape for an S3 incident has three branches. The first is access failure: a client cannot read or write, and the diagnostic sequence is to check the bucket policy, the IAM identity's permissions, the account-level block public access setting, and whether the request is being made over a VPC endpoint that has the right endpoint policy. The second is replication lag or failure: check the rule's metrics, verify the destination bucket's versioning and permissions, and confirm the source objects postdate the rule. The third is cost anomaly: pull the Cost Explorer breakdown by usage type, which separates storage from requests from retrieval, and identify whether the spike is storage growth, request volume, or a restore operation.</p>
+        <p>The SLO implications are indirect but real. If S3 holds the origin for a CloudFront distribution, S3 availability is upstream of the user-facing availability SLO, and the mitigation is origin failover to a second bucket or region rather than an S3-side fix. If S3 holds the backup target for a database, the restore time from an archival class is part of the database's RTO, and a backup plan that writes to Glacier Deep Archive without accounting for a twelve-hour retrieval has quietly set the RTO to twelve hours. That mismatch between a stated RTO and an unexamined storage class is one of the most common real-world findings in a Well-Architected review, and it is exactly the kind of thing the exam encodes as a scenario.</p>
+        <p>Two operational controls are worth standardizing. First, an account-level S3 Block Public Access setting, with any exception documented and reviewed. Second, a lifecycle rule on every bucket that receives multipart uploads, aborting incomplete uploads after a fixed number of days. Both are cheap, both prevent a class of incident that is otherwise discovered by a bill or an audit, and both are the kind of default that a landing-zone baseline should enforce rather than leaving to individual teams.</p>
+      </section>
+
+      <section class="doc-section" id="gotchas">
+        <h2 class="section-heading">8. Edge Cases and Exam Gotchas</h2>
+        <p>The single most-tested gotcha is that One Zone-IA does not survive an AZ loss. It is cheaper than Standard-IA and the exam will offer it whenever a scenario mentions infrequent access, but any scenario that also mentions durability, AZ failure, or disaster recovery disqualifies it. Read the durability clause before the cost clause.</p>
+        <p>The second is that Glacier Instant Retrieval is not the same as the rest of the Glacier family. It serves data in milliseconds and is designed for data that is accessed rarely but must be available immediately when it is. A scenario that says "archived but must be readable without a restore job" is pointing at Glacier Instant Retrieval, not Glacier Flexible Retrieval.</p>
+        <p>The third is that lifecycle transitions are not retroactive in the sense people expect. A rule added today will transition objects that already meet the age threshold, but the transition happens on the next lifecycle evaluation, not immediately. More importantly, a transition rule cannot move an object to a class with a longer minimum storage duration than the object has already satisfied without incurring the difference — and a rule that transitions an object to a colder class and then expires it before the colder class's minimum elapses is billed for the full minimum.</p>
+        <p>The fourth is that replication does not copy existing objects. Enabling CRR on a bucket with ten years of data replicates nothing until new writes occur, unless you run S3 Batch Replication. Scenarios that describe a DR requirement for existing data and a newly configured replication rule are testing this.</p>
+        <p>The fifth is that S3 Intelligent-Tiering has no retrieval fees and no minimum storage duration, which makes it the safe default when the access pattern is genuinely unknown. The exam sometimes offers it as a distractor against a class that is cheaper for a known pattern; it is the right answer only when the pattern is unknown or changing.</p>
+        <p>The sixth is that deleting an object in a versioned bucket does not delete data. It creates a delete marker. Reclaiming space requires a noncurrent-version expiration rule or explicit version deletion. The seventh is that a bucket policy granting cross-account access is not sufficient on its own — the consuming account's IAM identity also needs an allow, and if the bucket is accessed through a VPC endpoint, the endpoint policy must permit it too. The eighth is that S3 Object Lock requires versioning and is enabled at bucket creation; it cannot be retrofitted onto an existing bucket, which is why compliance scenarios that describe immutable retention on an existing bucket are usually pointing at a new bucket plus a migration.</p>
+      </section>
+
+      <section class="doc-section" id="vs-comparison">
+        <h2 class="section-heading">9. S3 vs. the Services It Gets Confused With</h2>
+        <p>S3 is frequently offered alongside EFS, FSx, and Storage Gateway in scenarios about file storage, and the distinguishing question is whether the consumer needs a POSIX file system or an HTTP object API. S3 has no file system semantics: no partial writes, no file locking, no rename, no append. If the workload is a legacy application that expects a mounted file system, S3 is the wrong answer regardless of cost, and the correct answer is EFS for Linux-native shared file access or FSx for a specific protocol such as SMB or Lustre. S3 is correct when the consumer is an application or service that speaks the S3 API, or when the data is a landing zone for analytics.</p>
+        <p>Against EBS, the distinction is block versus object. EBS volumes attach to a single EC2 instance in a single AZ and behave like a disk. S3 is regional, accessed over the network, and shared by any number of clients. A scenario describing a database's data directory is EBS; a scenario describing backups of that database is S3.</p>
+        <p>Against DynamoDB, the distinction is the one we drew in the recap: S3 stores whole immutable objects addressed by key with no query capability beyond prefix listing, while DynamoDB stores small mutable items with indexed queries and conditional writes. A scenario that needs to query by an attribute other than the key is not an S3 scenario.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Requirement in the scenario</th><th>Pick</th><th>Why not the alternative</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Mounted shared file system for Linux apps</td><td>Amazon EFS</td><td>S3 has no POSIX semantics or mount point</td></tr>
+              <tr><td>SMB share for Windows workloads</td><td>Amazon FSx for Windows File Server</td><td>S3 cannot serve SMB</td></tr>
+              <tr><td>Block device for a single EC2 instance</td><td>Amazon EBS</td><td>S3 is not attachable block storage</td></tr>
+              <tr><td>Query by non-key attribute</td><td>Amazon DynamoDB</td><td>S3 supports only prefix listing, not indexed queries</td></tr>
+              <tr><td>On-prem app that needs an NFS mount backed by S3</td><td>S3 File Gateway</td><td>Direct S3 access requires an S3-aware client</td></tr>
+              <tr><td>Lowest-cost archive with 12-hour retrieval tolerance</td><td>S3 Glacier Deep Archive</td><td>Other classes cost more for the same tolerance</td></tr>
+              <tr><td>Unknown or shifting access pattern</td><td>S3 Intelligent-Tiering</td><td>Fixed classes require predicting the pattern</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The rule that resolves most of these quickly: if the consumer can be given an S3 SDK or an HTTPS endpoint, S3 is in play; if the consumer needs a mount point, a block device, or a query language, it is not. The exam rarely asks you to choose S3 over EFS in the abstract — it asks you to notice that the workload's access method rules one of them out, and that detail is usually buried in a single clause of the scenario.</p>
+      </section>
+
+      <section class="doc-section" id="lab">
+        <h2 class="section-heading">Hands-On Lab: A Tiered Log Retention Policy</h2>
+        <div class="card card-green">
+          <p>The goal is to build a lifecycle configuration that moves application logs through three storage classes and expires them, then verify that the policy does what you think it does. Work in a scratch bucket; nothing here is destructive to production data, but the verification steps are the point of the exercise.</p>
+          <p><strong>1. Create the bucket with versioning enabled.</strong> Enable versioning at creation time. Versioning is required for the noncurrent-version rules in step 4 and is the setting that makes the difference between "the object is gone" and "the object is still billed" visible.</p>
+          <p><strong>2. Establish a prefix convention.</strong> Write a handful of test objects under a prefix such as <code>logs/app-a/</code> and a second set under <code>logs/app-b/</code>. The two prefixes let you verify that a scoped rule applies only where you intended.</p>
+          <p><strong>3. Add the transition rule.</strong> Create a lifecycle rule scoped to the <code>logs/</code> prefix with three transition actions: to Standard-IA at 30 days, to Glacier Flexible Retrieval at 90 days, and to Glacier Deep Archive at 180 days. Note the minimum storage durations as you go — Standard-IA's 30-day minimum is satisfied by the 60-day gap before the next transition, and Glacier Flexible's 90-day minimum is satisfied by the 90-day gap before Deep Archive.</p>
+          <p><strong>4. Add the expiration rules.</strong> Add a current-version expiration at 400 days, and a noncurrent-version expiration at 30 days. The second rule is the one that actually reclaims space in a versioned bucket; without it, deleted objects accumulate as noncurrent versions indefinitely.</p>
+          <p><strong>5. Add the multipart cleanup rule.</strong> Add an abort-incomplete-multipart-upload action at 7 days. This is the hygiene control that prevents orphaned parts from being billed invisibly.</p>
+          <p><strong>6. Verify the rule scope.</strong> Confirm in the console that the rule's filter shows the <code>logs/</code> prefix and that objects outside it are unaffected. Then check the rule's status and any reported errors — a rule with an invalid transition (for example, Standard-IA to Glacier Instant Retrieval, which is not a permitted path) will be rejected at save time, but a rule with a valid but nonsensical path will save silently.</p>
+          <p><strong>7. Simulate the age progression.</strong> You cannot wait 400 days, so verify the logic by reasoning through the timeline against the minimum-duration table: day 0 Standard, day 30 Standard-IA, day 90 Glacier Flexible, day 180 Deep Archive, day 400 expired. Confirm that no transition happens before the source class's minimum duration has elapsed, and that the Deep Archive minimum of 180 days is satisfied by the 220-day gap before expiration.</p>
+          <p><strong>8. Add a replication rule and observe the backfill gap.</strong> Create a destination bucket in a second region, enable versioning on it, and add a replication rule for the <code>logs/</code> prefix. Then write a new object and confirm it appears in the destination. Finally, check whether the objects you wrote in step 2 are present in the destination — they will not be, because replication is not retroactive. This is the single most useful thing to see firsthand.</p>
+          <p><strong>9. Instrument the rule.</strong> Enable replication metrics and, if the scenario calls for a tight RPO, enable Replication Time Control. Then look at the three metrics the rule publishes — operations pending replication, bytes pending replication, and replication latency — and decide which one you would alarm on for a four-hour RPO.</p>
+          <p><strong>10. Write the cost note.</strong> For each transition in the policy, note whether the transition request cost is likely to be material given the object count and average object size. For a bucket of millions of small objects, the transition request cost can dominate; for a bucket of a few thousand large objects, it is negligible. This is the judgment the exam is testing when it describes a bucket of tiny objects and offers archival tiering as an answer.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="quiz">
+        <h2 class="section-heading">Scenario Question Drills</h2>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q1.</strong> A compliance team requires that audit records be retained for seven years, are almost never read, and must be retrievable within 12 hours if a regulator requests them. The records must survive the loss of an entire Availability Zone. Which storage class is the lowest-cost fit?</p>
+          <div class="scenario-options" id="opts-d26q1">
             <div class="scenario-option">A. S3 One Zone-IA</div>
             <div class="scenario-option">B. S3 Glacier Deep Archive</div>
             <div class="scenario-option">C. S3 Glacier Flexible Retrieval (Bulk)</div>
             <div class="scenario-option">D. S3 Standard-IA</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d26q1', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d26q1"><strong>Correct answer: B.</strong> Glacier Deep Archive is the lowest-cost class, is replicated across at least three AZs so it survives an AZ loss, and its retrieval time of up to 12 hours matches the stated tolerance. One Zone-IA is cheaper but fails the AZ requirement; Glacier Flexible Retrieval costs more for the same tolerance.</div>
         </div>
-        <button class="scenario-reveal-btn" onclick="revealAnswer('d26q0', 1)">Reveal Answer</button>
-        <div class="scenario-explanation" id="exp-d26q0"><strong>Correct answer: B.</strong> Glacier Deep Archive is the lowest-cost class, replicated across 3+ AZs (so it survives an AZ loss, unlike One Zone-IA), with retrieval times up to 12 hours matching the requirement.</div>
-      </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q2.</strong> A team enables versioning on a bucket holding 200 TB of logs, adds a lifecycle rule that expires current versions after 90 days, and finds that the storage bill has not dropped after four months. What is the most likely cause?</p>
+          <div class="scenario-options" id="opts-d26q2">
+            <div class="scenario-option">A. The lifecycle rule is misconfigured and is not running</div>
+            <div class="scenario-option">B. Expiring current versions creates delete markers; noncurrent versions remain stored and billed until a noncurrent-version expiration rule is added</div>
+            <div class="scenario-option">C. S3 does not support expiration on versioned buckets</div>
+            <div class="scenario-option">D. The objects were transitioned to Glacier and are still billed at the Glacier rate</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d26q2', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d26q2"><strong>Correct answer: B.</strong> In a versioned bucket, expiring the current version writes a delete marker rather than removing data. Every prior version is still stored and billed until a separate noncurrent-version expiration rule reclaims it.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q3.</strong> An application writes 50,000 objects per second to a single sequential key prefix and begins receiving 503 SlowDown responses. The bucket has ample capacity and the objects are small. What is the correct remediation?</p>
+          <div class="scenario-options" id="opts-d26q3">
+            <div class="scenario-option">A. Move the bucket to S3 Standard-IA to reduce request cost</div>
+            <div class="scenario-option">B. Enable S3 Transfer Acceleration</div>
+            <div class="scenario-option">C. Spread writes across multiple key prefixes or randomize the key name to distribute load across partitions</div>
+            <div class="scenario-option">D. Enable versioning to increase throughput</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d26q3', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d26q3"><strong>Correct answer: C.</strong> S3 scales request throughput per key-space partition. A single hot prefix concentrates requests on one partition and throttles regardless of overall bucket capacity; prefix spreading or key randomization distributes the load.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q4.</strong> A company configures cross-region replication from a production bucket to a DR bucket in another region. Six months later a DR drill finds the destination bucket is missing data written before the rule was created. What explains this?</p>
+          <div class="scenario-options" id="opts-d26q4">
+            <div class="scenario-option">A. Replication failed silently and must be restarted</div>
+            <div class="scenario-option">B. Replication is not retroactive; existing objects must be copied with S3 Batch Replication</div>
+            <div class="scenario-option">C. The destination bucket's versioning was disabled</div>
+            <div class="scenario-option">D. Cross-region replication only supports objects under 5 GB</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d26q4', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d26q4"><strong>Correct answer: B.</strong> A replication rule applies only to objects written after it is enabled. Backfilling pre-existing objects requires S3 Batch Replication, which is a separate operation.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q5.</strong> A media company stores 40 TB of video masters that are accessed a few times a year but must be served to editors within milliseconds when requested, with no restore job. Which class fits?</p>
+          <div class="scenario-options" id="opts-d26q5">
+            <div class="scenario-option">A. S3 Glacier Flexible Retrieval</div>
+            <div class="scenario-option">B. S3 Glacier Deep Archive</div>
+            <div class="scenario-option">C. S3 Glacier Instant Retrieval</div>
+            <div class="scenario-option">D. S3 One Zone-IA</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d26q5', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d26q5"><strong>Correct answer: C.</strong> Glacier Instant Retrieval serves data in milliseconds with no restore job, which is exactly the "rarely accessed but immediately available" pattern. Glacier Flexible and Deep Archive both require a restore operation.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q6.</strong> A team is unsure how often a dataset will be accessed over the next two years and wants to avoid both retrieval fees and minimum storage duration charges while still paying less than Standard for cold data. What should they use?</p>
+          <div class="scenario-options" id="opts-d26q6">
+            <div class="scenario-option">A. S3 Standard-IA with a lifecycle rule</div>
+            <div class="scenario-option">B. S3 Intelligent-Tiering</div>
+            <div class="scenario-option">C. S3 Glacier Instant Retrieval</div>
+            <div class="scenario-option">D. S3 One Zone-IA</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d26q6', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d26q6"><strong>Correct answer: B.</strong> Intelligent-Tiering has no retrieval fees and no minimum storage duration, and it moves objects between access tiers automatically based on observed access — the correct default when the pattern is unknown or changing.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q7.</strong> A lifecycle rule transitions objects to Glacier Deep Archive at 30 days and expires them at 60 days. What is the cost consequence?</p>
+          <div class="scenario-options" id="opts-d26q7">
+            <div class="scenario-option">A. No consequence; the objects are deleted at 60 days and billing stops</div>
+            <div class="scenario-option">B. Deep Archive has a 180-day minimum storage duration, so the objects are billed for 180 days despite being deleted at 60</div>
+            <div class="scenario-option">C. The transition is rejected because 30 days is below the minimum</div>
+            <div class="scenario-option">D. The objects are billed at the Standard rate for the remainder</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d26q7', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d26q7"><strong>Correct answer: B.</strong> Every class below Standard imposes a minimum billable storage duration. Deleting before it elapses still bills the remainder, so this policy costs more than never transitioning at all.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q8.</strong> A bucket receives large uploads and the team notices storage charges for data that does not appear in the object listing. What is the most likely cause?</p>
+          <div class="scenario-options" id="opts-d26q8">
+            <div class="scenario-option">A. Noncurrent object versions</div>
+            <div class="scenario-option">B. Incomplete multipart uploads whose parts are billed but not listed as objects</div>
+            <div class="scenario-option">C. Objects in Glacier that are not shown in the default view</div>
+            <div class="scenario-option">D. Replication copies stored in the source bucket</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d26q8', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d26q8"><strong>Correct answer: B.</strong> Parts from aborted or never-completed multipart uploads are billed as storage but do not appear in the object listing. A lifecycle rule aborting incomplete multipart uploads after a fixed number of days is the standard control.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q9.</strong> A workload reads 15% of its Standard-IA data every month. The team is surprised that the storage bill is higher than it was in S3 Standard. Why?</p>
+          <div class="scenario-options" id="opts-d26q9">
+            <div class="scenario-option">A. Standard-IA has a higher per-GB storage price than Standard</div>
+            <div class="scenario-option">B. Standard-IA charges per GB retrieved, and a 15% monthly read rate can exceed the storage savings</div>
+            <div class="scenario-option">C. Standard-IA requires a minimum 90-day storage duration</div>
+            <div class="scenario-option">D. The objects were transitioned back to Standard automatically</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d26q9', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d26q9"><strong>Correct answer: B.</strong> Standard-IA is cheaper per GB stored but adds a per-GB retrieval charge. A read rate high enough to trigger that charge repeatedly can erase the storage saving, which is why access frequency must be checked before choosing an IA class.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q10.</strong> A DR requirement states a four-hour RPO for data in S3. Which control most directly keeps that objective honest?</p>
+          <div class="scenario-options" id="opts-d26q10">
+            <div class="scenario-option">A. A lifecycle rule transitioning to Glacier after 30 days</div>
+            <div class="scenario-option">B. Replication metrics and an alarm on replication latency, optionally with Replication Time Control</div>
+            <div class="scenario-option">C. Enabling versioning on the source bucket</div>
+            <div class="scenario-option">D. Enabling S3 Transfer Acceleration</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d26q10', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d26q10"><strong>Correct answer: B.</strong> Replication latency is the metric that maps to RPO. Alarming on it, and optionally enabling Replication Time Control for a 15-minute SLA, is what turns a stated RPO into a monitored one.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q11.</strong> A legacy application requires a mounted file system with POSIX semantics and file locking. The team proposes S3 to reduce cost. What is the correct response?</p>
+          <div class="scenario-options" id="opts-d26q11">
+            <div class="scenario-option">A. S3 is correct; use S3 File Gateway to present it as a mount</div>
+            <div class="scenario-option">B. S3 cannot provide POSIX semantics or file locking; use Amazon EFS for Linux-native shared file access</div>
+            <div class="scenario-option">C. S3 is correct if versioning is enabled</div>
+            <div class="scenario-option">D. S3 is correct if the objects are under 5 GB</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d26q11', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d26q11"><strong>Correct answer: B.</strong> S3 is an object store with no mount point, no partial writes, and no file locking. A workload that needs POSIX semantics belongs on EFS (or FSx for a specific protocol), regardless of cost.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q12.</strong> A compliance requirement mandates that objects be immutable for seven years and cannot be deleted even by an administrator. The bucket already exists and holds data. What must the team do?</p>
+          <div class="scenario-options" id="opts-d26q12">
+            <div class="scenario-option">A. Enable S3 Object Lock on the existing bucket</div>
+            <div class="scenario-option">B. Create a new bucket with Object Lock enabled at creation and migrate the data into it</div>
+            <div class="scenario-option">C. Add a bucket policy denying DeleteObject</div>
+            <div class="scenario-option">D. Enable versioning and MFA delete</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d26q12', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d26q12"><strong>Correct answer: B.</strong> S3 Object Lock must be enabled when the bucket is created and cannot be retrofitted. A bucket policy denying deletes is a weaker control that an administrator can remove.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q13.</strong> A bucket holds 20 million objects averaging 40 KB each. The team wants to archive them to reduce cost. What should they evaluate before applying a lifecycle transition?</p>
+          <div class="scenario-options" id="opts-d26q13">
+            <div class="scenario-option">A. Whether the objects are encrypted</div>
+            <div class="scenario-option">B. Whether the per-request transition cost across 20 million small objects exceeds the storage saving</div>
+            <div class="scenario-option">C. Whether the bucket has versioning enabled</div>
+            <div class="scenario-option">D. Whether the objects exceed the 5 GB PUT limit</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d26q13', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d26q13"><strong>Correct answer: B.</strong> Lifecycle transitions are billed per request. With tens of millions of small objects, the transition request cost can dominate the storage saving, making archival tiering counterproductive.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q14.</strong> An application needs to store a single 800 GB backup file. What is required?</p>
+          <div class="scenario-options" id="opts-d26q14">
+            <div class="scenario-option">A. A single PUT request, since S3 supports objects up to 5 TB</div>
+            <div class="scenario-option">B. Multipart upload, because a single PUT is limited to 5 GB</div>
+            <div class="scenario-option">C. S3 Transfer Acceleration</div>
+            <div class="scenario-option">D. A Glacier storage class, since Standard caps object size</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d26q14', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d26q14"><strong>Correct answer: B.</strong> A single PUT can carry at most 5 GB. Larger objects require multipart upload, which supports up to 5 TB with parts between 5 MB and 5 GB and a maximum of 10,000 parts.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q15.</strong> A team wants bidirectional replication between two buckets in different regions so either can serve as the DR target. What must they configure, and what does S3 not do for them?</p>
+          <div class="scenario-options" id="opts-d26q15">
+            <div class="scenario-option">A. One rule with a bidirectional flag</div>
+            <div class="scenario-option">B. Two replication rules, one in each direction, with replica modification sync enabled; S3 does not detect or resolve conflicts between them</div>
+            <div class="scenario-option">C. A single rule plus S3 Batch Replication</div>
+            <div class="scenario-option">D. Cross-region replication is inherently bidirectional</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d26q15', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d26q15"><strong>Correct answer: B.</strong> Replication is one-directional per rule, so bidirectional replication requires two rules. Replica modification sync prevents replication loops, but S3 provides no conflict detection or resolution between the two directions.</div>
+        </div>
       </section>
+
+      <section class="doc-section" id="preview">
+        <h2 class="section-heading">Peek Into Tomorrow</h2>
+        <div class="card card-purple">
+          <p>Everything covered here assumed the data is durable and cold. The interesting question S3 leaves open is what happens when the data is hot, small, and read constantly — and the answer is not another storage class, because no storage class can serve a read in microseconds. That requires a cache, and a cache introduces a problem S3 never had: the cached copy can be wrong. S3 objects are immutable, so a read either returns the object or it does not. A cache holds a copy that was correct at some point in the past, and the entire design question becomes how long that copy is allowed to be stale and what happens when the node holding it fails.</p>
+          <p>Tomorrow's topic is ElastiCache, and the fork it presents is between Redis and Memcached. The distinction that matters is not performance — both are fast — but what happens to the cached data when a node dies. Memcached is multi-threaded and non-persistent with no replication, which means a node failure loses that node's keys and the application must tolerate a cold cache. Redis supports replication, persistence, and cluster mode sharding, which means a node failure can be survived without losing the dataset. The open question worth carrying into tomorrow is which of those two failure behaviors your workload can actually tolerate, because that answer determines the engine before any performance consideration enters the picture.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="sources">
+        <h2 class="section-heading">Sources</h2>
+        <div class="card">
+          <ul class="source-list">
+            <li><a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/storage-class-intro.html" target="_blank" rel="noopener">Amazon S3 User Guide — Understanding and managing Amazon S3 storage classes</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/lifecycle-transition-general-considerations.html" target="_blank" rel="noopener">Amazon S3 User Guide — Lifecycle transition general considerations and minimum storage durations</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-lifecycle-mgmt.html" target="_blank" rel="noopener">Amazon S3 User Guide — Managing the lifecycle of objects</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/replication.html" target="_blank" rel="noopener">Amazon S3 User Guide — Replicating objects within and across Regions</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/replication-time-control.html" target="_blank" rel="noopener">Amazon S3 User Guide — Meeting compliance requirements with S3 Replication Time Control</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/optimizing-performance.html" target="_blank" rel="noopener">Amazon S3 User Guide — Best practices design patterns: optimizing Amazon S3 performance</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-lock.html" target="_blank" rel="noopener">Amazon S3 User Guide — Locking objects with S3 Object Lock</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/mpuoverview.html" target="_blank" rel="noopener">Amazon S3 User Guide — Uploading and copying objects using multipart upload</a></li>
+            <li><a href="https://docs.aws.amazon.com/wellarchitected/latest/cost-optimization-pillar/welcome.html" target="_blank" rel="noopener">AWS Well-Architected Framework — Cost Optimization Pillar</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-control-block-public-access.html" target="_blank" rel="noopener">Amazon S3 User Guide — Blocking public access to your Amazon S3 storage</a></li>
+          </ul>
+        </div>
+      </section>
+
       <div class="day-nav">
         <a href="day-025.html">&larr; Day 25: DynamoDB Global Tables &amp; DAX Caching</a>
         <button class="btn btn-green" onclick="markComplete(26, 'day-027.html')">Mark Day 26 Complete &rarr;</button>

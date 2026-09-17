@@ -104,36 +104,360 @@
         <span class="pill pill-green">Phase 1: Multi-Account Governance &amp; Networking</span>
       </div>
       <h1 class="hero-title">Transit Gateway Peering &amp; Multi-Region</h1>
-      <div class="reading-meta">&#128337; ~3 min read &middot; 2 services covered</div>
+      <div class="reading-meta">&#128337; ~58 min read &middot; 2 services covered</div>
       <div class="services-grid">
         <span class="service-tag">TGW Peering</span>
         <span class="service-tag">Inter-Region Routing</span>
       </div>
       <div id="tracker"></div>
-      <section class="doc-section">
-        <h2 class="section-heading">Today's Concept</h2>
+
+      <section class="doc-section" id="recap">
+        <h2 class="section-heading">Recap: Where We Left Off</h2>
         <div class="card card-accent">
-          <p>TGW peering connects Transit Gateways across regions over the AWS backbone (not the public internet), but peering attachments do not support route propagation — routes must be added statically. MTU across inter-region TGW peering is capped at 1500 bytes.</p>
-        </div>
-        <h3 class="sub-heading">Hands-on Lab / Practical Action (45 min)</h3>
-        <div class="card">
-          <p>Route traffic between us-east-1 and us-west-2 VPCs through peered Transit Gateways with manually configured static routes.</p>
+          <p>Day 8 established Transit Gateway as the regional hub that replaces an unmanageable full mesh of VPC peering, and the mechanism that makes it work is the split between attachment association and route propagation: an attachment associates with exactly one TGW route table, and it propagates its routes into whichever other route tables you allow. That single design decision is what lets you isolate a shared-services VPC from production VPCs while still giving both of them a path to the same hub. The hub-and-spoke model is only as good as the route tables you build around it.</p>
+          <p>Today we stay inside the same service family but flip the failure mode. Everything that made intra-region TGW pleasant — automatic propagation, a single route table doing the work, predictable MTU — stops being true the moment you peer two Transit Gateways across regions. Peering attachments do not propagate routes at all, so the same hub-and-spoke topology that configured itself yesterday now requires you to hand-build every path. The service is the same; the operational contract is the opposite.</p>
         </div>
       </section>
-      <section class="doc-section">
-        <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
-        
-      <div class="scenario-card">
-        <p class="scenario-question"><strong>Q1.</strong> After creating a TGW peering attachment between two regions, spoke VPCs still cannot reach each other. What is most likely missing?</p>
-        <div class="scenario-options" id="opts-d9q0">
+
+      <section class="doc-section" id="why-on-exam">
+        <h2 class="section-heading">1. Why This Is on the Exam</h2>
+        <p>SAP-C02 Domain 1 (Design Solutions for Organizational Complexity) and Domain 2 (Design for New Solutions) both lean heavily on multi-region network design, and TGW peering is the connective tissue between them. The exam keeps returning to it because it is the point where a design that looked clean in a single region becomes genuinely hard: you have two independent routing domains, each with its own route tables, its own attachment lifecycle, and no automatic mechanism to keep them in sync. A candidate who understands only intra-region TGW will confidently draw a topology that cannot pass traffic, and the exam is written to catch exactly that.</p>
+        <p>The second reason is that TGW peering sits at a decision boundary the exam tests constantly: when do you peer Transit Gateways, when do you use a single global Transit Gateway construct, and when do you abandon network-level connectivity entirely in favor of something service-level. Peering is the answer when you need broad, bidirectional, network-layer reachability between two regions and you are willing to own the routing. It is the wrong answer when you only need one service reachable, or when the two sides have overlapping CIDR ranges, or when the traffic volume does not justify the attachment cost. Scenario questions are usually built by taking a requirement that sounds like "connect these regions" and adding a constraint that eliminates peering.</p>
+        <p>There is also a cost dimension the exam likes to probe. TGW peering is billed on data transfer across the peering attachment, and inter-region data transfer is priced differently from intra-region. A design that routes chatty traffic between regions through a peered TGW when the workload could have been placed in one region is a cost-optimization failure, and Domain 4 questions are often just Domain 1 questions with a bill attached. Knowing the mechanism is what lets you argue about the bill.</p>
+        <p>Finally, peering is where the MTU constraint bites. Inter-region TGW peering caps the maximum transmission unit at 1500 bytes, which is lower than what you get inside a single region. That number matters for any workload that assumes jumbo frames, and it is the kind of specific, traceable limit the exam uses to separate candidates who have actually built this from candidates who have only read the feature page.</p>
+      </section>
+
+      <section class="doc-section" id="mechanism">
+        <h2 class="section-heading">2. How TGW Peering Actually Works</h2>
+        <p>A TGW peering attachment is a connection between two Transit Gateways, and it is created from one side with a request that the other side accepts. The two Transit Gateways can be in different AWS Regions, or in the same Region but different accounts, and the attachment itself is a first-class object that appears in both Transit Gateways' attachment lists once accepted. Traffic between them travels over the AWS global backbone rather than the public internet, which is the property that makes peering attractive for regulated workloads: the packets never leave AWS-controlled network infrastructure, and they are encrypted in transit by the backbone itself.</p>
+        <p>The critical mechanical difference from a VPC attachment is what happens to routes. When you attach a VPC to a Transit Gateway, the attachment can propagate its CIDR into the TGW route table it is associated with, and that propagation is automatic and continuous — if the VPC's subnets change, the routes follow. A peering attachment does not do this. There is no route propagation for peering, so the CIDR ranges on the far side of the peer are invisible to your route tables until you add them as static routes. This is not a configuration option you can turn on; it is a property of the attachment type.</p>
+        <p>That means a working cross-region topology requires static routes in both directions and at both layers. On the TGW side, each Transit Gateway's route table needs a static route pointing the remote CIDR at the peering attachment. On the VPC side, each spoke subnet's route table needs a route pointing the remote CIDR at the local Transit Gateway. Miss any one of those four route entries and traffic dies at that hop, usually silently, because a missing route produces a black hole rather than an error.</p>
+        <p>The packet path is worth walking once, because it makes the failure modes obvious. A packet leaves an instance in us-east-1, hits its subnet route table, and is forwarded to the local TGW because the destination CIDR matches a route pointing at the TGW. The TGW consults the route table associated with the ingress attachment, finds the remote CIDR pointing at the peering attachment, and forwards the packet across the backbone to the peer TGW in us-west-2. That peer TGW consults the route table associated with the peering attachment, finds the destination CIDR pointing at the target VPC attachment, and forwards it. The target VPC's subnet route table then delivers it to the instance. Four lookups, four route entries, and any one of them missing produces a drop.</p>
+        <p>Security groups and network ACLs still apply at the endpoints, and they are evaluated independently of the TGW routing. This is a common source of confusion during troubleshooting: a perfectly routed packet can still be dropped by a security group on the destination instance, and the symptom looks identical to a routing failure from the outside. The diagnostic discipline is to check routing first, then security, then the application, in that order.</p>
+      </section>
+
+      <section class="doc-section" id="decision-boundary">
+        <h2 class="section-heading">3. The Core Decision Boundary: Peering vs. Alternatives</h2>
+        <p>The fork every scenario question hinges on is whether you need network-level reachability between two regions at all, or whether a narrower mechanism satisfies the requirement. TGW peering gives you broad, bidirectional, any-to-any reachability between the two routing domains, and it costs you the operational burden of maintaining static routes on both sides. If the requirement is narrower — one service, one direction, one consumer — peering is overkill and the exam will usually offer a service-level alternative as the correct answer.</p>
+        <p>The second fork is whether the two sides can even be connected at the network layer. Peering, like VPC peering, requires non-overlapping CIDR ranges. If both regions were built from the same 10.0.0.0/16 template, no amount of TGW configuration will make them routable to each other, and the correct answer becomes a service-level mechanism that does not merge routing domains. Recognizing an overlapping-CIDR constraint buried in a scenario is one of the fastest ways to eliminate two or three answer choices.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Requirement</th><th>TGW Peering</th><th>VPC Peering</th><th>PrivateLink</th><th>Single-region TGW only</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Cross-region reachability</td><td>Yes, over AWS backbone</td><td>Yes, but per-VPC mesh</td><td>Yes, service-level only</td><td>No</td></tr>
+              <tr><td>Route propagation</td><td>Not supported — static routes required</td><td>Not supported — static routes required</td><td>Not applicable</td><td>Supported</td></tr>
+              <tr><td>Overlapping CIDRs tolerated</td><td>No</td><td>No</td><td>Yes</td><td>No</td></tr>
+              <tr><td>Scales to many VPCs</td><td>Yes, one attachment per region pair</td><td>No, N-squared connections</td><td>Yes, one endpoint per consumer</td><td>Yes, within region</td></tr>
+              <tr><td>Traffic direction</td><td>Bidirectional</td><td>Bidirectional</td><td>Consumer to provider</td><td>Bidirectional</td></tr>
+              <tr><td>Typical exam trigger</td><td>"Connect all VPCs in two regions"</td><td>"Connect exactly two VPCs"</td><td>"Expose one service, CIDRs overlap"</td><td>"All VPCs are in one region"</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The table's last row is the one to internalize. Exam scenarios rarely say "use TGW peering"; they describe a topology and a constraint, and the correct mechanism falls out of the constraint. Broad multi-VPC connectivity across two regions with no CIDR conflict points at peering. A single service consumed by many accounts points at PrivateLink. Two VPCs that need to talk points at VPC peering, which is cheaper and simpler than standing up two Transit Gateways. The exam is testing whether you can read the constraint, not whether you can name the service.</p>
+      </section>
+
+      <section class="doc-section" id="config-tradeoffs">
+        <h2 class="section-heading">4. Configuration Modes and Their Tradeoffs</h2>
+        <p>There is no "mode" switch on a peering attachment the way there is on a DMS task, but there are three distinct ways to structure a cross-region topology, and the tradeoff between them is real. The first is a direct TGW-to-TGW peering attachment between the two regional Transit Gateways. This is the simplest topology and the one most scenarios describe: one attachment, static routes on both sides, and traffic flows directly over the backbone. It is also the topology with the fewest moving parts to break, which matters when you are the one on call for it.</p>
+        <p>The second structure inserts a third Transit Gateway as a transit point, so region A peers with a hub region and the hub region peers with region B. This is sometimes chosen when a central networking account owns the hub and wants to mediate all inter-region traffic, or when the number of regions grows past the point where a full mesh of peering attachments becomes unmanageable. The cost is that every packet now traverses two peering attachments instead of one, which doubles the inter-region data transfer charges and adds a hop of latency. It also doubles the number of static routes you must maintain, because each peering attachment needs its own route entries on both sides.</p>
+        <p>The third structure is not peering at all but a single Transit Gateway shared across regions through AWS RAM, which works only when the "regions" in the scenario are actually accounts in the same Region. This is worth naming because scenarios sometimes blur the distinction between multi-account and multi-region, and the correct answer changes completely depending on which one is actually being asked. If the requirement is cross-account within one Region, RAM sharing is the answer and peering is unnecessary complexity.</p>
+        <p>The tradeoff that matters most in practice is the static-route maintenance burden. Every new CIDR added on either side of a peering attachment requires a manual route entry on the far side, and there is no mechanism that will tell you when you have forgotten one. Teams that operate cross-region peering at scale typically manage these routes as code, with the route entries generated from the same source of truth as the VPC CIDR allocations, precisely because the failure mode of a forgotten route is a silent black hole rather than a loud error.</p>
+      </section>
+
+      <section class="doc-section" id="sizing-limits">
+        <h2 class="section-heading">5. Sizing, Limits and Quotas</h2>
+        <p>The numbers that matter for TGW peering are the MTU cap, the attachment and route table quotas, and the bandwidth characteristics of the peering attachment itself. The MTU across inter-region TGW peering is capped at 1500 bytes, which is lower than the jumbo-frame MTU available within a single Region. Any workload that has been tuned for larger frames — storage replication, certain database protocols, or anything that assumes a specific MTU end to end — needs to be re-validated before you route it across a peering attachment. Path MTU discovery usually handles this gracefully, but applications that hard-code a frame size or that set the DF bit aggressively can fail in ways that look like random packet loss.</p>
+        <p>Transit Gateway route tables have a quota on the number of routes they can hold, and static routes count against it just like propagated routes do. In a large multi-region topology where each region has many VPC CIDRs, the static routes required on the peering attachment's route table can add up quickly, and it is worth checking the current quota against your projected CIDR count before you commit to a design. The quota is adjustable in some cases, but the adjustment is not instantaneous and it is not something you want to discover during a migration window.</p>
+        <p>Bandwidth across a peering attachment is not a fixed pipe you provision; it is bounded by the aggregate capacity of the Transit Gateways on either end and by the inter-region backbone path. Transit Gateway attachments have their own bandwidth characteristics, and a single peering attachment does not give you a dedicated amount of throughput. For high-volume cross-region replication, the practical guidance is to test the actual throughput your workload achieves rather than assuming a number, because the achievable rate depends on flow count, packet size, and the specific regions involved.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Characteristic</th><th>Value / behavior</th><th>Why it matters</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Inter-region peering MTU</td><td>1500 bytes</td><td>Lower than intra-region jumbo frames; re-validate MTU-sensitive workloads</td></tr>
+              <tr><td>Route propagation</td><td>Not supported on peering attachments</td><td>Every remote CIDR needs a manual static route</td></tr>
+              <tr><td>Route table entries</td><td>Subject to TGW route table quota</td><td>Static routes consume the same quota as propagated routes</td></tr>
+              <tr><td>Bandwidth</td><td>Bounded by TGW capacity, not a provisioned pipe</td><td>Test real throughput; do not assume a fixed rate</td></tr>
+              <tr><td>Data transfer billing</td><td>Charged per GB across the peering attachment</td><td>Chatty cross-region traffic is a cost-optimization finding</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>Quotas change over time and vary by Region, so the exam-safe position is to know the shape of the constraint — MTU is capped, routes are static, bandwidth is shared — rather than to memorize a specific number that may be stale. When a scenario gives you a specific number, use the number in the scenario rather than a remembered quota.</p>
+      </section>
+
+      <section class="doc-section" id="failure-modes">
+        <h2 class="section-heading">6. Failure Modes and What They Look Like in Production</h2>
+        <p>The signature failure of TGW peering is the silent black hole. A packet arrives at a Transit Gateway, the route table has no matching entry for the destination, and the packet is dropped with no ICMP unreachable and no log entry by default. From the application's perspective this looks like a timeout, which is indistinguishable from a security group drop, a dead instance, or an application hang. The first diagnostic move is therefore not to look at the application but to verify the route tables on both sides of the peering attachment, in both directions, and to confirm that the remote CIDR is present as a static route pointing at the peering attachment.</p>
+        <p>The second common failure is a one-way route. Because the two sides of a peering attachment are configured independently, it is entirely possible to have a working forward path and a broken return path. The symptom is a connection that establishes but never completes — a TCP handshake that gets a SYN through but no SYN-ACK back, or an application that hangs on the first response. This is the failure mode that most often gets misdiagnosed as an application bug, because the forward direction demonstrably works. The fix is always to check the return path's route tables with the same rigor as the forward path.</p>
+        <p>The third failure is MTU-related and presents as intermittent, hard-to-reproduce packet loss. Small requests succeed and large responses fail, or a file transfer stalls partway through. This is the classic signature of a path MTU problem: the handshake and small packets fit within 1500 bytes, but a larger packet that needs fragmentation is dropped because the DF bit is set and no ICMP "fragmentation needed" message is getting back to the sender. The diagnostic move is to test with progressively larger packet sizes and to check whether the application or its load balancer is setting the DF bit.</p>
+        <p>The fourth failure is a stale route after a CIDR change. Someone adds a new subnet to a VPC on one side, the VPC attachment propagates the new CIDR into the local TGW route table automatically, but nobody adds the corresponding static route on the far side of the peering attachment. The new subnet is reachable within its own region and unreachable from the peer, and the failure appears only for workloads that happen to land in the new subnet. This is the failure mode that argues most strongly for managing cross-region routes as code.</p>
+      </section>
+
+      <section class="doc-section" id="sre-angle">
+        <h2 class="section-heading">7. The Operational and SRE Angle</h2>
+        <p>Cross-region peering is a shared dependency, and shared dependencies deserve their own SLO. The metric that matters most is not raw throughput but the error rate on cross-region paths, and the practical way to measure it is with synthetic probes that exercise the actual path end to end rather than with infrastructure metrics that only tell you the attachment exists. A canary that makes a request from a workload in region A to a workload in region B on a fixed interval will catch a broken route within one interval, whereas a CloudWatch metric on the attachment will happily report healthy while every packet is being dropped.</p>
+        <p>For monitoring, the useful signals are the Transit Gateway's own metrics for bytes and packets on the peering attachment, which will drop to zero or near-zero when a route breaks, combined with application-level error rates on the cross-region call path. The combination is what lets you distinguish "the path is broken" from "the path is fine but the destination is unhealthy." Neither signal alone is sufficient, and the exam expects you to know that infrastructure metrics and application metrics answer different questions.</p>
+        <p>The runbook shape for a cross-region peering incident is short and should be written before you need it. First, confirm the peering attachment state is available on both sides. Second, dump the route tables associated with the peering attachment on both sides and diff them against the expected CIDR list. Third, verify the spoke subnet route tables point at the local Transit Gateway for the remote CIDR. Fourth, check security groups and NACLs at the endpoints. Fifth, test MTU with a large-packet probe. That sequence moves from the most likely cause to the least likely, and it is fast enough to run during an incident.</p>
+        <p>The SRE implication of the static-route requirement is that your change management process has to cover it. Adding a subnet to a VPC is normally a low-risk change that a team can make independently; in a peered topology it is a cross-team change with a failure mode that only manifests in the other region. The mitigation is to make the route entries a generated artifact of the CIDR allocation process, so that adding a subnet automatically produces the corresponding static route on the far side, and to alert on drift between the two.</p>
+      </section>
+
+      <section class="doc-section" id="gotchas">
+        <h2 class="section-heading">8. Edge Cases and Exam Gotchas</h2>
+        <p>The single most-tested gotcha is that peering attachments do not propagate routes. Any answer choice that says "enable route propagation on the peering attachment" is wrong, because the option does not exist. The correct answer always involves manually adding static routes on both sides, and the exam will phrase the question so that the propagation option sounds plausible.</p>
+        <p>The second gotcha is the MTU cap. Inter-region peering is capped at 1500 bytes, and a scenario that mentions a workload with specific MTU requirements or that describes intermittent large-packet failures is pointing at this limit. Do not confuse it with the intra-region MTU, which is higher.</p>
+        <p>The third gotcha is the directionality of the configuration. Because both sides are configured independently, a scenario can describe a topology where one side is correctly configured and the other is not, and the symptom will be a one-way failure. The exam expects you to check both directions rather than assuming symmetry.</p>
+        <p>The fourth gotcha is the distinction between multi-region and multi-account. If the scenario's "regions" are actually accounts in the same Region, the answer is RAM sharing, not peering. Read the scenario carefully for whether the constraint is geographic or organizational.</p>
+        <p>The fifth gotcha is cost. Peering attachments bill on data transfer, and a scenario that describes high-volume cross-region traffic between workloads that could have been co-located is a cost-optimization question in disguise. The correct answer may be to move the workload rather than to optimize the network.</p>
+        <p>The sixth gotcha is the interaction with overlapping CIDRs. Peering, like VPC peering, cannot connect overlapping ranges. If the scenario mentions that both regions were built from the same template, the answer is a service-level mechanism such as PrivateLink, not peering.</p>
+      </section>
+
+      <section class="doc-section" id="vs-comparison">
+        <h2 class="section-heading">9. This vs. the Services It Gets Confused With</h2>
+        <p>TGW peering is most often confused with VPC peering, and the distinction is about scale and topology rather than capability. VPC peering connects exactly two VPCs and does not transit; TGW peering connects two routing domains, each of which can contain many VPCs. If a scenario describes connecting two VPCs, VPC peering is cheaper and simpler. If it describes connecting two sets of VPCs, or two regions' worth of network, TGW peering is the answer. The exam will sometimes describe a topology that could be built either way and expect you to pick based on the number of VPCs involved.</p>
+        <p>The second confusion is with PrivateLink. PrivateLink exposes a specific service to consumers without merging routing domains, which means it works across overlapping CIDRs and does not require static routes. If the requirement is "let these consumers reach this one API," PrivateLink is the answer and peering is overkill. If the requirement is "let everything in region A reach everything in region B," peering is the answer and PrivateLink cannot do it.</p>
+        <p>The third confusion is with a single Transit Gateway shared across accounts via RAM. That mechanism solves cross-account connectivity within one Region and does nothing for cross-region connectivity. A scenario that mixes the two constraints — multiple accounts and multiple regions — usually requires both mechanisms, and the exam will test whether you can decompose the requirement rather than reaching for one service to solve everything.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Pick this…</th><th>When…</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>TGW peering</td><td>You need broad network-level reachability between two regions' worth of VPCs, CIDRs do not overlap, and you can own the static routes</td></tr>
+              <tr><td>VPC peering</td><td>Exactly two VPCs need to talk, in the same or different regions, and you do not need transit</td></tr>
+              <tr><td>PrivateLink</td><td>One service needs to be reachable by many consumers, especially when CIDRs overlap or you want to avoid merging routing domains</td></tr>
+              <tr><td>RAM-shared Transit Gateway</td><td>The "regions" are actually accounts in the same Region and you want centralized network ownership</td></tr>
+              <tr><td>Move the workload</td><td>The cross-region traffic is chatty and the latency requirement does not actually demand two regions</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The rule of thumb that survives most scenarios: peering is for topology, PrivateLink is for services, and RAM is for ownership. When a scenario is ambiguous, ask which of those three the requirement is really about, and the answer usually falls out.</p>
+      </section>
+
+      <section class="doc-section" id="lab">
+        <h2 class="section-heading">Hands-on Lab: Routing Between Two Regions Through Peered Transit Gateways</h2>
+        <div class="card card-green">
+          <p>This lab builds a working cross-region path between two VPCs through peered Transit Gateways, and then deliberately breaks it in the three ways that matter so you can see what each failure looks like. Budget about 45 minutes. You will need permissions to create VPCs, Transit Gateways, and peering attachments in two Regions.</p>
+          <p><strong>Step 1 — Build the two regional networks.</strong> In us-east-1, create a VPC with CIDR 10.1.0.0/16 and one private subnet. In us-west-2, create a VPC with CIDR 10.2.0.0/16 and one private subnet. Launch a t3.micro instance in each subnet with a security group that allows ICMP and SSH from the other VPC's CIDR. Note the instance private IPs; you will use them as the test endpoints.</p>
+          <p><strong>Step 2 — Create the Transit Gateways.</strong> Create one Transit Gateway in each Region. Leave the default route table association and propagation settings in place for now, and attach each VPC to its regional Transit Gateway. Confirm that each attachment shows as available and that the VPC CIDR has propagated into the regional Transit Gateway's default route table.</p>
+          <p><strong>Step 3 — Create the peering attachment.</strong> From the us-east-1 Transit Gateway, create a peering attachment targeting the us-west-2 Transit Gateway. The attachment will sit in a pending-acceptance state until you accept it from the us-west-2 side. Accept it, then confirm that both sides show the attachment as available. At this point, traffic still does not flow, and that is the point of the exercise.</p>
+          <p><strong>Step 4 — Add the static routes.</strong> On the us-east-1 Transit Gateway's route table, add a static route for 10.2.0.0/16 pointing at the peering attachment. On the us-west-2 Transit Gateway's route table, add a static route for 10.1.0.0/16 pointing at the peering attachment. Then update each VPC's subnet route table to point the remote CIDR at the local Transit Gateway. Test with a ping from one instance to the other; it should now succeed.</p>
+          <p><strong>Step 5 — Break it in the forward direction.</strong> Delete the static route for 10.2.0.0/16 from the us-east-1 Transit Gateway route table. Ping again and observe the timeout. Note that there is no error message anywhere in the console and no log entry by default; the packet is simply dropped. This is the silent black hole, and it is the failure you will spend the most time diagnosing in production.</p>
+          <p><strong>Step 6 — Break it in the return direction.</strong> Restore the route you just deleted, then delete the static route for 10.1.0.0/16 from the us-west-2 Transit Gateway route table instead. Ping again. Observe that the behavior is subtly different: depending on your tooling, you may see the request leave but no response return, which is the one-way failure signature. Restore the route.</p>
+          <p><strong>Step 7 — Probe the MTU.</strong> From one instance, run a ping with a payload size that produces a packet larger than 1500 bytes and the DF bit set. Observe the failure. Then run the same test with a payload that fits within 1500 bytes and confirm it succeeds. This is the intermittent large-packet failure you will see when a workload assumes jumbo frames across a peering attachment.</p>
+          <p><strong>Step 8 — Clean up.</strong> Delete the peering attachment, both Transit Gateways, and both VPCs. Transit Gateway attachments and peering attachments bill hourly, so leaving them running is an easy way to accumulate charges.</p>
+          <p>The takeaway from this lab is that every failure mode of TGW peering is a routing-table problem, and every one of them presents as a timeout rather than an error. The diagnostic skill you are building is the habit of checking route tables on both sides, in both directions, before you look anywhere else.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="quiz">
+        <h2 class="section-heading">Scenario Question Drills</h2>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q1.</strong> After creating a TGW peering attachment between two regions, spoke VPCs still cannot reach each other. What is most likely missing?</p>
+          <div class="scenario-options" id="opts-d9q1">
             <div class="scenario-option">A. Route propagation is disabled for peering attachments — static routes must be added manually</div>
             <div class="scenario-option">B. The TGWs are in different Availability Zones</div>
             <div class="scenario-option">C. Peering doesn't support cross-region traffic at all</div>
             <div class="scenario-option">D. Security groups always block inter-region traffic</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d9q1', 0)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d9q1"><strong>Correct answer: A.</strong> Unlike VPC and TGW attachments, peering attachments do not support route propagation. Every remote CIDR must be added as a static route on both sides of the peering attachment.</div>
         </div>
-        <button class="scenario-reveal-btn" onclick="revealAnswer('d9q0', 0)">Reveal Answer</button>
-        <div class="scenario-explanation" id="exp-d9q0"><strong>Correct answer: A.</strong> Unlike VPC/TGW attachments, TGW peering attachments require manually created static routes in each TGW route table — automatic propagation is not supported.</div>
-      </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q2.</strong> A workload replicates data between us-east-1 and eu-west-1 through a TGW peering attachment. Small API calls succeed but large file transfers stall partway through. What is the most likely cause?</p>
+          <div class="scenario-options" id="opts-d9q2">
+            <div class="scenario-option">A. The peering attachment is throttling large flows</div>
+            <div class="scenario-option">B. The inter-region peering MTU is capped at 1500 bytes and the workload assumes larger frames</div>
+            <div class="scenario-option">C. Route propagation is failing intermittently</div>
+            <div class="scenario-option">D. The Transit Gateway route table quota has been exceeded</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d9q2', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d9q2"><strong>Correct answer: B.</strong> Inter-region TGW peering caps MTU at 1500 bytes. Small packets fit and succeed; larger packets that need fragmentation are dropped when the DF bit is set, producing the classic intermittent large-transfer failure.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q3.</strong> A company has two Regions, each with a Transit Gateway and several VPCs. Both Regions were built from the same 10.0.0.0/16 template, so their CIDRs overlap. They need one specific internal API in Region A to be reachable from Region B. What should they use?</p>
+          <div class="scenario-options" id="opts-d9q3">
+            <div class="scenario-option">A. TGW peering with static routes</div>
+            <div class="scenario-option">B. VPC peering between the two VPCs</div>
+            <div class="scenario-option">C. AWS PrivateLink with an endpoint service and interface endpoints</div>
+            <div class="scenario-option">D. A shared Transit Gateway via AWS RAM</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d9q3', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d9q3"><strong>Correct answer: C.</strong> Peering and TGW peering both require non-overlapping CIDRs. PrivateLink exposes a specific service without merging routing domains, so it works despite the overlap and matches the narrow "one API" requirement.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q4.</strong> An engineer reports that a cross-region connection establishes but the application hangs waiting for the first response. Route tables on the source side look correct. What should you check first?</p>
+          <div class="scenario-options" id="opts-d9q4">
+            <div class="scenario-option">A. The application's connection pool settings</div>
+            <div class="scenario-option">B. The return path's route tables on the far side of the peering attachment</div>
+            <div class="scenario-option">C. The Transit Gateway's bandwidth allocation</div>
+            <div class="scenario-option">D. Whether the peering attachment needs to be recreated</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d9q4', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d9q4"><strong>Correct answer: B.</strong> A connection that establishes but never completes is the signature of a one-way route. The two sides of a peering attachment are configured independently, so the return path must be verified separately.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q5.</strong> Which statement about TGW peering attachments is accurate?</p>
+          <div class="scenario-options" id="opts-d9q5">
+            <div class="scenario-option">A. They propagate routes automatically once accepted</div>
+            <div class="scenario-option">B. They require static routes on both sides and travel over the AWS global backbone</div>
+            <div class="scenario-option">C. They route traffic over the public internet with encryption</div>
+            <div class="scenario-option">D. They only work within a single AWS Region</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d9q5', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d9q5"><strong>Correct answer: B.</strong> Peering attachments carry traffic over the AWS global backbone rather than the public internet, and they do not support route propagation, so static routes are required on both sides.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q6.</strong> A team adds a new subnet to a VPC in Region A. The subnet is reachable from within Region A but not from Region B, even though the peering attachment is healthy. What is the most likely explanation?</p>
+          <div class="scenario-options" id="opts-d9q6">
+            <div class="scenario-option">A. The new subnet's CIDR was not added as a static route on the Region B side</div>
+            <div class="scenario-option">B. The peering attachment needs to be recreated after a CIDR change</div>
+            <div class="scenario-option">C. Security groups block new subnets by default</div>
+            <div class="scenario-option">D. The Transit Gateway route table quota was exceeded</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d9q6', 0)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d9q6"><strong>Correct answer: A.</strong> The VPC attachment propagates the new CIDR into the local TGW route table automatically, but the far side of the peering attachment has no propagation and needs a manual static route for the new range.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q7.</strong> A company wants all inter-region traffic between three Regions to be mediated by a central networking account's Transit Gateway. What is the main tradeoff of this hub-and-spoke peering design compared with a direct mesh?</p>
+          <div class="scenario-options" id="opts-d9q7">
+            <div class="scenario-option">A. It is not supported by Transit Gateway</div>
+            <div class="scenario-option">B. It doubles the number of peering hops, increasing data transfer cost and latency, and doubles the static routes to maintain</div>
+            <div class="scenario-option">C. It removes the need for static routes</div>
+            <div class="scenario-option">D. It requires VPC peering instead of TGW peering</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d9q7', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d9q7"><strong>Correct answer: B.</strong> Routing through a central hub means each packet traverses two peering attachments instead of one, which doubles inter-region data transfer charges and adds a hop, and each attachment needs its own static routes on both sides.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q8.</strong> Which monitoring approach best detects a broken cross-region path through a TGW peering attachment?</p>
+          <div class="scenario-options" id="opts-d9q8">
+            <div class="scenario-option">A. A CloudWatch alarm on the peering attachment's state alone</div>
+            <div class="scenario-option">B. Synthetic probes that exercise the actual cross-region call path end to end</div>
+            <div class="scenario-option">C. VPC Flow Logs on the source subnet only</div>
+            <div class="scenario-option">D. Trusted Advisor network checks</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d9q8', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d9q8"><strong>Correct answer: B.</strong> A missing static route leaves the attachment state healthy while every packet is dropped. Only an end-to-end probe of the actual path catches that, because infrastructure metrics report the attachment as available.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q9.</strong> A scenario describes connecting two VPCs in different Regions that need to exchange traffic directly, with no other VPCs involved. Which is the most cost-effective and simplest choice?</p>
+          <div class="scenario-options" id="opts-d9q9">
+            <div class="scenario-option">A. TGW peering between two Transit Gateways</div>
+            <div class="scenario-option">B. VPC peering between the two VPCs</div>
+            <div class="scenario-option">C. A shared Transit Gateway via AWS RAM</div>
+            <div class="scenario-option">D. AWS PrivateLink</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d9q9', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d9q9"><strong>Correct answer: B.</strong> With only two VPCs and no transit requirement, VPC peering avoids the cost and operational overhead of standing up two Transit Gateways and a peering attachment.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q10.</strong> A packet is dropped at a Transit Gateway because no route matches the destination. What does the sender observe by default?</p>
+          <div class="scenario-options" id="opts-d9q10">
+            <div class="scenario-option">A. An ICMP unreachable message</div>
+            <div class="scenario-option">B. A CloudWatch log entry naming the missing route</div>
+            <div class="scenario-option">C. A silent timeout, with no error returned</div>
+            <div class="scenario-option">D. An immediate connection reset</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d9q10', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d9q10"><strong>Correct answer: C.</strong> A missing route produces a black hole. The packet is dropped with no ICMP unreachable and no log entry by default, so the application sees a timeout that is indistinguishable from a security group drop or a dead instance.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q11.</strong> A company's cross-region traffic between two Regions is high-volume and chatty, and the latency requirement is actually satisfied by either Region. What should the architect recommend first?</p>
+          <div class="scenario-options" id="opts-d9q11">
+            <div class="scenario-option">A. Add a second peering attachment for more bandwidth</div>
+            <div class="scenario-option">B. Evaluate co-locating the workloads in one Region to eliminate the cross-region data transfer cost</div>
+            <div class="scenario-option">C. Switch from TGW peering to VPC peering</div>
+            <div class="scenario-option">D. Enable route propagation on the peering attachment</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d9q11', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d9q11"><strong>Correct answer: B.</strong> Peering attachments bill on data transfer, so chatty cross-region traffic that does not need to be cross-region is a cost-optimization finding. Moving the workload is cheaper than optimizing the network.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q12.</strong> Which of the following is NOT a valid way to add routes for a TGW peering attachment?</p>
+          <div class="scenario-options" id="opts-d9q12">
+            <div class="scenario-option">A. Static routes in the TGW route table pointing at the peering attachment</div>
+            <div class="scenario-option">B. Static routes in the spoke subnet route tables pointing at the local TGW</div>
+            <div class="scenario-option">C. Enabling route propagation on the peering attachment</div>
+            <div class="scenario-option">D. Managing the static routes as code from a CIDR allocation source of truth</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d9q12', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d9q12"><strong>Correct answer: C.</strong> Route propagation is not supported on peering attachments. Any answer choice that offers to enable it is wrong, because the option does not exist.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q13.</strong> A team wants to reduce the risk of forgetting a static route when new subnets are added on either side of a peering attachment. What is the most effective mitigation?</p>
+          <div class="scenario-options" id="opts-d9q13">
+            <div class="scenario-option">A. Add a CloudWatch alarm on the peering attachment</div>
+            <div class="scenario-option">B. Generate the static routes as code from the same source of truth as the CIDR allocations, and alert on drift</div>
+            <div class="scenario-option">C. Increase the TGW route table quota</div>
+            <div class="scenario-option">D. Move to VPC peering instead</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d9q13', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d9q13"><strong>Correct answer: B.</strong> Because the failure mode is a silent black hole, the durable fix is to make route entries a generated artifact of the CIDR allocation process and to alert on drift between the two sides.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q14.</strong> A scenario describes multiple accounts that need centralized network connectivity, and all of them are in the same AWS Region. Which mechanism fits?</p>
+          <div class="scenario-options" id="opts-d9q14">
+            <div class="scenario-option">A. TGW peering between regional Transit Gateways</div>
+            <div class="scenario-option">B. A Transit Gateway shared across accounts via AWS RAM</div>
+            <div class="scenario-option">C. VPC peering between every pair of accounts</div>
+            <div class="scenario-option">D. AWS PrivateLink for every service</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d9q14', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d9q14"><strong>Correct answer: B.</strong> The constraint is organizational, not geographic. RAM sharing solves cross-account connectivity within one Region; peering solves cross-region connectivity and is unnecessary here.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q15.</strong> During an incident, a cross-region path through a TGW peering attachment is failing. What is the correct first diagnostic step?</p>
+          <div class="scenario-options" id="opts-d9q15">
+            <div class="scenario-option">A. Restart the Transit Gateway attachments</div>
+            <div class="scenario-option">B. Verify the peering attachment state on both sides, then diff the route tables associated with the peering attachment against the expected CIDR list</div>
+            <div class="scenario-option">C. Open a support case and wait</div>
+            <div class="scenario-option">D. Check the application logs first</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d9q15', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d9q15"><strong>Correct answer: B.</strong> Every failure mode of TGW peering is a routing-table problem presenting as a timeout. Confirming attachment state and diffing the route tables on both sides is the fastest path to the cause.</div>
+        </div>
+      </section>
+
+      <section class="doc-section" id="preview">
+        <h2 class="section-heading">Peek into Tomorrow</h2>
+        <div class="card card-purple">
+          <p>Everything in today's topology assumed the traffic crossing the peering attachment was traffic you wanted to allow. The static routes you built are a reachability mechanism, not a security control: once a route exists, any packet matching it is forwarded, and the only thing standing between your regions and the internet is whatever security groups and NACLs happen to be at the endpoints. That is fine for a private cross-region path between two trusted VPCs, but it falls apart the moment the requirement includes inspecting what is actually inside the traffic — blocking a specific domain, detecting a known-bad signature, or enforcing that egress from every spoke VPC passes through one chokepoint before it reaches the internet.</p>
+          <p>The open question is where that inspection lives. You could put a firewall in every VPC, but that multiplies cost and configuration surface by the number of spokes. You could rely on security groups, but they operate on IP and port, not on payload or domain name. The alternative is a centralized inspection VPC that all egress is routed through, which sounds simple until you try to make the routing work: the spoke route tables have to send 0.0.0.0/0 somewhere, the inspection VPC has to accept it, inspect it, and then hand it back to the same Transit Gateway without creating a routing loop. Tomorrow's topic is the appliance VPC pattern that makes that work, and the Suricata-compatible rule engine that does the actual inspection.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="sources">
+        <h2 class="section-heading">Sources</h2>
+        <div class="card">
+          <ul class="source-list">
+            <li><a href="https://docs.aws.amazon.com/vpc/latest/tgw/tgw-peering.html" target="_blank" rel="noopener">AWS Transit Gateway peering attachments</a></li>
+            <li><a href="https://docs.aws.amazon.com/vpc/latest/tgw/tgw-route-tables.html" target="_blank" rel="noopener">Transit Gateway route tables</a></li>
+            <li><a href="https://docs.aws.amazon.com/vpc/latest/tgw/tgw-quotas.html" target="_blank" rel="noopener">Transit Gateway quotas</a></li>
+            <li><a href="https://docs.aws.amazon.com/vpc/latest/tgw/what-is-transit-gateway.html" target="_blank" rel="noopener">What is a Transit Gateway?</a></li>
+            <li><a href="https://docs.aws.amazon.com/whitepapers/latest/building-scalable-secure-multi-vpc-network-infrastructure/transit-gateway.html" target="_blank" rel="noopener">Building a scalable and secure multi-VPC network infrastructure</a></li>
+            <li><a href="https://docs.aws.amazon.com/vpc/latest/privatelink/what-is-privatelink.html" target="_blank" rel="noopener">AWS PrivateLink concepts</a></li>
+            <li><a href="https://docs.aws.amazon.com/ram/latest/userguide/what-is-resource-access-manager.html" target="_blank" rel="noopener">AWS Resource Access Manager</a></li>
+            <li><a href="https://docs.aws.amazon.com/wellarchitected/latest/reliability-pillar/welcome.html" target="_blank" rel="noopener">AWS Well-Architected Reliability Pillar</a></li>
+          </ul>
+        </div>
       </section>
       <div class="day-nav">
         <a href="day-008.html">&larr; Day 8: Transit Gateway (TGW) Core Routing</a>

@@ -104,37 +104,352 @@
         <span class="pill pill-green">Phase 3: SRE Observability, Resilience &amp; DR</span>
       </div>
       <h1 class="hero-title">Route 53 Application Recovery Controller (ARC)</h1>
-      <div class="reading-meta">&#128337; ~3 min read &middot; 3 services covered</div>
+      <div class="reading-meta">&#128337; ~58 min read &middot; 3 services covered</div>
       <div class="services-grid">
         <span class="service-tag">Route 53 ARC</span>
         <span class="service-tag">Readiness Checks</span>
         <span class="service-tag">Routing Controls</span>
       </div>
       <div id="tracker"></div>
-      <section class="doc-section">
-        <h2 class="section-heading">Today's Concept</h2>
+
+      <section class="doc-section" id="recap">
+        <h2 class="section-heading">Recap: From DR Patterns to Failover Control</h2>
         <div class="card card-accent">
-          <p>Route 53 ARC provides readiness checks (continuously validating a standby region actually has capacity/config to take over) and routing controls with a highly available control plane (independent of a single region) for deterministic, auditable failover — safer than ad hoc Route 53 health-check failover for critical systems.</p>
-        </div>
-        <h3 class="sub-heading">Hands-on Lab / Practical Action (45 min)</h3>
-        <div class="card">
-          <p>Configure ARC readiness checks validating that a standby region's Auto Scaling Group capacity matches production before it's considered a valid failover target.</p>
+          <p>Day 36 laid out the DR spectrum as a cost/RTO tradeoff: Backup &amp; Restore with the highest RTO, Pilot Light with core data replicated and minimal standing infrastructure, Warm Standby running a scaled-down replica, and Multi-Site Active-Active delivering the lowest RTO/RPO at the highest cost. That framing is useful for choosing a strategy, but it quietly assumes the hard part is over once you have picked a point on the spectrum. It isn't. A warm standby that exists is not the same thing as a warm standby that can actually absorb production traffic, and a failover decision that depends on a control plane living inside the region you are failing away from is not a failover mechanism at all.</p>
+          <p>Route 53 ARC extends that spectrum by attacking the two assumptions the spectrum leaves unexamined. Readiness checks continuously verify that the standby side has the capacity and configuration to take over, so "we have a warm standby" becomes a measured claim rather than an architectural intention. Routing controls move the failover decision itself onto a data plane that is deliberately distributed across regions and availability zones, so the act of failing over does not depend on the health of the thing that just failed. The rest of this day is about how those two primitives work, where they break, and why the exam keeps reaching for them in scenarios that mention "critical" or "regulated" alongside a multi-region requirement.</p>
         </div>
       </section>
-      <section class="doc-section">
+
+      <section class="doc-section" id="why-on-exam">
+        <h2 class="section-heading">1. Why This Is on the Exam</h2>
+        <p>The architectural problem ARC solves is not "how do I fail over between regions" — Route 53 failover routing answers that question and has for years. The problem is that the naive answer has a circular dependency buried in it. If your failover is triggered by a health check, and the health check is evaluated by a control plane that lives in the region that just went dark, then your failover mechanism shares a failure domain with your failure. The same circularity shows up in the human version: an operator paged at 3am, logging into a console that may or may not be reachable, deciding whether to flip DNS, and hoping the standby region has enough running capacity to absorb the traffic it is about to receive. Both versions of the problem are about the reliability of the failover decision itself, and that is the gap ARC was built to close.</p>
+        <p>On SAP-C02 this maps most directly to Domain 2, Design for New Solutions, and to the resilience half of Domain 4, Continuous Improvement for Existing Solutions. The exam's tell is a scenario that stacks three constraints: a workload described as mission-critical or regulated, a multi-region or multi-AZ requirement, and a demand for deterministic or auditable failover. When you see "the failover mechanism must not depend on a single region" or "the team needs proof the standby can handle production load," the answer is almost always ARC rather than plain Route 53 health checks. The distractor set is predictable — Global Accelerator alone, a Lambda triggered by a CloudWatch alarm, a manual runbook — and each of them fails on a different axis that the nine sections below make explicit.</p>
+        <p>It is worth being precise about what ARC is not, because the exam will test that too. ARC does not replicate your data, does not provision your standby capacity, and does not itself move traffic. It is a control plane and a set of health assertions. Everything it does is in service of making a decision you have already architected the infrastructure for, and making that decision safely, quickly, and with an audit trail. If a scenario is really asking about data replication, the answer is Aurora Global Database or DynamoDB Global Tables; if it is asking about traffic steering at the network layer, the answer is Global Accelerator. ARC sits above both, deciding when to use them.</p>
+      </section>
+
+      <section class="doc-section" id="mechanism">
+        <h2 class="section-heading">2. Mechanism: How ARC Actually Works</h2>
+        <p>ARC is built from three primitives that compose into a failover system: the cluster, the routing control, and the health check. The cluster is the container. It is a logical grouping of five endpoints, and those five endpoints are distributed across five different AWS regions by design. This is the single most important mechanical fact about ARC. When you create a cluster, you are not creating a resource in us-east-1 that happens to be replicated; you are creating a resource whose control plane is inherently multi-region, so that a client in any one region can still reach the cluster's API even if that region is impaired. The cluster's endpoints are what your automation and your operators talk to when they want to change routing state.</p>
+        <p>A routing control is a simple on/off switch that lives inside a cluster. It has two states, On and Off, and it is the unit of failover. The pattern is to create one routing control per cell — typically one per region or per availability zone — and wire each one to a Route 53 health check. When a routing control is On, its associated health check reports healthy; when it is Off, the health check reports unhealthy. Route 53 then does what it has always done: it stops returning the unhealthy endpoint in DNS answers. The elegance here is that ARC does not replace Route 53's routing logic, it feeds it. You keep using failover routing policies, weighted records, or whatever steering you already have, and ARC becomes the authoritative source of the health signal that drives them.</p>
+        <p>The third primitive is the readiness check, and it is the one that most distinguishes ARC from a plain health check. A readiness check is a continuous assertion about the state of a resource in a recovery region — most commonly an Auto Scaling group, an ELB target group, or a Route 53 record set. You define the check, and ARC evaluates it on a schedule, reporting whether the resource is in the state you declared it should be in. The critical property is that readiness checks are evaluated independently of the primary region's health. A readiness check on a standby Auto Scaling group in eu-west-1 keeps reporting whether that group has the expected capacity even while us-east-1 is on fire, because the check is evaluated by ARC's distributed control plane rather than by anything in us-east-1.</p>
+        <p>Composing these three gives you the ARC failover pattern. You run your workload in two cells. Each cell has a routing control, and each routing control is wired to a health check that Route 53 uses in a failover or weighted record set. You attach readiness checks to the standby cell's critical resources so you have continuous evidence it can take over. When you need to fail over, you flip the routing controls — turning the primary's control Off and the standby's On — and Route 53 begins returning the standby endpoint. The flip is a single API call against a cluster endpoint that is itself multi-region, so the call succeeds even if the region you are failing away from is unreachable. That is the whole mechanism, and every exam question about ARC is ultimately a question about one of these three primitives or the way they compose.</p>
+      </section>
+
+      <section class="doc-section" id="decision-boundary">
+        <h2 class="section-heading">3. The Core Decision Boundary: When ARC Earns Its Complexity</h2>
+        <p>Every scenario question about ARC hinges on one fork: is the failover decision itself a reliability concern, or is it just a routing concern? If it is just routing — you want traffic to go to the healthiest endpoint, and a brief window of DNS-based failover is acceptable — then plain Route 53 health checks with failover routing are sufficient and ARC is over-engineering. If the failover decision is itself something that must survive the failure it is responding to, must be auditable, and must be provably safe to execute, then ARC is the answer and the simpler options are the distractors. The exam rarely says "the failover mechanism must be highly available" in those words; it says things like "the operations team must be able to initiate failover even if the primary region is completely unavailable" or "the company needs an audit trail of every failover event."</p>
+        <p>The second half of the fork is readiness. A scenario that mentions a warm standby or pilot light and then asks how to be confident the standby can handle production traffic is asking about readiness checks specifically. The distinction matters because readiness checks are the part of ARC that addresses the "we have a standby but we've never proven it works" problem, which is a different failure mode from "the failover mechanism is unreachable." A scenario can require one without the other, and the exam will sometimes test exactly that — a workload that needs readiness validation but whose failover is simple enough that routing controls are unnecessary.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Requirement in the scenario</th><th>Plain Route 53 health checks</th><th>Route 53 ARC</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Route traffic to the healthiest endpoint</td><td>Sufficient</td><td>Works, but adds unused complexity</td></tr>
+              <tr><td>Failover must work when the primary region is fully down</td><td>Fails — control plane shares the failure domain</td><td>Designed for this; cluster endpoints span five regions</td></tr>
+              <tr><td>Need continuous proof the standby has capacity</td><td>Not addressed</td><td>Readiness checks are the purpose-built answer</td></tr>
+              <tr><td>Need an auditable record of failover events</td><td>No native audit trail</td><td>Routing control state changes are logged and attributable</td></tr>
+              <tr><td>Need sub-second network-layer failover</td><td>No — DNS TTL and caching apply</td><td>No — ARC drives DNS; Global Accelerator is the network-layer answer</td></tr>
+              <tr><td>Simple single-region app with a DR region</td><td>Sufficient</td><td>Over-engineered</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The last row of that table is the one candidates most often get wrong in the other direction. ARC is not a default best practice to be sprinkled onto every multi-region design. It carries real operational cost: you have to build the cluster, wire routing controls to health checks, define readiness checks for every resource that matters, and maintain the automation that flips controls. For a workload with a four-hour RTO and a tolerant business owner, that cost buys nothing. The exam rewards recognizing when the requirement has crossed the line into "the failover decision is itself critical infrastructure," and that line is usually marked by words like mission-critical, regulated, financial, or deterministic.</p>
+      </section>
+
+      <section class="doc-section" id="config-tradeoffs">
+        <h2 class="section-heading">4. Configuration Modes and Their Tradeoffs</h2>
+        <p>ARC's configuration surface is smaller than its conceptual footprint, which is a good thing for exam preparation. There are three decisions that matter, and each has a clear tradeoff. The first is how you drive the routing controls: manually through the console or CLI, or programmatically through the ARC data plane API. Manual flipping is appropriate when a human is making the failover judgment — a regulated environment where a named operator must authorize the switch, for example. Programmatic flipping is appropriate when you have automated detection and want the failover to happen without a human in the loop. The tradeoff is speed versus control, and the exam will sometimes specify which one it wants by describing whether a human approval step is required.</p>
+        <p>The second decision is how many routing controls you create and how you group them. The common pattern is one routing control per cell, where a cell is a region or an availability zone. But you can also create safety rules, which are assertions that prevent an unsafe combination of routing control states — for example, a rule that at least one routing control in a group must always be On, so an operator cannot accidentally turn everything off and black-hole all traffic. Safety rules are the ARC feature that maps to the "prevent human error during a high-stress failover" requirement, and they are worth remembering as a distinct capability rather than as a detail of routing controls.</p>
+        <p>The third decision is what your readiness checks actually assert. A readiness check can validate that an Auto Scaling group has a minimum number of healthy instances, that a target group has healthy targets, or that a Route 53 record set exists with the expected values. The tradeoff here is coverage versus noise. A readiness check that asserts too little gives you false confidence; one that asserts too much — say, requiring exact instance counts that fluctuate during normal autoscaling — will flap and generate alerts that operators learn to ignore. The practical guidance is to assert the property that actually determines whether the cell can serve traffic, not the property that is easiest to measure.</p>
+        <p>There is also a decision about how ARC integrates with your existing Route 53 configuration, and it is less a mode than a constraint. ARC routing controls drive health checks, and those health checks must be referenced by your Route 53 records. This means adopting ARC is not a greenfield decision — you are retrofitting a control plane onto records that already exist, and the health check wiring has to be correct or the routing controls will flip state without any effect on traffic. That failure mode is silent and is one of the most common mistakes in real ARC deployments, which is why it appears in the gotchas section below.</p>
+      </section>
+
+      <section class="doc-section" id="sizing-limits">
+        <h2 class="section-heading">5. Sizing, Limits and Quotas</h2>
+        <p>ARC's quotas are modest because the service is a control plane, not a data plane. The numbers that matter for exam purposes are the ones that constrain how you design the failover topology, and the most important is the cluster endpoint count. A cluster provides five endpoints, distributed across five regions, and this is a fixed property rather than a configurable one. You do not choose how many endpoints a cluster has; you choose which regions your workload runs in, and the cluster's endpoints give you redundant paths to the control plane regardless. The practical implication is that your automation should be written to try multiple cluster endpoints rather than hard-coding one, because the whole point of the five-endpoint design is that any single endpoint may be unreachable during the event you are responding to.</p>
+        <p>Routing controls and readiness checks are subject to per-cluster and per-account quotas, and the exam-relevant fact is that these are soft limits you can request increases for, not hard architectural ceilings. The design question is not "how many can I create" but "how many do I need," and the answer is driven by your cell topology. A two-region active-passive design needs two routing controls and a handful of readiness checks. A four-region active-active design needs four routing controls and proportionally more readiness checks. The quota conversation only becomes interesting at large scale, and the exam is unlikely to test exact numbers here — it is more likely to test whether you understand that routing controls are per-cell and readiness checks are per-resource.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>ARC element</th><th>What it constrains</th><th>Design implication</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Cluster endpoints</td><td>Five endpoints across five regions, fixed</td><td>Automation must try multiple endpoints, not hard-code one</td></tr>
+              <tr><td>Routing controls per cluster</td><td>Soft quota, raisable</td><td>One per cell; scale with cell count, not traffic volume</td></tr>
+              <tr><td>Readiness checks per cluster</td><td>Soft quota, raisable</td><td>One per resource whose state determines cell viability</td></tr>
+              <tr><td>Safety rules per control panel</td><td>Soft quota, raisable</td><td>Use to prevent all-off states; not a substitute for testing</td></tr>
+              <tr><td>Health check evaluation</td><td>Standard Route 53 health check cadence</td><td>Failover latency is bounded by health check timing, not ARC</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The health check row deserves emphasis because it is where candidates conflate ARC's guarantees with Route 53's. ARC flips a routing control instantly, but the traffic does not move instantly. Route 53 still has to evaluate the associated health check, mark the endpoint unhealthy, and stop returning it in DNS answers — and clients still have to respect TTLs. ARC makes the decision fast and reliable; it does not make DNS propagation fast. If a scenario demands sub-second traffic movement, ARC is the wrong answer and Global Accelerator is the right one, because anycast IPs reroute at the network edge without waiting for DNS. Knowing where ARC's guarantee ends is as important as knowing what it guarantees.</p>
+      </section>
+
+      <section class="doc-section" id="failure-modes">
+        <h2 class="section-heading">6. Failure Modes and What They Look Like in Production</h2>
+        <p>The most common ARC failure mode in production is not an ARC failure at all — it is a wiring failure. A routing control flips from On to Off, the operator sees the state change in the console, and traffic does not move. The cause is almost always that the routing control's associated health check is not the health check referenced by the Route 53 record set, or that the record set is using a routing policy that does not consult health checks at all. The symptom is a failover that appears to succeed and then silently does nothing, which is worse than a failover that visibly fails because it erodes trust in the mechanism. The first diagnostic move is to trace the chain explicitly: routing control to health check to record set, confirming each link rather than assuming it.</p>
+        <p>The second failure mode is readiness check flapping. A readiness check that asserts a property which varies during normal operation — instance counts during autoscaling, for example — will oscillate between ready and not-ready, generating a stream of alerts. Operators respond the way operators always respond to noisy alerts: they stop reading them. The result is that when a genuine readiness failure occurs, nobody notices, and the standby that everyone believed was validated turns out to have been degraded for hours. The fix is to assert a stable property, or to use a threshold that tolerates normal variation, and to treat readiness check state as an SLO input rather than a paging signal.</p>
+        <p>The third failure mode is the one ARC is specifically designed to prevent, and it is worth understanding what it looks like when ARC is absent. Without ARC, a failover triggered by a health check in the primary region can fail to trigger if the primary region's control plane is impaired — the health check itself becomes a casualty. The symptom is a region that is clearly down but whose DNS records still point at it, because the mechanism that was supposed to notice never got the chance. This is the circular dependency described in section 1, and it is the reason ARC exists. If you are debugging a failover that did not happen during a regional event, the question to ask is whether the failover decision depended on anything inside the failed region.</p>
+        <p>A fourth, subtler failure mode is stale readiness. Readiness checks report on the state of resources, and resources can drift. A standby Auto Scaling group that was correctly sized last month may have had its desired capacity reduced during a cost-cutting exercise, and the readiness check will faithfully report that it no longer meets the assertion — but only if someone is watching. The operational lesson is that readiness checks are only valuable if their state is surfaced somewhere a human or an automation actually looks, which is the subject of the next section.</p>
+      </section>
+
+      <section class="doc-section" id="sre-angle">
+        <h2 class="section-heading">7. The Operational and SRE Angle</h2>
+        <p>From an SRE perspective, ARC is a mechanism for converting an untested assumption into a monitored signal. The assumption is "our standby can take over." The signal is the readiness check state. The operational work is making that signal visible, alerting on it appropriately, and rehearsing the failover so that the mechanism is exercised before it is needed. This is the same discipline as a Game Day, applied specifically to the failover path: you do not want the first time you flip a routing control to be during an actual incident, because the wiring mistakes described in the previous section are exactly the kind of thing that only surfaces when you try it.</p>
+        <p>The monitoring shape is straightforward. Readiness check state should be exported to CloudWatch and alarmed on, with the alarm routed to the team that owns the standby capacity rather than to the on-call rotation for the primary. Routing control state changes should be logged and retained, both for audit and for post-incident review — knowing who flipped what and when is the difference between a blameless retrospective and a guessing game. The failover itself should have a runbook, and that runbook should be automated to the extent the organization's risk tolerance allows, because manual failover under stress is where human error concentrates.</p>
+        <p>The SLO implications are worth thinking through carefully. A readiness check failure is not the same as an availability SLO breach — it is a leading indicator that your recovery capability has degraded. Treating it as a paging event will generate noise; treating it as a silent metric will let it rot. The middle ground most organizations land on is a warning-level alert with a defined response window, escalating to a page only if the readiness failure persists past a threshold that would make a failover unsafe. That threshold is a business decision, not a technical one, and it should be documented alongside the RTO.</p>
+        <p>Finally, the runbook shape. A good ARC runbook has four steps: confirm the primary is genuinely impaired rather than transiently slow, verify the standby's readiness checks are green, flip the routing controls, and confirm traffic has actually moved by checking the Route 53 record set's returned answers rather than trusting the console. That last step is the one teams skip, and it is the one that catches the wiring failure mode. Automating the runbook is worthwhile, but automating it without the verification step just makes the silent failure happen faster.</p>
+      </section>
+
+      <section class="doc-section" id="gotchas">
+        <h2 class="section-heading">8. Edge Cases and Exam Gotchas</h2>
+        <p>The first gotcha is the one already mentioned twice, and it bears repeating because it is the most commonly tested: ARC does not move traffic by itself. Routing controls drive health checks, health checks drive Route 53 routing decisions, and Route 53 routing decisions are subject to DNS TTLs and client caching. A scenario that asks for instant traffic movement is not an ARC scenario. A scenario that asks for reliable, auditable failover initiation is. Reading the requirement carefully — "initiate failover" versus "move traffic" — is often the whole question.</p>
+        <p>The second gotcha is conflating readiness checks with health checks. A health check answers "is this endpoint currently serving?" A readiness check answers "is this resource in the state required to serve if called upon?" They are evaluated differently, they serve different purposes, and a scenario that asks how to validate a standby's capacity is asking about readiness checks specifically. Candidates who answer "add a health check to the standby" have missed the point: the standby may be perfectly healthy and still be too small to absorb production load.</p>
+        <p>The third gotcha is assuming ARC replaces Global Accelerator or vice versa. They operate at different layers. Global Accelerator steers traffic at the network layer using anycast IPs and can fail over in seconds without DNS involvement. ARC steers traffic at the DNS layer by controlling health check state. A scenario that mentions DNS TTL problems or client-side caching is pointing at Global Accelerator; a scenario that mentions auditability, readiness validation, or a failover control plane that must survive a regional outage is pointing at ARC. Some architectures use both, and the exam may test that composition.</p>
+        <p>The fourth gotcha is safety rules. They are easy to forget because they are not part of the core failover loop, but they answer a specific requirement: preventing an operator from putting the system into an unsafe state during a high-stress event. If a scenario mentions human error during failover, or asks how to guarantee at least one cell is always active, safety rules are the answer. The fifth gotcha is the audit trail. ARC's routing control state changes are logged, which is what makes it suitable for regulated environments that need to demonstrate who authorized a failover and when. Plain Route 53 health checks have no equivalent, and that gap is often the deciding factor in a scenario that mentions compliance.</p>
+      </section>
+
+      <section class="doc-section" id="vs-comparison">
+        <h2 class="section-heading">9. ARC vs. the Services It Gets Confused With</h2>
+        <p>The comparison that matters most is ARC versus plain Route 53 health checks with failover routing, because that is the pair the exam uses to separate candidates who understand the circular-dependency problem from those who do not. Plain health checks are simpler, cheaper, and entirely adequate for the majority of workloads. They fail specifically when the failover decision must survive the failure it is responding to, when the standby's readiness must be continuously validated, or when the failover must be auditable. ARC exists for those three cases and is over-engineering outside them.</p>
+        <p>The second comparison is ARC versus Global Accelerator. Both are multi-region traffic management, but they operate at different layers and solve different problems. Global Accelerator is a network-layer solution: static anycast IPs, traffic entering the AWS global network at the nearest edge, failover measured in seconds and independent of DNS. ARC is a DNS-layer control plane: it decides which endpoints Route 53 should return, with the decision itself made highly available. A scenario about client-side DNS caching or sub-second failover is Global Accelerator. A scenario about deterministic, auditable, readiness-validated failover is ARC.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Service</th><th>Layer</th><th>Failover speed</th><th>Pick it when…</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Route 53 health checks + failover routing</td><td>DNS</td><td>Bounded by health check cadence and TTL</td><td>The workload is not mission-critical and simple DNS failover is acceptable</td></tr>
+              <tr><td>Route 53 ARC</td><td>DNS control plane</td><td>Bounded by health check cadence and TTL, but the decision is highly available</td><td>Failover must survive a regional outage, be auditable, and be readiness-validated</td></tr>
+              <tr><td>AWS Global Accelerator</td><td>Network (anycast)</td><td>Seconds, independent of DNS</td><td>Sub-second or DNS-cache-immune failover is required</td></tr>
+              <tr><td>CloudWatch alarm + Lambda failover</td><td>Custom automation</td><td>Depends entirely on the automation's own availability</td><td>Never for critical systems — the automation shares the failure domain</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The third comparison, and the one that trips up candidates who have not thought about it, is ARC versus the data-layer replication services. Aurora Global Database and DynamoDB Global Tables are what make the standby region's data current; ARC is what decides when to send traffic there. They are complementary, not alternatives, and a complete multi-region design usually includes both. If a scenario asks how to keep the standby's data within seconds of the primary, the answer is a replication service. If it asks how to fail over to that standby safely, the answer is ARC. Recognizing which half of the problem a question is describing is the skill the exam is testing.</p>
+      </section>
+
+      <section class="doc-section" id="lab">
+        <h2 class="section-heading">Hands-on Lab: Readiness Checks for a Standby Auto Scaling Group (45 min)</h2>
+        <div class="card card-green">
+          <p>The goal of this lab is to build the readiness half of an ARC deployment and prove that it actually reports on the standby's capacity rather than merely existing. You will create a cluster, define a readiness check against a standby Auto Scaling group, deliberately break the standby's capacity, and confirm the readiness check reports not-ready. That last step is the one that matters — a readiness check you have never seen fail is a readiness check you cannot trust.</p>
+          <p><strong>Step 1 — Establish the two cells.</strong> In a sandbox account, create two Auto Scaling groups in two different regions. The primary group should have a desired capacity of 2 and the standby a desired capacity of 2 as well, both behind their own Application Load Balancers. If you already have a two-region test workload, use it; the point is to have a standby whose capacity you can measure and change. Record the standby group's name and region, because the readiness check will reference it directly.</p>
+          <p><strong>Step 2 — Create the ARC cluster.</strong> In the Route 53 console, create a cluster. Note the five cluster endpoints that are generated and their regions. This is the multi-region control plane described in section 2, and seeing the endpoint list is the fastest way to internalize that the cluster is not a single-region resource. Do not proceed until the cluster reports as created, since readiness checks are scoped to a cluster.</p>
+          <p><strong>Step 3 — Define the readiness check.</strong> Create a readiness check of type Auto Scaling group, pointing at the standby group. Set the expected capacity to match what the standby should have when it is ready to take over — in this lab, 2 instances. ARC will begin evaluating the check on a schedule. Wait for the first evaluation and confirm it reports ready, since the standby is currently at its expected capacity.</p>
+          <p><strong>Step 4 — Break the standby deliberately.</strong> Reduce the standby Auto Scaling group's desired capacity to 1. This simulates the cost-cutting drift described in section 6, where a standby silently loses capacity and nobody notices. Wait for the next readiness check evaluation. It should transition to not-ready, because the group no longer has the capacity the check asserts. If it does not transition, your check is asserting the wrong property — revisit step 3 and make sure you are checking capacity rather than, say, the existence of the group.</p>
+          <p><strong>Step 5 — Restore and observe.</strong> Return the desired capacity to 2 and confirm the readiness check returns to ready. You have now seen the check in both states, which is the minimum bar for trusting it. Note the evaluation cadence you observed; that cadence is the detection latency for standby degradation, and it belongs in your runbook.</p>
+          <p><strong>Step 6 — Wire the routing control and verify the chain.</strong> Create a routing control in the cluster, associate it with a Route 53 health check, and reference that health check from a failover record set for your test domain. Flip the routing control and confirm the record set's returned answers change. This is the wiring exercise from section 6, and doing it once in a lab is what prevents the silent-failure mode in production. If the answers do not change, trace the chain: routing control to health check to record set.</p>
+          <p><strong>Step 7 — Write the runbook.</strong> Document the four-step failover runbook from section 7 — confirm impairment, verify readiness, flip controls, verify traffic moved — and note the readiness check cadence as the detection latency. This lab produces a working readiness check and a runbook; the routing control is deliberately minimal because the full failover exercise belongs in a Game Day, which is the subject of Day 34's material and a natural follow-on here.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="quiz">
         <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
-        
+
       <div class="scenario-card">
         <p class="scenario-question"><strong>Q1.</strong> A critical financial system needs failover control that itself won't fail if an entire AWS region goes down, plus proof the standby region is actually ready to serve traffic.</p>
-        <div class="scenario-options" id="opts-d37q0">
+        <div class="scenario-options" id="opts-d37q1">
             <div class="scenario-option">A. Route 53 simple health-check failover only</div>
             <div class="scenario-option">B. Route 53 Application Recovery Controller (readiness checks + a highly available routing control cluster)</div>
             <div class="scenario-option">C. CloudWatch Alarms triggering a Lambda failover</div>
             <div class="scenario-option">D. Global Accelerator alone</div>
         </div>
-        <button class="scenario-reveal-btn" onclick="revealAnswer('d37q0', 1)">Reveal Answer</button>
-        <div class="scenario-explanation" id="exp-d37q0"><strong>Correct answer: B.</strong> ARC's routing control cluster is deliberately distributed across regions/partitions for resilience of the failover mechanism itself, and readiness checks validate standby capacity before you rely on it.</div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d37q1', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d37q1"><strong>Correct answer: B.</strong> ARC's routing control cluster is deliberately distributed across regions for resilience of the failover mechanism itself, and readiness checks validate standby capacity before you rely on it.</div>
       </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q2.</strong> An operator flips a routing control from On to Off during an incident, sees the state change confirmed in the console, but traffic continues to reach the primary region. What is the most likely cause?</p>
+        <div class="scenario-options" id="opts-d37q2">
+            <div class="scenario-option">A. ARC routing controls take up to 30 minutes to propagate</div>
+            <div class="scenario-option">B. The routing control's associated health check is not the one referenced by the Route 53 record set, so the state change has no effect on DNS answers</div>
+            <div class="scenario-option">C. The cluster needs to be recreated in the standby region</div>
+            <div class="scenario-option">D. Route 53 does not support health checks on failover records</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d37q2', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d37q2"><strong>Correct answer: B.</strong> This is the silent wiring failure: the routing control drives a health check, and that health check must be the one the record set consults. Trace the chain routing control &rarr; health check &rarr; record set.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q3.</strong> A team has a warm standby in a second region and wants continuous, automated evidence that the standby has enough running capacity to absorb production traffic. Which ARC capability addresses this?</p>
+        <div class="scenario-options" id="opts-d37q3">
+            <div class="scenario-option">A. Routing controls</div>
+            <div class="scenario-option">B. Readiness checks, which continuously assert that a resource such as an Auto Scaling group is in the required state</div>
+            <div class="scenario-option">C. Safety rules</div>
+            <div class="scenario-option">D. Route 53 health checks on the standby load balancer</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d37q3', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d37q3"><strong>Correct answer: B.</strong> Readiness checks answer "is this resource in the state required to serve if called upon," which is distinct from a health check's "is this endpoint currently serving."</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q4.</strong> A regulated workload requires that every failover event be attributable to a named operator and retained for audit. Which property of ARC supports this?</p>
+        <div class="scenario-options" id="opts-d37q4">
+            <div class="scenario-option">A. ARC encrypts all DNS queries</div>
+            <div class="scenario-option">B. Routing control state changes are logged and attributable, giving an audit trail that plain Route 53 health checks do not provide</div>
+            <div class="scenario-option">C. ARC stores failover events in S3 Glacier automatically</div>
+            <div class="scenario-option">D. ARC requires MFA for all API calls</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d37q4', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d37q4"><strong>Correct answer: B.</strong> The auditability of routing control state changes is one of the three requirements that justify ARC over plain health checks, alongside surviving a regional outage and readiness validation.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q5.</strong> A scenario requires traffic to move to a healthy region within seconds, and explicitly notes that client-side DNS caching has caused problems in the past. Which service fits?</p>
+        <div class="scenario-options" id="opts-d37q5">
+            <div class="scenario-option">A. Route 53 ARC routing controls</div>
+            <div class="scenario-option">B. AWS Global Accelerator, which uses static anycast IPs and reroutes at the AWS network edge independent of DNS</div>
+            <div class="scenario-option">C. Route 53 failover routing with a 30-second TTL</div>
+            <div class="scenario-option">D. A CloudWatch alarm that updates the record set</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d37q5', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d37q5"><strong>Correct answer: B.</strong> ARC drives DNS and is therefore subject to TTLs and client caching. Global Accelerator operates at the network layer and is the answer when DNS caching is the stated problem.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q6.</strong> During a high-stress failover, an operator accidentally turns off every routing control in a control panel, black-holing all traffic. Which ARC feature prevents this class of error?</p>
+        <div class="scenario-options" id="opts-d37q6">
+            <div class="scenario-option">A. Readiness checks</div>
+            <div class="scenario-option">B. Safety rules, which assert that an unsafe combination of routing control states cannot occur</div>
+            <div class="scenario-option">C. Cluster endpoints</div>
+            <div class="scenario-option">D. Route 53 health check failover thresholds</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d37q6', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d37q6"><strong>Correct answer: B.</strong> Safety rules encode assertions such as "at least one routing control must remain On," which is the purpose-built guard against human error during failover.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q7.</strong> How many endpoints does an ARC cluster provide, and why does the number matter for automation design?</p>
+        <div class="scenario-options" id="opts-d37q7">
+            <div class="scenario-option">A. One endpoint per region you configure, so you choose the count</div>
+            <div class="scenario-option">B. Five endpoints distributed across five regions, so automation should try multiple endpoints rather than hard-coding one</div>
+            <div class="scenario-option">C. Two endpoints, one per availability zone in the primary region</div>
+            <div class="scenario-option">D. A single global endpoint with automatic failover</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d37q7', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d37q7"><strong>Correct answer: B.</strong> The five-endpoint, five-region design is the mechanism that lets the control plane survive a regional outage; automation that hard-codes one endpoint defeats it.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q8.</strong> A readiness check on a standby Auto Scaling group flaps between ready and not-ready throughout the day, and operators have started ignoring its alerts. What is the most likely cause?</p>
+        <div class="scenario-options" id="opts-d37q8">
+            <div class="scenario-option">A. ARC readiness checks are inherently unreliable</div>
+            <div class="scenario-option">B. The check asserts a property that varies during normal operation, such as exact instance counts during autoscaling</div>
+            <div class="scenario-option">C. The cluster has too few endpoints</div>
+            <div class="scenario-option">D. The standby region is too far from the primary</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d37q8', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d37q8"><strong>Correct answer: B.</strong> Readiness checks should assert the property that determines whether the cell can serve traffic, not a property that fluctuates normally. Flapping trains operators to ignore the signal.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q9.</strong> A team wants failover to occur automatically when the primary region's health degrades, with no human approval step. Which ARC configuration supports this?</p>
+        <div class="scenario-options" id="opts-d37q9">
+            <div class="scenario-option">A. Manual routing control flipping through the console</div>
+            <div class="scenario-option">B. Programmatic routing control changes via the ARC data plane API, driven by automated detection</div>
+            <div class="scenario-option">C. Readiness checks alone</div>
+            <div class="scenario-option">D. Safety rules alone</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d37q9', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d37q9"><strong>Correct answer: B.</strong> Routing controls can be flipped manually or programmatically; the programmatic path is what removes the human from the loop when the requirement is automated failover.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q10.</strong> A scenario asks how to keep a standby region's relational data within seconds of the primary. Which service answers that question, and how does it relate to ARC?</p>
+        <div class="scenario-options" id="opts-d37q10">
+            <div class="scenario-option">A. ARC, because it replicates data as part of the cluster</div>
+            <div class="scenario-option">B. Aurora Global Database for replication, with ARC deciding when to send traffic to the standby — they are complementary, not alternatives</div>
+            <div class="scenario-option">C. Route 53 health checks, because they monitor replication lag</div>
+            <div class="scenario-option">D. Global Accelerator, because it replicates data at the edge</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d37q10', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d37q10"><strong>Correct answer: B.</strong> ARC does not replicate data. Data-layer replication and failover control are separate halves of a multi-region design, and the exam tests whether you can tell which half a question is describing.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q11.</strong> A workload has a four-hour RTO, is not regulated, and its business owner is comfortable with occasional manual intervention. Should the team adopt ARC?</p>
+        <div class="scenario-options" id="opts-d37q11">
+            <div class="scenario-option">A. Yes, ARC is a best practice for all multi-region workloads</div>
+            <div class="scenario-option">B. No — plain Route 53 health checks with failover routing are sufficient, and ARC's operational cost buys nothing at this RTO</div>
+            <div class="scenario-option">C. Yes, but only the readiness checks</div>
+            <div class="scenario-option">D. No, because ARC only supports active-active designs</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d37q11', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d37q11"><strong>Correct answer: B.</strong> ARC is justified when the failover decision itself is critical infrastructure. A tolerant RTO with no audit or readiness requirement does not cross that line.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q12.</strong> A team's failover runbook says "flip the routing controls and confirm the console shows the new state." What critical verification step is missing?</p>
+        <div class="scenario-options" id="opts-d37q12">
+            <div class="scenario-option">A. Confirming the cluster has five endpoints</div>
+            <div class="scenario-option">B. Confirming traffic actually moved by checking the Route 53 record set's returned answers, rather than trusting the console state</div>
+            <div class="scenario-option">C. Confirming the readiness checks are disabled</div>
+            <div class="scenario-option">D. Confirming the primary region is still healthy</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d37q12', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d37q12"><strong>Correct answer: B.</strong> Console state confirms the routing control flipped, not that DNS answers changed. Verifying the record set's returned answers is what catches the silent wiring failure.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q13.</strong> Which statement correctly describes the relationship between ARC routing controls and Route 53 health checks?</p>
+        <div class="scenario-options" id="opts-d37q13">
+            <div class="scenario-option">A. Routing controls replace health checks entirely</div>
+            <div class="scenario-option">B. Routing controls drive health check state — On reports healthy, Off reports unhealthy — and Route 53's existing routing logic consumes that signal</div>
+            <div class="scenario-option">C. Health checks drive routing controls, which then update record sets directly</div>
+            <div class="scenario-option">D. They are independent and must be kept in sync manually</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d37q13', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d37q13"><strong>Correct answer: B.</strong> ARC feeds Route 53's routing logic rather than replacing it. The routing control is the authoritative source of the health signal that drives the record set.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q14.</strong> A standby Auto Scaling group was correctly sized at deployment but had its desired capacity reduced months later during a cost review. Which ARC capability would have surfaced this, and what is the operational lesson?</p>
+        <div class="scenario-options" id="opts-d37q14">
+            <div class="scenario-option">A. Routing controls; the lesson is to flip them regularly</div>
+            <div class="scenario-option">B. Readiness checks; the lesson is that their state must be surfaced somewhere a human or automation actually looks, or drift goes unnoticed</div>
+            <div class="scenario-option">C. Safety rules; the lesson is to add more of them</div>
+            <div class="scenario-option">D. Cluster endpoints; the lesson is to use all five</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d37q14', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d37q14"><strong>Correct answer: B.</strong> Readiness checks detect the drift, but only if their state is monitored. An unmonitored readiness check is a false sense of security.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q15.</strong> A scenario describes a mission-critical system that needs both sub-second network-layer failover and an auditable, readiness-validated failover control plane. What is the correct architectural answer?</p>
+        <div class="scenario-options" id="opts-d37q15">
+            <div class="scenario-option">A. ARC alone, since it covers both requirements</div>
+            <div class="scenario-option">B. Global Accelerator alone, since it covers both requirements</div>
+            <div class="scenario-option">C. Both — Global Accelerator for network-layer traffic steering and ARC for the auditable, readiness-validated failover decision</div>
+            <div class="scenario-option">D. Neither; use a CloudWatch alarm with a Lambda function</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d37q15', 2)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d37q15"><strong>Correct answer: C.</strong> The two services operate at different layers and are complementary. Global Accelerator handles the network-layer movement; ARC handles the decision, its availability, and its audit trail.</div>
+      </div>
+      </section>
+
+      <section class="doc-section" id="preview">
+        <h2 class="section-heading">Peek into Tomorrow</h2>
+        <div class="card card-purple">
+          <p>Everything in this day assumed that the health check driving your failover is a binary signal: healthy or unhealthy, and the routing policy does the rest. That assumption is doing a lot of work, and it is worth asking what happens when the routing decision is not binary at all. If you want to send five percent of traffic to a canary before committing, or route each user to the region with the lowest measured latency for them, or return several healthy answers and let the client pick, you are no longer in the world of a single failover switch. You are choosing among routing policies, and each one has its own interaction with health checks — including the question of what happens to a weighted record when its health check goes red, and whether the weight is redistributed or simply dropped.</p>
+          <p>The unresolved question ARC leaves behind is how the health signal it produces is actually consumed. ARC gives you a reliable, auditable way to declare an endpoint unhealthy; it does not tell you what Route 53 should do with that declaration. Weighted routing for canary and A/B deployments, latency-based routing, geoproximity with bias, and multi-value answer routing each interpret health differently, and getting the policy wrong can mean a failover that technically fires but sends traffic somewhere you did not intend. Tomorrow's material is about those policies and the health check semantics underneath them — the layer where ARC's carefully produced signal either does what you expect or quietly does something else.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="sources">
+        <h2 class="section-heading">Sources</h2>
+        <div class="card">
+          <ul class="source-list">
+            <li><a href="https://docs.aws.amazon.com/r53recovery/latest/dg/what-is-route53-recovery.html" target="_blank" rel="noopener">AWS docs — What is Amazon Route 53 Application Recovery Controller?</a></li>
+            <li><a href="https://docs.aws.amazon.com/r53recovery/latest/dg/routing-control.html" target="_blank" rel="noopener">AWS docs — Routing control in ARC</a></li>
+            <li><a href="https://docs.aws.amazon.com/r53recovery/latest/dg/recovery-readiness.html" target="_blank" rel="noopener">AWS docs — Readiness checks in ARC</a></li>
+            <li><a href="https://docs.aws.amazon.com/r53recovery/latest/dg/getting-started.html" target="_blank" rel="noopener">AWS docs — Getting started with ARC</a></li>
+            <li><a href="https://docs.aws.amazon.com/r53recovery/latest/dg/security-iam.html" target="_blank" rel="noopener">AWS docs — Identity and access management for ARC</a></li>
+            <li><a href="https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/dns-failover.html" target="_blank" rel="noopener">AWS docs — Configuring DNS failover in Route 53</a></li>
+            <li><a href="https://docs.aws.amazon.com/global-accelerator/latest/dg/what-is-global-accelerator.html" target="_blank" rel="noopener">AWS docs — What is AWS Global Accelerator?</a></li>
+            <li><a href="https://docs.aws.amazon.com/wellarchitected/latest/reliability-pillar/welcome.html" target="_blank" rel="noopener">AWS Well-Architected Framework — Reliability Pillar</a></li>
+          </ul>
+        </div>
       </section>
       <div class="day-nav">
         <a href="day-036.html">&larr; Day 36: Multi-Region Active-Passive &amp; Pilot Light Patterns</a>

@@ -104,37 +104,365 @@
         <span class="pill pill-green">Phase 4: Migration, Hybrid &amp; Cost Optimization</span>
       </div>
       <h1 class="hero-title">AWS DataSync — Hybrid File &amp; Object Transfer</h1>
-      <div class="reading-meta">&#128337; ~3 min read &middot; 2 services covered</div>
+      <div class="reading-meta">&#128337; ~58 min read &middot; 2 services covered</div>
       <div class="services-grid">
         <span class="service-tag">AWS DataSync</span>
         <span class="service-tag">NFS/SMB/HDFS</span>
       </div>
       <div id="tracker"></div>
-      <section class="doc-section">
-        <h2 class="section-heading">Today's Concept</h2>
+
+      <section class="doc-section" id="recap">
+        <h2 class="section-heading">Recap: Where We Left Off</h2>
         <div class="card card-accent">
-          <p>DataSync automates and accelerates online transfer of files/objects between on-prem storage (NFS, SMB, HDFS, self-managed object storage) and AWS storage (S3, EFS, FSx), with built-in scheduling, encryption, bandwidth throttling, and data integrity validation — unlike DMS, it is not database-aware.</p>
-        </div>
-        <h3 class="sub-heading">Hands-on Lab / Practical Action (45 min)</h3>
-        <div class="card">
-          <p>Configure a DataSync task migrating an on-prem NFS share to S3 on a nightly schedule with bandwidth throttling to protect production network capacity.</p>
+          <p>Day 46 ended on a number that is easy to misread: the conversion-completeness percentage that SCT reports after analyzing a heterogeneous migration. A 95% figure sounds like a green light, but it only describes schema objects — tables, views, and the simpler stored procedures and functions that SCT could translate mechanically from Oracle to Aurora PostgreSQL. The remaining 5% is where the actual engineering lives, because it is almost always the procedural logic with vendor-specific semantics that no automated tool can safely rewrite. The lesson was that SCT handles schema and DMS handles data, and neither one removes the need for a developer to read the conversion action report line by line.</p>
+          <p>Today's service contrasts with that framing in a way worth naming explicitly. DataSync is not a database tool at all, and it has no concept of schema, rows, or transactions. It moves files and objects — bytes on a filesystem — and it does so with a completely different set of guarantees: integrity verification per file, incremental change detection by metadata, and scheduling that assumes the source keeps running throughout. Where SCT and DMS ask "can this structure be translated," DataSync asks "has this file changed since the last run," and that shift in question changes every design decision that follows.</p>
         </div>
       </section>
-      <section class="doc-section">
-        <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
-        
-      <div class="scenario-card">
-        <p class="scenario-question"><strong>Q1.</strong> A company needs to continuously sync a large on-prem NFS file share into Amazon EFS, on a schedule, without writing custom scripts.</p>
-        <div class="scenario-options" id="opts-d47q0">
-            <div class="scenario-option">A. AWS DMS</div>
-            <div class="scenario-option">B. AWS DataSync</div>
+
+      <section class="doc-section" id="why-on-exam">
+        <h2 class="section-heading">1. Why DataSync Is on the Exam</h2>
+        <p>SAP-C02 tests migration and modernization as one of its four scored domains, and within that domain the exam repeatedly probes whether you can distinguish between tools that sound similar but operate at different layers. DataSync sits in a crowded neighborhood: DMS moves database rows, Storage Gateway presents cloud storage as an on-prem appliance, Snowball moves data physically, and DataSync moves files and objects over the network on a schedule. A scenario that says "nightly," "NFS share," "S3 bucket," or "EFS" is almost always pointing at DataSync, and a scenario that says "database," "CDC," or "replication instance" is almost never pointing at it.</p>
+        <p>The architectural problem DataSync solves is the ongoing, repeatable transfer of unstructured data between storage systems that do not share a protocol. An on-premises NFS server and an S3 bucket have no common language; there is no mount point that spans them and no native replication between them. Before DataSync, teams wrote rsync wrappers, cron jobs, and custom scripts that had to handle retries, partial transfers, checksum verification, credential rotation, and bandwidth contention with production traffic. DataSync replaces that entire category of homegrown tooling with a managed agent-and-service pair that handles scheduling, encryption in transit, integrity validation, and throttling as first-class configuration.</p>
+        <p>The exam relevance is less about memorizing the feature list and more about recognizing the boundary conditions. Questions tend to present a transfer requirement with a constraint attached — a bandwidth ceiling, a compliance requirement for encryption, a need to preserve POSIX metadata, a one-time versus recurring distinction — and then ask which service satisfies it. DataSync's answer is usually correct when the data is file or object data, the transfer is recurring or at least scriptable, and the network path exists. It is usually wrong when the data is a live database, when the volume is so large that the network is the bottleneck, or when the on-premises application needs to keep reading and writing the same data through a local interface.</p>
+        <p>There is also a governance dimension that shows up in multi-account scenarios. DataSync tasks run in a specific account and region, write to a specific destination, and assume an IAM role to do it. In an organization with a central data-lake account and dozens of source accounts, the placement of the DataSync task, the location of the agent, and the cross-account role trust policy all become design decisions. The exam does not usually ask you to write the trust policy, but it does ask you to identify where the task should live and which account owns the destination bucket.</p>
+      </section>
+
+      <section class="doc-section" id="mechanism">
+        <h2 class="section-heading">2. How DataSync Actually Works</h2>
+        <p>A DataSync transfer is executed by an agent, and the agent is the piece most people gloss over. For on-premises sources, you deploy a DataSync agent as a virtual appliance — an Amazon-provided AMI you run on VMware, KVM, or Hyper-V, or an EC2 instance if the source is already in AWS. The agent is not a passive proxy; it is the component that speaks NFS, SMB, or HDFS to the source, reads file metadata, computes checksums, and opens an encrypted connection to the DataSync service endpoint. The service itself orchestrates the task, tracks what has been transferred, and writes to the destination on the agent's behalf. This split matters because it determines where your bandwidth is consumed and where your credentials live.</p>
+        <p>The transfer model is incremental by default, and the mechanism is metadata comparison rather than content hashing on every run. On each task execution, the agent enumerates the source location and compares each object's size and modification timestamp against the record of what was previously transferred. Files that match are skipped entirely; files that differ are read and sent. This is why DataSync is efficient on large trees with small daily deltas, and also why it can miss a change that preserves both size and mtime — a real edge case that shows up when applications rewrite files in place without updating timestamps. For the files it does transfer, DataSync verifies integrity end to end, computing checksums at the source and validating them after the write at the destination.</p>
+        <p>Destination handling differs by target type, and the difference is not cosmetic. When the destination is S3, DataSync writes objects and can preserve metadata as S3 object metadata or tags, and it can be configured to write to a specific storage class or to use a prefix. When the destination is EFS or FSx for Windows File Server, DataSync preserves POSIX permissions, ownership, and timestamps so the transferred tree behaves like a native filesystem. When the destination is FSx for Lustre or an FSx for ONTAP volume, the semantics shift again. The practical consequence is that "DataSync to S3" and "DataSync to EFS" are not interchangeable configurations with a different endpoint — they produce different fidelity, and a scenario that requires preserved permissions is implicitly ruling out a plain S3 destination.</p>
+        <p>Task execution is scheduled, and the schedule is expressed as a cron-style expression evaluated in UTC. A task can also be invoked manually or triggered by an EventBridge rule, which is how teams chain a DataSync run into a broader pipeline — for example, kicking off a Glue crawler after a nightly transfer completes. Each execution produces a task execution record with per-file status, bytes transferred, and error detail, and those records are the primary observability surface. The agent maintains a local queue and cache, so a brief network interruption does not necessarily fail the run; it retries, and the task execution report reflects what ultimately succeeded.</p>
+      </section>
+
+      <section class="doc-section" id="decision-boundary">
+        <h2 class="section-heading">3. The Core Decision Boundary: Online Transfer vs. Everything Else</h2>
+        <p>The single fork that most DataSync scenario questions hinge on is whether the data can move over the network at all, and if so, whether the transfer is a one-time bulk move or a recurring synchronization. DataSync is designed for the recurring case and is perfectly capable of the one-time case, but it is not designed for the case where the network is the bottleneck. That distinction — network-feasible versus network-infeasible — is the boundary the exam tests, and it is usually expressed as a data volume plus an available bandwidth figure that you are expected to reason about qualitatively rather than calculate precisely.</p>
+        <p>The second fork, once you have established that the network is viable, is whether the source is a filesystem or a database. This is where DataSync and DMS get confused, and the confusion is understandable because both are "migration services" with agents and tasks. The distinguishing question is what the unit of transfer is. If the unit is a file, a directory tree, or an object, DataSync is the answer. If the unit is a row, a table, or a transaction log record, DMS is the answer, and DataSync cannot help you because it has no protocol for reading a database's internal structures. A scenario describing an Oracle database migration is never a DataSync scenario, no matter how the rest of the sentence is phrased.</p>
+        <p>The third fork is destination fidelity. If the requirement mentions preserving permissions, ownership, or POSIX metadata, the destination must be a filesystem target — EFS or FSx — and the S3 option is eliminated. If the requirement mentions lifecycle policies, storage classes, or object-level access control, the destination is S3 and filesystem fidelity is not in play. This fork is easy to miss because both answers are "DataSync," so the question is really testing whether you read the fidelity requirement.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Requirement signal</th><th>DataSync fits?</th><th>Better fit</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Recurring nightly sync of an NFS share to S3</td><td>Yes — core use case</td><td>—</td></tr>
+              <tr><td>One-time 500 TB move, 100 Mbps link</td><td>Technically yes, practically no</td><td>Snowball Edge</td></tr>
+              <tr><td>Live Oracle database to Aurora PostgreSQL</td><td>No — not database-aware</td><td>DMS + SCT</td></tr>
+              <tr><td>On-prem app must keep reading/writing the same files locally</td><td>No — DataSync copies, it does not present</td><td>Storage Gateway File Gateway</td></tr>
+              <tr><td>Preserve POSIX ownership into a shared filesystem</td><td>Yes, with EFS/FSx destination</td><td>—</td></tr>
+              <tr><td>Continuous bidirectional sync between two file systems</td><td>No — one-directional task</td><td>Storage Gateway or custom replication</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="doc-section" id="config-tradeoffs">
+        <h2 class="section-heading">4. Configuration Modes and Their Tradeoffs</h2>
+        <p>Once you have decided DataSync is the right tool, the configuration choices determine what the transfer actually costs you in bandwidth, time, and operational risk. The first and most consequential knob is the task mode: you can transfer only the data, or you can transfer data plus metadata. Data-only mode is faster and cheaper because it skips the metadata enumeration and write, but it produces a destination tree with default ownership and permissions. Data-plus-metadata mode preserves the source's POSIX attributes and is the correct choice whenever the destination is a filesystem that will be mounted and used by applications. Choosing data-only against an EFS destination is a common mistake that produces a tree nobody can write to.</p>
+        <p>The second knob is bandwidth throttling, and it exists because DataSync will otherwise saturate whatever link it is given. A task can be configured with a maximum bandwidth in megabytes per second, and that ceiling applies to the agent's outbound transfer. In a production environment where the same WAN circuit carries user traffic, an unthrottled nightly DataSync run is a self-inflicted outage. The tradeoff is straightforward: throttling protects production latency at the cost of a longer transfer window, and the correct value is derived from the circuit's headroom during the scheduled window rather than from the agent's capability. Teams that skip this step usually discover it the first time a nightly sync overlaps with a morning business-hours spike.</p>
+        <p>The third knob is verification and overwrite behavior. DataSync verifies integrity by default, but you can configure how it handles files that exist at the destination — whether to overwrite, skip, or compare. The default behavior of comparing size and modification time is efficient but, as noted earlier, can miss in-place rewrites that preserve both. For workloads where that risk is unacceptable, the alternative is to force a full comparison, which costs significantly more time on large trees. This is a genuine tradeoff between transfer duration and correctness confidence, and the exam occasionally presents it as a scenario where a file "was not picked up" despite existing on both sides.</p>
+        <p>The fourth knob is the schedule itself, and it interacts with everything above. A cron expression in UTC determines when the task runs, and the duration of the run determines whether consecutive executions overlap. DataSync does not run two executions of the same task concurrently; a second execution queues behind the first. If your throttled transfer takes longer than the interval between scheduled runs, you have effectively built a continuous transfer with no gap, which may be fine or may indicate the schedule needs to be less frequent. The interaction between throttle, dataset size, and schedule interval is the most common source of "why is my sync always running" confusion.</p>
+      </section>
+
+      <section class="doc-section" id="sizing-limits">
+        <h2 class="section-heading">5. Sizing, Limits, and Quotas</h2>
+        <p>DataSync's sizing story starts with the agent, because the agent is the throughput ceiling for on-premises transfers. AWS publishes agent sizing guidance that maps the number of CPUs and amount of RAM to the achievable throughput, and the practical takeaway is that a small agent VM will cap your transfer rate regardless of how much bandwidth you have. The agent also needs local disk for its queue and cache, and that disk must be sized for the largest single file being transferred plus working space. An agent that runs out of local disk fails mid-transfer, and the failure surfaces as a task execution error rather than a clean capacity warning.</p>
+        <p>On the service side, DataSync enforces quotas on the number of tasks, the number of agents, and the number of concurrent task executions per account and region. These are soft limits in the sense that they can be raised through a support request, but they are real limits that a large migration program will hit. A program moving data from fifty on-premises sites will need to think about how many agents it deploys, where they sit, and whether the task count per region is sufficient. The exam does not typically ask for the exact quota numbers, but it does test the awareness that quotas exist and that they are per-region.</p>
+        <p>File-level limits matter for the edge cases. DataSync has a maximum file size it will transfer, and files above that threshold are reported as skipped rather than silently truncated. There are also limits on the length of file paths and on the characters permitted in object keys when the destination is S3, which means a source tree with unusual naming can produce partial transfers. The diagnostic pattern is consistent: a task execution report showing a nonzero skipped count with a reason code, and the fix is either to rename the offending files or to handle them out of band.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Dimension</th><th>What to check</th><th>Failure symptom if wrong</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Agent vCPU / RAM</td><td>Match to target throughput per AWS sizing guidance</td><td>Transfer plateaus well below link capacity</td></tr>
+              <tr><td>Agent local disk</td><td>Largest single file plus queue headroom</td><td>Task execution fails mid-run</td></tr>
+              <tr><td>Tasks per account/region</td><td>Quota vs. number of source locations</td><td>Cannot create additional tasks</td></tr>
+              <tr><td>Max file size</td><td>Compare against largest source file</td><td>Files reported skipped, not transferred</td></tr>
+              <tr><td>Path/key length and characters</td><td>Validate against S3 key rules</td><td>Partial transfer with per-file errors</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="doc-section" id="failure-modes">
+        <h2 class="section-heading">6. Failure Modes and What They Look Like in Production</h2>
+        <p>The most common production failure is not a crash — it is a silent shortfall. A task reports success, but the destination is missing files, or the byte count is lower than expected. The usual cause is the metadata-comparison behavior described earlier: a file whose size and modification time match the previous transfer is skipped, even if its contents changed. The symptom is a downstream consumer reading stale data while every DataSync dashboard shows green. The first diagnostic move is to compare the task execution's file counts against the source's actual file count, and the second is to check whether the application rewrites files in place without touching mtime.</p>
+        <p>The second failure class is agent connectivity. The agent maintains an outbound connection to the DataSync service endpoint, and if that path is blocked — by a firewall rule change, a proxy that does not support the required protocol, or a DNS resolution failure — the task fails at activation rather than mid-transfer. The symptom is a task that never starts, with an agent status of offline in the console. The first diagnostic move is to verify the agent's network path to the regional endpoint, and the second is to check whether the agent's activation credentials have expired or been rotated without updating the agent.</p>
+        <p>The third class is permission and credential failure at the destination. DataSync assumes an IAM role to write to S3, EFS, or FSx, and that role's policy must grant the specific actions the destination requires. A role that grants s3:PutObject but not s3:PutObjectTagging will fail on any task configured to write tags, and the error appears per-file in the execution report rather than as a task-level failure. The symptom is a partial transfer with a consistent error code across many files. The first diagnostic move is to read the execution report's error detail rather than the task-level status, because the task-level status may still read as completed with errors.</p>
+        <p>The fourth class is bandwidth contention, which is a failure of design rather than of the service. An unthrottled task that saturates a shared circuit will degrade every other workload on that circuit, and the symptom is user-facing latency that correlates with the transfer window. This is the failure mode that most often gets DataSync blamed for something it was configured to do. The first diagnostic move is to correlate the latency spike with the task schedule, and the fix is a bandwidth limit rather than a service change.</p>
+      </section>
+
+      <section class="doc-section" id="sre-angle">
+        <h2 class="section-heading">7. The Operational and SRE Angle</h2>
+        <p>DataSync emits CloudWatch metrics per task and per agent, and the ones that matter operationally are bytes transferred, files transferred, and the count of files skipped or failed. A useful alarm is not "task failed" — that is too coarse and too late — but a threshold on skipped files, because a nonzero skip count is the leading indicator of the silent-shortfall failure mode. Pair that with an alarm on agent status so that an offline agent pages before the next scheduled run rather than after it silently does nothing.</p>
+        <p>The SLO framing for a DataSync pipeline is freshness, not availability. The question a consumer of the destination data asks is "how old is the newest file," and that is a function of the schedule interval plus the transfer duration plus any retry delay. If the schedule is nightly and the transfer takes six hours, the effective freshness SLO is roughly a day, and no amount of monitoring changes that. Teams that need tighter freshness either shorten the interval, reduce the dataset with a narrower source path, or move to a streaming replication pattern instead of a scheduled copy. Recognizing that DataSync is a batch tool with batch freshness characteristics is the key architectural judgment here.</p>
+        <p>The runbook shape follows from the failure modes. A first-response runbook for a DataSync pipeline should start with the task execution report, not the console's task status, because the report is where per-file errors live. From there the branches are: agent offline (network path or activation), permission errors (role policy), skipped files (metadata comparison or size limits), and slow transfers (throttle or agent sizing). Each branch has a distinct fix, and the runbook's value is in routing to the right branch quickly rather than in prescribing a single remedy.</p>
+        <p>Finally, there is a change-management angle that is easy to overlook. DataSync tasks are configuration, and configuration drift between environments is a real source of incidents — a task that works in staging because it was created with data-plus-metadata mode and fails in production because it was created data-only. Treating task definitions as code, whether through CloudFormation or a Terraform provider, removes that class of drift and makes the task's behavior reviewable in a pull request rather than discoverable in an incident.</p>
+      </section>
+
+      <section class="doc-section" id="gotchas">
+        <h2 class="section-heading">8. Edge Cases and Exam Gotchas</h2>
+        <p>The first gotcha is the one already emphasized: DataSync is not database-aware. Any scenario that mentions tables, rows, schemas, or transaction logs is a DMS scenario, and the presence of the word "migration" does not change that. The exam will sometimes dress a database migration in file-transfer language — "move the application's data to AWS" — and the tell is whether the source is described as a database engine or as a filesystem.</p>
+        <p>The second gotcha is the distinction between copying and presenting. DataSync copies data from a source to a destination; it does not make the destination appear as a local filesystem to the source application. If the requirement is that an on-premises application continues to read and write the same files through a local mount while the data lives in AWS, that is Storage Gateway's File Gateway, not DataSync. The two are frequently confused because both involve NFS or SMB and both involve S3, but the direction of the abstraction is opposite.</p>
+        <p>The third gotcha is the one-time versus recurring framing. DataSync can absolutely perform a one-time transfer, and for moderate volumes over an adequate link it is a reasonable choice. But when a scenario gives you a very large dataset and a constrained link, the expected answer is a physical transfer device, and DataSync is the distractor. The reasoning is that DataSync's advantages — incremental sync, scheduling, integrity validation — are irrelevant to a one-time bulk move, while its disadvantage — dependence on the network — is decisive.</p>
+        <p>The fourth gotcha is metadata fidelity. If the scenario requires preserved permissions or ownership, the destination must be a filesystem target and the task must run in data-plus-metadata mode. If the scenario requires object-level features like storage classes or lifecycle transitions, the destination is S3 and metadata fidelity is not available. Reading which of these the scenario actually requires is the whole question.</p>
+        <p>The fifth gotcha is the agent's role in throughput. A scenario that describes a transfer running far slower than the available bandwidth suggests is usually an agent sizing problem, not a service limit. The exam may present this as "the transfer is slower than expected" with several plausible causes, and the correct answer is the one that addresses the agent's compute or disk rather than the network.</p>
+      </section>
+
+      <section class="doc-section" id="vs-comparison">
+        <h2 class="section-heading">9. DataSync vs. the Services It Gets Confused With</h2>
+        <p>The comparison that matters most is against DMS, because both are migration services with agents and both appear in the same exam domain. The clean separation is the unit of transfer: files and objects for DataSync, rows and transactions for DMS. A secondary separation is the notion of ongoing change capture. DMS has CDC, which reads a database's transaction log to capture changes as they happen; DataSync has incremental sync, which compares file metadata between scheduled runs. CDC is continuous and log-based; incremental sync is periodic and metadata-based. A scenario requiring near-real-time replication of database changes is a DMS CDC scenario, and a scenario requiring a nightly refresh of a file share is a DataSync scenario.</p>
+        <p>The comparison against Storage Gateway is about direction and persistence. Storage Gateway presents AWS storage to an on-premises application as a local interface — a file share, a block device, or a tape library — and caches data locally for low-latency access. DataSync moves data from a source to a destination and then stops; there is no local presentation and no ongoing read path. If the on-premises application needs to keep using the data through a familiar interface, Storage Gateway is the answer. If the data simply needs to end up in AWS on a schedule, DataSync is the answer.</p>
+        <p>The comparison against the Snow Family is about whether the network is viable. Snowball Edge and its siblings exist precisely for the case where moving the data over the network would take longer than the business can tolerate. The decision is a function of dataset size and available bandwidth, and the exam usually gives you enough of both to make the call qualitatively. DataSync is the right answer when the network can carry the data in an acceptable window; Snowball is the right answer when it cannot.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Service</th><th>Unit of transfer</th><th>Ongoing behavior</th><th>Pick it when…</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>AWS DataSync</td><td>Files and objects</td><td>Scheduled incremental sync</td><td>Recurring file/object transfer over a viable network</td></tr>
+              <tr><td>AWS DMS</td><td>Rows and transactions</td><td>Continuous CDC from a database log</td><td>The source is a database engine</td></tr>
+              <tr><td>Storage Gateway</td><td>File, block, or tape presented locally</td><td>Ongoing local read/write with cloud backing</td><td>The on-prem app must keep using the data locally</td></tr>
+              <tr><td>Snowball Edge</td><td>Physical device</td><td>One-time bulk shipment</td><td>The network cannot carry the volume in time</td></tr>
+              <tr><td>S3 Transfer Acceleration</td><td>Objects over the public internet</td><td>Per-request accelerated upload</td><td>Client-side uploads from distributed locations</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="doc-section" id="lab">
+        <h2 class="section-heading">Hands-On Lab: Nightly NFS-to-S3 Sync with Bandwidth Throttling</h2>
+        <div class="card card-green">
+          <p><strong>Objective.</strong> Configure a DataSync task that migrates an on-premises NFS share to S3 on a nightly schedule, with bandwidth throttling that protects production network capacity, and verify the transfer's integrity and incremental behavior across two runs.</p>
+          <p><strong>Prerequisites.</strong> An NFS server reachable from the agent's network, an S3 bucket in the target region, an IAM role DataSync can assume with permission to write to that bucket, and a DataSync agent deployed as a VM or EC2 instance with network access to both the NFS server and the DataSync service endpoint.</p>
+          <ol>
+            <li><strong>Deploy and activate the agent.</strong> Launch the DataSync agent AMI on your hypervisor or as an EC2 instance. Size it according to AWS's agent sizing guidance for your target throughput — undersizing here caps the transfer regardless of link capacity. Activate the agent from the DataSync console, which establishes the outbound connection to the service endpoint and registers the agent in your account and region.</li>
+            <li><strong>Create the source location.</strong> In the DataSync console, create an NFS location pointing at the server's hostname or IP and the exported path. If the export requires authentication, supply the credentials. Confirm the agent can reach the export by letting the console validate the location before saving.</li>
+            <li><strong>Create the destination location.</strong> Create an S3 location for the target bucket, specifying the IAM role DataSync will assume. If you intend to preserve metadata as object tags, confirm the role's policy includes the tagging actions — a role that grants only PutObject will fail on tagged writes.</li>
+            <li><strong>Create the task with data-plus-metadata mode.</strong> Choose the transfer mode that includes metadata so the destination reflects the source's attributes. Select the source and destination locations, and set the task to verify integrity. Leave the overwrite behavior at its default comparison setting for this first run.</li>
+            <li><strong>Set the bandwidth limit.</strong> Determine the headroom on the circuit during the intended transfer window and set the task's bandwidth limit below that figure. This is the step that prevents the transfer from degrading production traffic; a value derived from the circuit's spare capacity is the correct one, not the agent's maximum.</li>
+            <li><strong>Configure the schedule.</strong> Set a cron expression in UTC for the nightly window. Confirm that the expected transfer duration, given the throttle, fits comfortably inside the interval between runs so that executions do not queue back to back.</li>
+            <li><strong>Run the task manually and inspect the execution report.</strong> Trigger the first execution by hand. When it completes, open the task execution report and record bytes transferred, files transferred, and files skipped. A nonzero skip count on a first run usually indicates files exceeding the size limit or paths that violate S3 key rules.</li>
+            <li><strong>Verify integrity at the destination.</strong> Compare a sample of files between source and destination, checking size and, where the destination is a filesystem, permissions and ownership. For an S3 destination, confirm that any configured metadata or tags were written.</li>
+            <li><strong>Run a second execution and confirm incrementality.</strong> Without changing the source, run the task again. The second execution should transfer little or nothing, demonstrating that the metadata comparison is skipping unchanged files. Record the byte count difference between the two runs.</li>
+            <li><strong>Introduce a change and observe the delta.</strong> Add a new file and modify an existing one at the source, then run the task a third time. Confirm that only the changed and new files are transferred, and that the modified file's new content arrives at the destination.</li>
+            <li><strong>Test the silent-shortfall case.</strong> Rewrite an existing file in place while preserving both its size and its modification timestamp, then run the task. Observe whether the change is picked up. This demonstrates the metadata-comparison limitation directly and is the reason some workloads need a forced full comparison.</li>
+            <li><strong>Wire up monitoring.</strong> Create a CloudWatch alarm on the task's skipped-file metric and another on agent status. Confirm that the alarms fire when you deliberately take the agent offline, and that they clear when it comes back.</li>
+          </ol>
+          <p><strong>Cleanup.</strong> Delete the task, both locations, and the agent. Terminate the agent instance or VM, and empty the destination bucket if it was created for this lab only.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="quiz">
+        <h2 class="section-heading">Scenario Question Drills</h2>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q1.</strong> A media company needs to synchronize a 40 TB on-premises NFS share into Amazon S3 every night, with the daily delta averaging 200 GB. The share is on a 1 Gbps circuit shared with office traffic. Which service and configuration fits?</p>
+          <div class="scenario-options" id="opts-d47q1">
+            <div class="scenario-option">A. AWS DMS with a replication instance sized for 1 Gbps</div>
+            <div class="scenario-option">B. AWS DataSync with a bandwidth limit set below the circuit's spare capacity</div>
+            <div class="scenario-option">C. AWS Snowball Edge scheduled weekly</div>
+            <div class="scenario-option">D. S3 Transfer Acceleration from the on-premises server</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d47q1', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d47q1"><strong>Correct answer: B.</strong> DataSync is built for recurring file-to-object sync, and the bandwidth limit is what prevents the nightly run from saturating a shared circuit. DMS is not database-aware here, Snowball is for network-infeasible volumes, and Transfer Acceleration addresses client uploads rather than scheduled server-side sync.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q2.</strong> A DataSync task reports a successful execution, but a downstream analytics job is reading stale records for several files that were modified yesterday. The files exist at both source and destination with identical sizes. What is the most likely cause?</p>
+          <div class="scenario-options" id="opts-d47q2">
+            <div class="scenario-option">A. The IAM role lacks s3:PutObject</div>
+            <div class="scenario-option">B. The agent ran out of local disk</div>
+            <div class="scenario-option">C. The files were rewritten in place preserving both size and modification time, so the metadata comparison skipped them</div>
+            <div class="scenario-option">D. The task's schedule is expressed in the wrong time zone</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d47q2', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d47q2"><strong>Correct answer: C.</strong> DataSync's incremental behavior compares size and modification timestamp. A file rewritten in place with both preserved looks unchanged and is skipped — the classic silent-shortfall failure mode.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q3.</strong> A team must migrate an on-premises Oracle database to Aurora PostgreSQL with minimal downtime. A colleague proposes DataSync because "it handles migrations." Why is this wrong?</p>
+          <div class="scenario-options" id="opts-d47q3">
+            <div class="scenario-option">A. DataSync cannot reach on-premises networks</div>
+            <div class="scenario-option">B. DataSync is not database-aware — it transfers files and objects, not rows or transaction logs</div>
+            <div class="scenario-option">C. DataSync only supports S3 destinations</div>
+            <div class="scenario-option">D. DataSync cannot be scheduled</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d47q3', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d47q3"><strong>Correct answer: B.</strong> DataSync's unit of transfer is a file or object. A database migration needs DMS for data movement and SCT for schema conversion; DataSync has no protocol for reading database internals.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q4.</strong> An on-premises application must continue reading and writing the same files through a local NFS mount, while the data is durably stored in S3. Which service addresses this requirement?</p>
+          <div class="scenario-options" id="opts-d47q4">
+            <div class="scenario-option">A. AWS DataSync with a nightly schedule</div>
+            <div class="scenario-option">B. AWS Storage Gateway File Gateway</div>
             <div class="scenario-option">C. AWS Snowball Edge</div>
-            <div class="scenario-option">D. AWS Storage Gateway File Gateway</div>
+            <div class="scenario-option">D. AWS DMS with an S3 target</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d47q4', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d47q4"><strong>Correct answer: B.</strong> DataSync copies data and stops; it does not present AWS storage as a local interface. File Gateway presents S3 as an NFS/SMB share with local caching, which is what an application needing ongoing local access requires.</div>
         </div>
-        <button class="scenario-reveal-btn" onclick="revealAnswer('d47q0', 1)">Reveal Answer</button>
-        <div class="scenario-explanation" id="exp-d47q0"><strong>Correct answer: B.</strong> DataSync is purpose-built for automated, scheduled, validated file/object transfer between on-prem file systems and AWS storage services like EFS, FSx, and S3.</div>
-      </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q5.</strong> A DataSync task transferring to EFS completes successfully, but application servers mounting the EFS filesystem cannot write to the transferred directories. What is the most likely configuration error?</p>
+          <div class="scenario-options" id="opts-d47q5">
+            <div class="scenario-option">A. The task was configured in data-only mode, so POSIX ownership and permissions were not preserved</div>
+            <div class="scenario-option">B. The EFS filesystem is in the wrong region</div>
+            <div class="scenario-option">C. The agent's local disk is too small</div>
+            <div class="scenario-option">D. The bandwidth limit is set too low</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d47q5', 0)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d47q5"><strong>Correct answer: A.</strong> Data-only mode skips metadata, producing a destination tree with default ownership and permissions. Filesystem destinations that will be mounted and used by applications require data-plus-metadata mode.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q6.</strong> A DataSync task never starts. The console shows the agent as offline. Which diagnostic step comes first?</p>
+          <div class="scenario-options" id="opts-d47q6">
+            <div class="scenario-option">A. Increase the task's bandwidth limit</div>
+            <div class="scenario-option">B. Verify the agent's network path to the DataSync service endpoint and check whether its activation credentials have expired</div>
+            <div class="scenario-option">C. Recreate the S3 destination location</div>
+            <div class="scenario-option">D. Change the task's schedule to run more frequently</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d47q6', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d47q6"><strong>Correct answer: B.</strong> An offline agent means the outbound connection to the service endpoint is broken — typically a firewall or proxy change, a DNS failure, or expired activation credentials. The task cannot start until the agent reconnects.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q7.</strong> A DataSync task to S3 fails on a subset of files with a consistent permission error, while other files transfer fine. The IAM role grants s3:PutObject. What is the most likely gap?</p>
+          <div class="scenario-options" id="opts-d47q7">
+            <div class="scenario-option">A. The agent needs more vCPUs</div>
+            <div class="scenario-option">B. The task is configured to write object tags or metadata, and the role lacks the corresponding tagging actions</div>
+            <div class="scenario-option">C. The S3 bucket is in a different account</div>
+            <div class="scenario-option">D. The schedule is invalid</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d47q7', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d47q7"><strong>Correct answer: B.</strong> A role granting only PutObject fails on any task configured to write tags or metadata. The error appears per-file in the execution report rather than as a task-level failure.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q8.</strong> A company must move 800 TB of archived files from a data center with a 200 Mbps uplink to S3, and the data center lease expires in three months. Which approach is appropriate?</p>
+          <div class="scenario-options" id="opts-d47q8">
+            <div class="scenario-option">A. AWS DataSync over the existing 200 Mbps link</div>
+            <div class="scenario-option">B. AWS Snowball Edge devices for the bulk transfer</div>
+            <div class="scenario-option">C. S3 Transfer Acceleration</div>
+            <div class="scenario-option">D. AWS Storage Gateway Volume Gateway</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d47q8', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d47q8"><strong>Correct answer: B.</strong> At 800 TB over a 200 Mbps link, the network is the bottleneck and the deadline is fixed. DataSync's incremental and scheduling advantages are irrelevant to a one-time bulk move; physical transfer is the expected answer.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q9.</strong> A DataSync transfer to S3 is running far slower than the available bandwidth would suggest. The agent VM has 2 vCPUs and 4 GB RAM. What is the most likely cause?</p>
+          <div class="scenario-options" id="opts-d47q9">
+            <div class="scenario-option">A. The S3 bucket is in the wrong storage class</div>
+            <div class="scenario-option">B. The agent is undersized relative to the target throughput</div>
+            <div class="scenario-option">C. The task's cron expression is invalid</div>
+            <div class="scenario-option">D. DataSync does not support NFS sources</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d47q9', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d47q9"><strong>Correct answer: B.</strong> The agent is the throughput ceiling for on-premises transfers. An undersized agent caps the transfer rate regardless of how much bandwidth is available.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q10.</strong> A team wants a DataSync task to run nightly and also trigger a Glue crawler immediately after each successful transfer. What is the appropriate mechanism?</p>
+          <div class="scenario-options" id="opts-d47q10">
+            <div class="scenario-option">A. Poll the DataSync API from a Lambda on a fixed timer</div>
+            <div class="scenario-option">B. Use an EventBridge rule that matches the task's state-change events and invokes the crawler</div>
+            <div class="scenario-option">C. Configure the crawler as a DataSync destination</div>
+            <div class="scenario-option">D. Add the crawler invocation to the task's cron expression</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d47q10', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d47q10"><strong>Correct answer: B.</strong> DataSync emits task state-change events that EventBridge can match, which is the standard way to chain a downstream step onto a completed transfer without polling.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q11.</strong> A DataSync task's execution report shows a nonzero skipped-file count with a reason code indicating files exceed the maximum supported size. What is the correct remediation?</p>
+          <div class="scenario-options" id="opts-d47q11">
+            <div class="scenario-option">A. Increase the agent's local disk</div>
+            <div class="scenario-option">B. Raise the task's bandwidth limit</div>
+            <div class="scenario-option">C. Handle the oversized files out of band, since DataSync reports rather than truncates them</div>
+            <div class="scenario-option">D. Change the destination to EFS</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d47q11', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d47q11"><strong>Correct answer: C.</strong> Files above the maximum size are reported as skipped rather than silently truncated. The fix is to transfer them by another means or restructure them, not to change agent or network settings.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q12.</strong> Which CloudWatch alarm is the most useful leading indicator that a DataSync pipeline is silently falling short of its freshness objective?</p>
+          <div class="scenario-options" id="opts-d47q12">
+            <div class="scenario-option">A. An alarm on task-level failure status</div>
+            <div class="scenario-option">B. An alarm on the count of files skipped during a task execution</div>
+            <div class="scenario-option">C. An alarm on the S3 bucket's object count</div>
+            <div class="scenario-option">D. An alarm on the agent's CPU utilization</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d47q12', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d47q12"><strong>Correct answer: B.</strong> Task-level failure status is too coarse and fires too late. A nonzero skip count is the leading indicator of the silent-shortfall failure mode, where the task reports success but the destination is stale.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q13.</strong> A DataSync task is scheduled nightly, but the console shows it running continuously with no gap between executions. The dataset is large and the task is throttled. What is the explanation?</p>
+          <div class="scenario-options" id="opts-d47q13">
+            <div class="scenario-option">A. DataSync runs multiple executions of the same task concurrently</div>
+            <div class="scenario-option">B. The throttled transfer duration exceeds the interval between scheduled runs, so each execution queues behind the last</div>
+            <div class="scenario-option">C. The agent is offline</div>
+            <div class="scenario-option">D. The destination bucket has versioning enabled</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d47q13', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d47q13"><strong>Correct answer: B.</strong> DataSync does not run two executions of the same task concurrently; a second execution queues. If the throttled run takes longer than the schedule interval, the task effectively runs continuously.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q14.</strong> A migration program is moving data from fifty on-premises sites into a central data-lake account. Which design consideration is most relevant to DataSync specifically?</p>
+          <div class="scenario-options" id="opts-d47q14">
+            <div class="scenario-option">A. DataSync cannot write to a bucket in another account</div>
+            <div class="scenario-option">B. Agent placement, per-region task quotas, and the cross-account role trust policy all become design decisions</div>
+            <div class="scenario-option">C. DataSync requires a Direct Connect connection</div>
+            <div class="scenario-option">D. DataSync tasks are global and not region-scoped</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d47q14', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d47q14"><strong>Correct answer: B.</strong> Tasks and agents are region-scoped and subject to per-region quotas, and cross-account writes depend on the assumed role's trust policy. At fifty sites, all three become real design constraints.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q15.</strong> A team needs near-real-time replication of changes from an on-premises MySQL database into Aurora. A colleague proposes DataSync with a five-minute schedule. Why is this the wrong tool?</p>
+          <div class="scenario-options" id="opts-d47q15">
+            <div class="scenario-option">A. DataSync cannot run more often than hourly</div>
+            <div class="scenario-option">B. DataSync is not database-aware and has no log-based change capture; DMS with CDC is the correct tool for continuous database replication</div>
+            <div class="scenario-option">C. DataSync cannot write to Aurora</div>
+            <div class="scenario-option">D. DataSync requires an S3 intermediate bucket</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d47q15', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d47q15"><strong>Correct answer: B.</strong> DataSync's incremental behavior is periodic metadata comparison over files, not continuous log-based change capture. Near-real-time database replication is a DMS CDC scenario.</div>
+        </div>
       </section>
+
+      <section class="doc-section" id="preview">
+        <h2 class="section-heading">Peek into Tomorrow</h2>
+        <div class="card card-purple">
+          <p>Everything in today's design assumed that the data's destination is the point — that the on-premises source is a place we are leaving, and the job is to get its contents into AWS and be done with it. That assumption holds for a nightly analytics feed, but it breaks the moment the on-premises application needs to keep using the data through a familiar interface. A file server that must remain a file server, a database that must keep seeing a block device, a backup system that must keep writing to tape — these are not migration problems, they are presentation problems, and DataSync has nothing to say about them because it copies and stops.</p>
+          <p>The open question is what changes when the abstraction runs in the other direction. If an on-premises workload must keep speaking NFS, iSCSI, or tape while the durable copy lives in S3, the design has to present cloud storage as a local interface with caching, and the choice of which interface to present — file, block, or tape — determines the entire architecture. Tomorrow's topic is that family of gateways, and the decision boundary between its three flavors is exactly the boundary today's service does not cross.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="sources">
+        <h2 class="section-heading">Sources</h2>
+        <div class="card">
+          <ul class="source-list">
+            <li><a href="https://docs.aws.amazon.com/datasync/latest/userguide/what-is-datasync.html" target="_blank" rel="noopener">AWS DataSync User Guide — What Is AWS DataSync?</a></li>
+            <li><a href="https://docs.aws.amazon.com/datasync/latest/userguide/working-with-agents.html" target="_blank" rel="noopener">AWS DataSync User Guide — Working with DataSync Agents</a></li>
+            <li><a href="https://docs.aws.amazon.com/datasync/latest/userguide/create-task-how-to.html" target="_blank" rel="noopener">AWS DataSync User Guide — Creating a Task</a></li>
+            <li><a href="https://docs.aws.amazon.com/datasync/latest/userguide/configure-bandwidth.html" target="_blank" rel="noopener">AWS DataSync User Guide — Bandwidth Limits and Scheduling</a></li>
+            <li><a href="https://docs.aws.amazon.com/datasync/latest/userguide/datasync-cloudwatch-metrics.html" target="_blank" rel="noopener">AWS DataSync User Guide — Monitoring with CloudWatch Metrics</a></li>
+            <li><a href="https://docs.aws.amazon.com/datasync/latest/userguide/datasync-limits.html" target="_blank" rel="noopener">AWS DataSync User Guide — Quotas and Limits</a></li>
+            <li><a href="https://docs.aws.amazon.com/prescriptive-guidance/latest/migration-hybrid-storage/welcome.html" target="_blank" rel="noopener">AWS Prescriptive Guidance — Migrating Hybrid Storage to AWS</a></li>
+            <li><a href="https://docs.aws.amazon.com/whitepapers/latest/aws-overview/migration-services.html" target="_blank" rel="noopener">AWS Whitepaper — Migration Services Overview</a></li>
+          </ul>
+        </div>
+      </section>
+
       <div class="day-nav">
         <a href="day-046.html">&larr; Day 46: AWS Schema Conversion Tool (SCT) — Heterogeneous Schema Conversion</a>
         <button class="btn btn-green" onclick="markComplete(47, 'day-048.html')">Mark Day 47 Complete &rarr;</button>

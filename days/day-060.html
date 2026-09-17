@@ -104,27 +104,279 @@
         <span class="pill pill-green">Phase 5: Practice Exams &amp; Exam Technique</span>
       </div>
       <h1 class="hero-title">Deep Review — Domain 2 Weak Areas (Resilient Architectures)</h1>
-      <div class="reading-meta">&#128337; ~3 min read &middot; 4 services covered</div>
+      <div class="reading-meta">&#128337; ~52 min read &middot; 14 distractor patterns &middot; 15 drill questions</div>
       <div class="services-grid">
         <span class="service-tag">Aurora</span>
         <span class="service-tag">DynamoDB</span>
         <span class="service-tag">FIS</span>
         <span class="service-tag">Route 53 ARC</span>
+        <span class="service-tag">Global Accelerator</span>
+        <span class="service-tag">AWS Backup</span>
+        <span class="service-tag">X-Ray</span>
       </div>
       <div id="tracker"></div>
-      <section class="doc-section">
-        <h2 class="section-heading">Today's Concept</h2>
+      <section class="doc-section" id="recap">
+        <h2 class="section-heading">Recap</h2>
         <div class="card card-accent">
-          <p>Revisit Weeks 3-6 content (compute, databases, SRE/DR) focused on flagged weak areas from mock exam analysis.</p>
-        </div>
-        <h3 class="sub-heading">Hands-on Lab / Practical Action (45 min)</h3>
-        <div class="card">
-          <p>Re-do all missed Week 3-6 practice questions from Days 15-42, plus 10 new scenario questions targeting your weakest sub-topic.</p>
+          <p>Day 59 was a Domain 1 pass — Organizations, Transit Gateway, Direct Connect, and the rest of the multi-account governance and hybrid networking material — driven entirely by whatever the Day 58 distractor analysis flagged as weak. That review had a clean shape to it: the wrong answers in Domain 1 tend to be wrong for structural reasons. A scenario asks for isolation between two VPCs and the tempting answer is a flat Transit Gateway route table; a scenario asks for centralized identity and the tempting answer is per-account IAM users. You can usually reason your way to the right answer from the topology alone, because networking and governance questions are about what is connected to what.</p>
+          <p>Domain 2 is the same lifecycle stage but a different concern. Compute, databases, and the SRE/DR cluster are not primarily about topology — they are about which failure mode the scenario is actually describing, and the distractors are built to sound like the failure mode you were expecting rather than the one on the page. A question about read scaling and a question about high availability use almost identical vocabulary, and the wrong answer is usually the correct service applied to the wrong problem. That is why this day is organized as pattern entries rather than as a topic sweep: the goal is not to re-learn Aurora, it is to recognize the specific sentence constructions that separate a Multi-AZ answer from a read-replica answer.</p>
         </div>
       </section>
-      <section class="doc-section">
+      <section class="doc-section" id="patterns">
+        <h2 class="section-heading">Domain 2 Distractor Patterns</h2>
+
+        <h3 class="sub-heading">Pattern 1 — Multi-AZ offered as a read-scaling answer</h3>
+        <p>The most common Domain 2 miss is a scenario that describes read pressure and offers Multi-AZ as the fix. The tell is in the verb: if the requirement is phrased as "handle more read traffic," "offload reporting queries," or "scale read throughput," the answer is read replicas, and Multi-AZ is a distractor that sounds responsible because it is the thing you are supposed to enable on a production database. Multi-AZ exists to survive an Availability Zone failure. It maintains a synchronous standby in a second AZ and fails over to it automatically, but that standby does not serve reads. Enabling Multi-AZ on a database that is read-bound changes nothing about its read capacity.</p>
+        <p>The reverse construction is equally common and equally missed. A scenario describes a requirement for automatic failover with minimal data loss and no application changes, and offers read replicas as the answer. Read replicas replicate asynchronously, so promoting one during a failure can lose the writes that had not yet shipped, and the application has to be repointed at a new endpoint. The distinguishing sentence is almost always about the endpoint: Multi-AZ keeps the same endpoint across failover, which is why it is the answer whenever the scenario says the application cannot be reconfigured. On Mock Exam 1 this pattern typically appeared as a two-part question where the first half was read scaling and the second half was failover, and the correct answer required both a read replica and Multi-AZ rather than either one alone.</p>
+
+        <h3 class="sub-heading">Pattern 2 — Aurora Global Database versus DynamoDB Global Tables</h3>
+        <p>Both services put data in multiple regions, and both are offered as answers to any question containing the word "global." The fork is whether the scenario needs writes in more than one region. Aurora Global Database has a single writer region and read-only secondary regions; it replicates at the storage layer with sub-second lag and can promote a secondary in under a minute. DynamoDB Global Tables are multi-active — every region accepts writes — with last-writer-wins conflict resolution. A scenario that says "users in both regions must be able to write" is a Global Tables scenario. A scenario that says "a secondary region must be readable with low lag and promotable during a regional outage" is an Aurora Global Database scenario.</p>
+        <p>The tempting wrong answer is usually the one that matches the database engine the scenario already mentioned. If the question establishes a relational schema with foreign keys and then asks for multi-region writes, the distractor set will include DynamoDB Global Tables, and it is wrong because it abandons the relational model the scenario specified. Read the constraint about the data model before you read the constraint about regions. On the mock, the tell was a phrase like "the application requires transactional integrity across related tables" — that sentence eliminates every key-value option in the list regardless of how well the replication story fits.</p>
+
+        <h3 class="sub-heading">Pattern 3 — DAX and ElastiCache as interchangeable caches</h3>
+        <p>A read-heavy DynamoDB scenario with a latency requirement invites two answers: DAX and ElastiCache for Redis. DAX is the correct one when the application already speaks the DynamoDB API and the goal is to shave read latency without adding cache-management code, because DAX is API-compatible and sits in front of the table transparently. ElastiCache is the correct one when the workload needs data structures DynamoDB does not model, needs pub/sub, or is caching something other than DynamoDB items. The distractor is tempting because ElastiCache is the more familiar service and because "add a cache" is directionally right in both cases.</p>
+        <p>The tell is whether the scenario mentions the DynamoDB API specifically. If it says the application makes GetItem calls and needs microsecond reads for hot items, DAX. If it says the application needs a session store with automatic failover, that is Redis with replicas, and DAX is not in the running because DAX does not store sessions. A related trap: Memcached offered for anything requiring persistence or failover. Memcached has no replication, so a node failure loses the keys on that node — any scenario containing "must survive a node failure" eliminates it immediately.</p>
+
+        <h3 class="sub-heading">Pattern 4 — Reserved capacity offered for unpredictable workloads</h3>
+        <p>DynamoDB capacity mode questions are usually decided by one adjective. On-demand capacity is the answer when traffic is unpredictable, spiky, or new — you pay per request and never plan capacity. Provisioned capacity with auto scaling is the answer when traffic is steady and predictable, because it is cheaper per unit of throughput. The distractor is provisioned capacity offered to a scenario describing a launch or a seasonal spike, and it is tempting because provisioned capacity is the "serious production" answer in most other contexts.</p>
+        <p>The same shape appears in the EC2 cost questions from Week 8, and it is worth noticing that the exam reuses it. Compute Savings Plans are the answer when the scenario wants flexibility across families and regions; EC2 Instance Savings Plans are the answer when the family and region are fixed and the discount matters more. Spot is the answer only when the workload is fault-tolerant and can absorb a two-minute interruption notice. Any scenario that says "cannot tolerate interruption" removes Spot from consideration no matter how large the discount is. On the mock, the Spot distractor appeared in a question about a stateful primary database, which is the clearest possible signal that the option is wrong.</p>
+
+        <h3 class="sub-heading">Pattern 5 — Partition key redesign versus capacity increase</h3>
+        <p>A DynamoDB throttling scenario will offer both "increase the table's provisioned capacity" and "redesign the partition key." The correct answer depends on whether the throttling is table-wide or partition-specific. If the scenario says the table is throttling despite ample provisioned capacity, or names a low-cardinality attribute as the key, the problem is a hot partition and more capacity will not help — each partition has its own throughput ceiling, and a key with a handful of distinct values concentrates all writes onto a few partitions. The tell is the word "despite": "throttling despite high table-level capacity" is a hot-partition sentence.</p>
+        <p>The distractor is tempting because increasing capacity is the obvious first move and it does resolve genuine table-wide throttling. The exam distinguishes the two by giving you the key attribute. If the scenario names the partition key and it is something like a status field or a date, that is the signal. If the scenario says the table is new and traffic grew faster than expected with no mention of the key, capacity is the answer. Read for whether the key is specified before you decide.</p>
+
+        <h3 class="sub-heading">Pattern 6 — Composite alarms versus threshold tuning</h3>
+        <p>An alert-fatigue scenario offers three plausible fixes: lower the threshold, lengthen the evaluation period, or build a composite alarm. The correct answer is almost always the composite alarm, because the scenario's complaint is that single-metric alarms fire on events that self-resolve. A composite alarm requires multiple alarm states to be true simultaneously — high latency and elevated error rate together — which is exactly the correlation the scenario is asking for. Lowering the threshold makes the noise worse, and lengthening the evaluation period delays detection of real incidents without removing the false positives.</p>
+        <p>The tell is the phrase "self-resolve" or "isolated spikes." If the scenario says the alarm fires and then clears on its own, the problem is not sensitivity, it is correlation. A related distractor is deleting the alarm, which is offered as an option in almost every alert-fatigue question and is never correct. On the mock, the composite alarm answer was paired with a distractor about anomaly detection bands; anomaly detection is a legitimate alternative for metrics with a stable baseline, but it does not address the specific complaint about correlated signals, so it was wrong in that context.</p>
+
+        <h3 class="sub-heading">Pattern 7 — Synthetics offered for internal performance problems</h3>
+        <p>When a scenario says internal metrics look healthy but users report failures, the answer is CloudWatch Synthetics canaries. Canaries run scripted browser flows from outside your infrastructure, so they catch DNS failures, CDN misconfiguration, and front-end regressions that server-side metrics cannot see. The distractor is X-Ray, which is tempting because X-Ray is the tracing answer and tracing sounds like the right tool for "we cannot see what is happening." X-Ray traces requests that reach your services; it does not tell you that requests are not reaching them.</p>
+        <p>The reverse is also tested. A scenario describing growing p99 latency across a dozen microservices with no indication of which hop is slow is an X-Ray question, and Synthetics is the distractor. The distinguishing sentence is whether the failure is at the edge or inside the call chain. "Customers cannot load the login page" is edge. "The checkout flow is slow but succeeds" is inside the chain. On the mock, the two appeared in adjacent questions, which is a deliberate design — the exam wants you to notice that the same vocabulary supports both answers and that only the failure location decides it.</p>
+
+        <h3 class="sub-heading">Pattern 8 — FIS without stop conditions</h3>
+        <p>Chaos engineering questions almost always include an option that runs the experiment without a safety mechanism. The correct answer pairs the experiment with stop conditions tied to CloudWatch alarms, which abort the experiment automatically if a linked alarm enters ALARM state. The distractor is the same experiment with manual monitoring, and it is tempting because it sounds operationally responsible — someone is watching. Manual monitoring is not a stop condition; it depends on a human noticing and reacting within the blast radius window.</p>
+        <p>The tell is the word "safely" or "without risking production." Any scenario that asks how to test failure in production safely is asking about stop conditions. A second distractor in this family is running the experiment in a staging environment instead, which is offered whenever the scenario mentions production risk. Staging does not validate production behavior — the whole point of a Game Day is that the failure mode is exercised against real infrastructure with real dependencies. If the scenario says the team wants to validate that automated recovery actually works, staging is wrong because the automation being tested is production automation.</p>
+
+        <h3 class="sub-heading">Pattern 9 — Route 53 failover versus Global Accelerator</h3>
+        <p>Both steer traffic away from an unhealthy region, and the fork is whether DNS caching is acceptable. Route 53 failover depends on clients re-resolving, which means the failover time is bounded below by TTL and by client-side resolver behavior you do not control. Global Accelerator uses static anycast IPs and reroutes at the AWS network edge, so failover does not depend on DNS at all. A scenario that says "sub-second failover" or "independent of DNS TTL" is a Global Accelerator scenario. A scenario that says "route users to the lowest-latency healthy region" is a Route 53 latency-based routing scenario.</p>
+        <p>The distractor is Route 53 offered for the sub-second requirement, and it is tempting because Route 53 is the service most people reach for first when the word "failover" appears. The tell is any explicit statement about DNS behavior or client caching. A related trap is CloudFront offered as a failover mechanism; CloudFront caches and accelerates content but does not perform regional health-based failover of an origin in the way the scenario is describing. On the mock, the Global Accelerator answer was distinguished by the phrase "without relying on client-side DNS caching," which is about as direct a signal as the exam gives.</p>
+
+        <h3 class="sub-heading">Pattern 10 — Route 53 ARC versus plain health-check failover</h3>
+        <p>Route 53 ARC is the answer when the scenario needs the failover mechanism itself to survive a regional failure, or needs proof that the standby region is actually ready. Readiness checks continuously validate that the standby has the capacity and configuration to take over; routing controls live on a control plane distributed across regions and partitions so that the act of failing over does not depend on the region that just failed. Plain Route 53 health-check failover has neither property. The distractor is plain failover offered to a scenario about a critical system, and it is tempting because it is simpler and it does work for the common case.</p>
+        <p>The tell is a phrase about the failover mechanism's own reliability, or about validating standby readiness before relying on it. "The failover control must not depend on a single region" is an ARC sentence. "We need to know the standby can actually handle production traffic" is a readiness-check sentence. A second distractor is a Lambda triggered by a CloudWatch alarm to perform the failover, which is offered because it sounds automated; it is wrong because the Lambda and the alarm both live in the region that may be failing.</p>
+
+        <h3 class="sub-heading">Pattern 11 — Backup and Restore offered for a fifteen-minute RTO</h3>
+        <p>The DR strategy spectrum is a cost-versus-RTO trade, and the exam tests whether you can place a stated RTO on it. Backup and Restore has an RTO measured in hours to days because recovery means rebuilding infrastructure and restoring data. Pilot Light keeps core data replicated and minimal infrastructure running, landing around tens of minutes. Warm Standby runs a scaled-down full replica, landing in minutes. Multi-Site Active-Active serves live traffic from multiple regions and is the only pattern that reaches near-zero RTO. A scenario stating a fifteen-minute RTO with a cost-minimization constraint is a Pilot Light scenario.</p>
+        <p>The distractor is Backup and Restore offered whenever the scenario emphasizes cost, and it is tempting because it is genuinely the cheapest option. The tell is the RTO number itself — if the scenario quantifies an RTO that Backup and Restore cannot meet, cost stops being the deciding constraint. The reverse distractor is Active-Active offered for a workload with a multi-hour RTO and a tight budget, which is wrong because it over-solves the problem at several times the cost. Read the RTO first, then the budget, and only then the pattern.</p>
+
+        <h3 class="sub-heading">Pattern 12 — AWS Backup Vault Lock versus snapshot frequency</h3>
+        <p>A ransomware-resilience scenario offers more frequent snapshots, S3 versioning, and AWS Backup with a locked vault in an isolated account. The correct answer is the last one, and the reason is that the first two do not survive a compromised administrative account. More frequent snapshots in the same account can be deleted by the same credentials that were compromised. Vault Lock enforces WORM immutability, so the retention policy cannot be shortened or the recovery points deleted before expiry, even by the root user. Cross-account copy into a separate account means the compromised account cannot reach the backups at all.</p>
+        <p>The tell is any phrase about the attacker having administrative access, or about backups that "cannot be deleted." Frequency and versioning are distractors because they address durability, not adversarial deletion. A related trap is offering cross-region copy alone; cross-region copy protects against regional loss but not against an attacker with credentials in the source account, because the copy job and its permissions live there too. On the mock, the correct option was the only one that mentioned both isolation and immutability.</p>
+
+        <h3 class="sub-heading">Pattern 13 — Fargate offered where DaemonSets or host access are required</h3>
+        <p>EKS compute questions turn on what the workload needs from the node. Fargate profiles run each pod in an isolated micro-VM with no shared node, which means no DaemonSets, no privileged containers, and no host-level agents. Managed node groups give you AWS-managed Auto Scaling Groups with full node access. A scenario that requires a log-collection DaemonSet on every node, or a security agent that needs host visibility, is a managed node group scenario, and Fargate is the distractor. It is tempting because Fargate is the lower-operational-overhead answer and the scenario usually mentions operational burden.</p>
+        <p>The tell is the word "DaemonSet," or any requirement that implies a persistent per-node process. A second tell is cost: Fargate has a higher per-pod cost, so a scenario that emphasizes cost at high steady-state utilization points at managed nodes even without a DaemonSet requirement. The same shape appears in ECS questions, where awsvpc mode gives each task its own ENI and security group — a scenario asking for per-task network isolation is an awsvpc scenario, and bridge mode is the distractor because it is the older default.</p>
+
+        <h3 class="sub-heading">Pattern 14 — Warm pools versus lifecycle hooks</h3>
+        <p>Both are Auto Scaling features that touch instance lifecycle, and the exam separates them by what the scenario is complaining about. A scenario describing slow scale-out because the application takes minutes to bootstrap is a warm pool scenario: pre-initialized stopped instances are promoted into service instead of booting cold. A scenario describing in-flight requests being dropped during scale-in, or logs not being flushed before termination, is a lifecycle hook scenario: the instance is held in Terminating:Wait while a drain script runs. The distractor is whichever feature the scenario did not ask for, and it is tempting because both are described as "managing the instance lifecycle."</p>
+        <p>The tell is the direction of the problem. Scale-out latency is a warm pool. Scale-in disruption is a lifecycle hook. A scenario that mentions both — slow to start and dropping connections on the way down — needs both features, and the exam will offer a single-feature answer as the distractor. On the mock, the correct option was the one that named the specific wait state, Pending:Wait or Terminating:Wait, rather than describing the feature generically.</p>
+      </section>
+      <section class="doc-section" id="lab">
+        <h2 class="section-heading">Hands-on Lab / Practical Action (45 min)</h2>
+        <div class="card card-green">
+          <p>Rebuild your Domain 2 error log from Mock Exam 1 and the Day 15-42 practice sets, then re-derive each miss against the pattern entries above. The goal is not to re-answer the questions — you already know the answers — but to write down, for each miss, which sentence in the scenario was the tell you failed to read. Work through the missed questions in the order they appear in the mock, and for each one record three things: the option you chose, the option that was correct, and the specific phrase in the question stem that distinguishes them. If you cannot find a distinguishing phrase, that is itself a finding — it usually means you were missing a piece of mechanism rather than a piece of pattern recognition, and the fix is to go back to the relevant day rather than to drill more questions.</p>
+        <p>Once the log is built, sort the misses by pattern entry. Most people find that their errors cluster into three or four patterns rather than spreading evenly, and the clustering is the useful output. A cluster in Pattern 1 means you are reading "high availability" and "read scaling" as the same requirement; a cluster in Pattern 11 means you are not anchoring on the RTO number before evaluating cost. For each cluster, write a one-line rule in your own words and add it to the cheat sheet you started on Day 58. Keep the rules short enough to scan — "RTO stated first, budget second" is a better rule than a paragraph explaining the DR spectrum.</p>
+        <p>Then re-do the ten questions you flagged as answered-by-elimination rather than by knowledge. These are the highest-value items in the whole review, because a lucky answer and a wrong answer represent the same gap. For each, cover the options and state the correct answer and its justification out loud before revealing the list. If you cannot produce the justification without the options in front of you, the question goes back into the cluster list regardless of whether you originally got it right.</p>
+        <p>Finish by writing ten new scenario questions of your own, one per pattern entry that appeared in your cluster list, using the same construction the exam uses: a requirement sentence, four options, and one distractor that is the correct service applied to the wrong problem. Writing the distractor is the exercise — it forces you to articulate the tell explicitly, which is the same skill the exam is measuring. Add these to the Day 58 cheat sheet and carry them into Mock Exam 2 tomorrow.</p>
+        <p>Budget the time as follows: twenty minutes on the error log and clustering, fifteen minutes on the elimination-flagged questions, and ten minutes writing the new scenarios. If the clustering step runs long, cut the new-scenario writing rather than the elimination review — the elimination review is where the actual gaps are.</p>
+        </div>
+      </section>
+      <section class="doc-section" id="quiz">
         <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
-        <p style="color:var(--text-muted);font-style:italic;">Detailed scenario questions for this day will be added when the curriculum reaches it — see the <a href="day-056.html">Day 56 DMS lesson</a> for the full format this site is building toward.</p>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q1.</strong> A production RDS for MySQL database is struggling under a reporting workload that runs heavy read queries during business hours. The database already runs Multi-AZ. What should be added to relieve the read pressure?</p>
+          <div class="scenario-options" id="opts-d60q1">
+            <div class="scenario-option">A. Enable a second standby in a third Availability Zone</div>
+            <div class="scenario-option">B. Add read replicas and point the reporting workload at them</div>
+            <div class="scenario-option">C. Increase the instance size of the primary</div>
+            <div class="scenario-option">D. Convert the standby into a readable endpoint</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d60q1', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d60q1"><strong>Correct answer: B.</strong> Multi-AZ standbys do not serve reads, so the existing configuration contributes nothing to read capacity. Read replicas are the mechanism for scaling read throughput, and the reporting workload can be pointed at them without touching the primary.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q2.</strong> An application requires automatic database failover with no application reconfiguration and no data loss. Which RDS configuration satisfies this?</p>
+          <div class="scenario-options" id="opts-d60q2">
+            <div class="scenario-option">A. A read replica promoted on failure</div>
+            <div class="scenario-option">B. Multi-AZ with a synchronous standby and a stable endpoint</div>
+            <div class="scenario-option">C. A cross-region read replica with a Route 53 failover record</div>
+            <div class="scenario-option">D. An Aurora Global Database secondary region</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d60q2', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d60q2"><strong>Correct answer: B.</strong> Multi-AZ replicates synchronously and keeps the same endpoint across failover, which is what "no application reconfiguration" requires. Read replicas replicate asynchronously and require repointing the application.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q3.</strong> A global application needs users in both North America and Europe to write to the same dataset with single-digit-millisecond latency, using a flexible schema. Which service fits?</p>
+          <div class="scenario-options" id="opts-d60q3">
+            <div class="scenario-option">A. Aurora Global Database with a secondary region</div>
+            <div class="scenario-option">B. DynamoDB Global Tables</div>
+            <div class="scenario-option">C. RDS with cross-region read replicas</div>
+            <div class="scenario-option">D. ElastiCache for Redis Global Datastore as the system of record</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d60q3', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d60q3"><strong>Correct answer: B.</strong> The requirement is multi-region writes, which only DynamoDB Global Tables provide among these options. Aurora Global Database has a single writer region, and RDS read replicas are read-only.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q4.</strong> A relational application with foreign-key constraints and transactional integrity requirements must survive a full regional outage with a secondary region readable at low latency. Which option fits?</p>
+          <div class="scenario-options" id="opts-d60q4">
+            <div class="scenario-option">A. DynamoDB Global Tables</div>
+            <div class="scenario-option">B. Aurora Global Database</div>
+            <div class="scenario-option">C. S3 Cross-Region Replication</div>
+            <div class="scenario-option">D. ElastiCache Global Datastore</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d60q4', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d60q4"><strong>Correct answer: B.</strong> The relational model with transactional integrity eliminates the key-value options regardless of their replication story. Aurora Global Database provides the cross-region readable secondary and sub-minute promotion.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q5.</strong> A DynamoDB-backed application makes GetItem calls for a small set of extremely hot items and needs microsecond read latency without adding cache-management code. What should be added?</p>
+          <div class="scenario-options" id="opts-d60q5">
+            <div class="scenario-option">A. ElastiCache for Redis with application-level caching</div>
+            <div class="scenario-option">B. Amazon DAX</div>
+            <div class="scenario-option">C. DynamoDB Accelerator is not applicable; increase read capacity units</div>
+            <div class="scenario-option">D. CloudFront in front of the API</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d60q5', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d60q5"><strong>Correct answer: B.</strong> DAX is API-compatible with DynamoDB and caches transparently, which satisfies the "without adding cache-management code" constraint. ElastiCache would require application changes.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q6.</strong> A session store must survive a cache node failure without losing data and must fail over automatically. Which configuration fits?</p>
+          <div class="scenario-options" id="opts-d60q6">
+            <div class="scenario-option">A. ElastiCache for Memcached with multiple nodes</div>
+            <div class="scenario-option">B. ElastiCache for Redis with cluster mode and replicas per shard</div>
+            <div class="scenario-option">C. DAX in front of DynamoDB</div>
+            <div class="scenario-option">D. A single Redis node with persistence enabled</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d60q6', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d60q6"><strong>Correct answer: B.</strong> Memcached has no replication, so a node failure loses that node's keys. Redis with replicas per shard provides both durability and automatic failover.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q7.</strong> A new DynamoDB table is being launched for a product with unknown and highly variable traffic. Which capacity mode should be selected?</p>
+          <div class="scenario-options" id="opts-d60q7">
+            <div class="scenario-option">A. Provisioned capacity with auto scaling</div>
+            <div class="scenario-option">B. On-demand capacity</div>
+            <div class="scenario-option">C. Provisioned capacity sized for peak traffic</div>
+            <div class="scenario-option">D. Reserved capacity purchased in advance</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d60q7', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d60q7"><strong>Correct answer: B.</strong> On-demand capacity requires no planning and scales per request, which matches unknown and variable traffic. Provisioned capacity is cheaper only once the traffic pattern is predictable.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q8.</strong> A DynamoDB table is throttling under write load despite having provisioned capacity far above the observed request rate. The partition key is an order status attribute with five possible values. What is the correct fix?</p>
+          <div class="scenario-options" id="opts-d60q8">
+            <div class="scenario-option">A. Increase the provisioned write capacity further</div>
+            <div class="scenario-option">B. Redesign the partition key to distribute writes across more partitions</div>
+            <div class="scenario-option">C. Enable DynamoDB Streams</div>
+            <div class="scenario-option">D. Switch the table to on-demand capacity</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d60q8', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d60q8"><strong>Correct answer: B.</strong> The phrase "despite having provisioned capacity far above the observed request rate" plus a five-value key is the hot-partition tell. Each partition has its own throughput ceiling, so more table-level capacity does not help.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q9.</strong> On-call engineers are paged repeatedly by a latency alarm that fires during brief spikes and clears on its own. What change reduces the noise while preserving detection of real incidents?</p>
+          <div class="scenario-options" id="opts-d60q9">
+            <div class="scenario-option">A. Lower the latency alarm threshold</div>
+            <div class="scenario-option">B. Create a composite alarm requiring both the latency alarm and the error-rate alarm to be in ALARM</div>
+            <div class="scenario-option">C. Extend the alarm evaluation period to 24 hours</div>
+            <div class="scenario-option">D. Delete the latency alarm and rely on dashboards</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d60q9', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d60q9"><strong>Correct answer: B.</strong> The complaint is about isolated, self-resolving spikes, which is a correlation problem rather than a sensitivity problem. A composite alarm requires both signals before paging.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q10.</strong> Internal CloudWatch metrics show all servers healthy, but customers report that the login page fails to load. What monitoring should be added to catch this class of failure?</p>
+          <div class="scenario-options" id="opts-d60q10">
+            <div class="scenario-option">A. AWS X-Ray tracing on the login service</div>
+            <div class="scenario-option">B. CloudWatch Synthetics canaries exercising the login flow from outside the infrastructure</div>
+            <div class="scenario-option">C. VPC Flow Logs on the load balancer subnets</div>
+            <div class="scenario-option">D. Additional CloudWatch alarms on CPU utilization</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d60q10', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d60q10"><strong>Correct answer: B.</strong> The failure is at the edge — requests are not reaching the services — so server-side tracing and metrics cannot see it. Canaries probe the user flow from outside.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q11.</strong> A microservices application has rising p99 latency, but it is unclear which of twelve services is responsible. What should be used to identify the bottleneck?</p>
+          <div class="scenario-options" id="opts-d60q11">
+            <div class="scenario-option">A. CloudWatch Synthetics canaries</div>
+            <div class="scenario-option">B. AWS X-Ray with the service map</div>
+            <div class="scenario-option">C. CloudWatch Logs Insights queries on each service</div>
+            <div class="scenario-option">D. AWS Config rules on the service resources</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d60q11', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d60q11"><strong>Correct answer: B.</strong> The failure is inside the call chain, not at the edge, so tracing is the right tool. X-Ray's service map shows per-hop latency and isolates the slow service.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q12.</strong> A team wants to test EC2 instance failure in production without risking an uncontrolled outage. What must the FIS experiment include?</p>
+          <div class="scenario-options" id="opts-d60q12">
+            <div class="scenario-option">A. A manual monitoring rotation watching the experiment</div>
+            <div class="scenario-option">B. Stop conditions tied to CloudWatch alarms that abort the experiment</div>
+            <div class="scenario-option">C. A staging environment replica of production</div>
+            <div class="scenario-option">D. An IAM permission boundary on the experiment role</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d60q12', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d60q12"><strong>Correct answer: B.</strong> Stop conditions automatically abort the experiment when a linked alarm enters ALARM state, which is what "without risking an uncontrolled outage" requires. Manual monitoring is not a stop condition.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q13.</strong> A critical application must fail over between regions in under a second, and the failover must not depend on client-side DNS caching. What should be used?</p>
+          <div class="scenario-options" id="opts-d60q13">
+            <div class="scenario-option">A. Route 53 failover routing with a 60-second TTL</div>
+            <div class="scenario-option">B. AWS Global Accelerator with static anycast IPs</div>
+            <div class="scenario-option">C. CloudFront with two origins</div>
+            <div class="scenario-option">D. Route 53 latency-based routing</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d60q13', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d60q13"><strong>Correct answer: B.</strong> The explicit statement that failover must not depend on DNS caching is the tell. Global Accelerator reroutes at the AWS network edge using static anycast IPs.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q14.</strong> A financial system needs failover control that itself survives a regional outage, plus continuous validation that the standby region has the capacity to take over. What should be configured?</p>
+          <div class="scenario-options" id="opts-d60q14">
+            <div class="scenario-option">A. Route 53 health-check failover with a short TTL</div>
+            <div class="scenario-option">B. Route 53 Application Recovery Controller with readiness checks and routing controls</div>
+            <div class="scenario-option">C. A Lambda triggered by a CloudWatch alarm to update DNS</div>
+            <div class="scenario-option">D. Global Accelerator with endpoint group health checks</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d60q14', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d60q14"><strong>Correct answer: B.</strong> The scenario asks for two things ARC provides and nothing else does: a control plane independent of a single region, and readiness checks that validate standby capacity.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q15.</strong> A workload can tolerate a 15-minute RTO and a 5-minute RPO, and the business wants to minimize standing infrastructure cost. Which DR pattern fits?</p>
+          <div class="scenario-options" id="opts-d60q15">
+            <div class="scenario-option">A. Backup and Restore</div>
+            <div class="scenario-option">B. Pilot Light</div>
+            <div class="scenario-option">C. Warm Standby</div>
+            <div class="scenario-option">D. Multi-Site Active-Active</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d60q15', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d60q15"><strong>Correct answer: B.</strong> Anchor on the RTO first: Backup and Restore cannot meet 15 minutes, and Warm Standby and Active-Active exceed the requirement at higher cost. Pilot Light matches the RTO at the lowest standing cost.</div>
+        </div>
+      </section>
+      <section class="doc-section" id="preview">
+        <h2 class="section-heading">Preview</h2>
+        <div class="card card-purple">
+          <p>The pattern entries above are a map of where Domain 2 tends to break, but a map is not the same as a measurement. Everything on this page was derived from a single mock exam and a set of practice questions you have now seen twice, which means some of the improvement you are about to observe may be recognition rather than understanding. The open question Mock Exam 2 has to answer is whether the clustering you found today was real — whether the three or four patterns you wrote rules for were genuinely your weak areas, or whether they were simply the questions you happened to miss on one particular draw of seventy-five.</p>
+          <p>There is a second question underneath that one, and it is harder to answer. The Day 59 and Day 60 reviews were both targeted, which means they covered the domains the first mock flagged and skipped the ones it did not. If Mock Exam 1 was unrepresentative in either direction, the gaps it missed are still there and will surface tomorrow as misses in domains you have not reviewed at all. Watch for that specifically: a score that improves in Domain 2 but drops in Domain 1 or Domain 3 is not noise, it is the review having shifted attention rather than closed gaps. Mock Exam 2 is a full 75-question, 180-minute sitting under real conditions, and the score delta against Mock Exam 1 is the only signal that matters.</p>
+        </div>
+      </section>
+      <section class="doc-section" id="sources">
+        <h2 class="section-heading">Sources</h2>
+        <div class="card">
+          <ul class="source-list">
+            <li><a href="https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Concepts.MultiAZ.html" target="_blank">Amazon RDS — Multi-AZ deployments and read replicas</a></li>
+            <li><a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.Partitions.html" target="_blank">Amazon DynamoDB — Partitions and data distribution</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/AlarmThatSendsEmail.html" target="_blank">Amazon CloudWatch — Alarms and composite alarms</a></li>
+            <li><a href="https://docs.aws.amazon.com/fis/latest/userguide/stop-conditions.html" target="_blank">AWS Fault Injection Service — Stop conditions</a></li>
+            <li><a href="https://docs.aws.amazon.com/r53recovery/latest/dg/what-is-route53-recovery.html" target="_blank">Amazon Route 53 Application Recovery Controller</a></li>
+          </ul>
+        </div>
       </section>
       <div class="day-nav">
         <a href="day-059.html">&larr; Day 59: Deep Review — Domain 1 Weak Areas (Org/Governance/Networking)</a>

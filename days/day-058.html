@@ -104,36 +104,319 @@
         <span class="pill pill-green">Phase 5: Practice Exams &amp; Exam Technique</span>
       </div>
       <h1 class="hero-title">Mock Exam 1 Distractor Analysis &amp; Weak Domain Review</h1>
-      <div class="reading-meta">&#128337; ~3 min read &middot; 1 services covered</div>
+      <div class="reading-meta">&#128337; ~58 min read &middot; 14 distractor patterns covered</div>
       <div class="services-grid">
         <span class="service-tag">Distractor Analysis</span>
+        <span class="service-tag">Domain Tagging</span>
+        <span class="service-tag">Exam Technique</span>
       </div>
       <div id="tracker"></div>
-      <section class="doc-section">
-        <h2 class="section-heading">Today's Concept</h2>
+
+      <section class="doc-section" id="recap">
+        <h2 class="section-heading">Recap: What the Baseline Score Actually Tells You</h2>
         <div class="card card-accent">
-          <p>Review every missed question, but more importantly review questions you answered correctly by luck or elimination — for each, articulate *why* the correct answer is right and *why each distractor* is wrong. Tag each miss by domain to find your weakest area.</p>
+          <p>Mock Exam 1 was a 75-question, 180-minute timed run under real conditions — no pausing, no notes — and its main product was not a score but a baseline. That baseline is only useful if you treat it as a measurement of two different things at once. The first is content coverage: which domains the questions you missed actually came from. The second is something the raw score hides completely, which is how many of your correct answers were correct for the right reason. A question you answered by eliminating two obviously wrong options and guessing between the remaining two is not evidence of understanding, and it will not survive a slightly different framing on the real exam.</p>
+          <p>This day extends the mock exam rather than repeating it. The ~2.4 minutes per question average you internalized yesterday is a pacing constraint, not an analysis method; the scenario questions that needed more time are exactly the ones whose distractors deserve the most scrutiny now. The work here is forensic: for every question, reconstruct why the correct answer is correct and why each wrong option was engineered to look correct. That reconstruction is what converts a score into a study plan.</p>
         </div>
-        <h3 class="sub-heading">Hands-on Lab / Practical Action (45 min)</h3>
+      </section>
+
+      <section class="doc-section" id="method">
+        <h2 class="section-heading">The Method: Four Sentences Per Question</h2>
+        <p>The reason most people plateau after a mock exam is that they review answers instead of reviewing decisions. Reading the explanation for a question you missed feels productive, and it does close the specific fact you didn't know, but it leaves untouched the reasoning process that produced the wrong choice. If the same reasoning process shows up on the next mock in a different costume, you will miss that question too. The fix is to force the reasoning into the open where you can inspect it, and the cheapest way to do that is a fixed written format applied to every question without exception.</p>
+        <p>The format is four sentences. First, state in your own words why the correct answer is correct — not the explanation's wording, yours. Second, for each distractor, state the specific scenario in which that option would actually be the right answer. This second step is the one people skip, and it is the one that pays. A distractor is almost never nonsense; it is a real AWS capability that solves a different problem, or solves this problem at a cost the question's constraints rule out. Naming the scenario where it wins is what separates "I know PrivateLink is for service exposure" from "I know PrivateLink is the answer when CIDRs overlap and I only need one service."</p>
+        <p>Third, tag the question by domain and by sub-topic, using the same four domains the exam blueprint uses. Fourth, mark whether you got it right, wrong, or right-by-elimination. That last category is the one that inflates scores and hides gaps, and it should be counted as a miss for planning purposes. A mock exam where you scored 72% but 15 of those correct answers were elimination guesses is a 57% exam with better luck than average.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Outcome</th><th>What it means</th><th>What to do with it</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Wrong</td><td>Content gap or reasoning gap, unknown which</td><td>Write all four sentences; the distractor scenarios usually reveal which</td></tr>
+              <tr><td>Right by elimination</td><td>Partial knowledge; you knew what was wrong but not what was right</td><td>Treat as a miss; the correct answer's mechanism is the gap</td></tr>
+              <tr><td>Right by luck</td><td>No signal at all</td><td>Treat as a miss and re-read the source material for that topic</td></tr>
+              <tr><td>Right and confident</td><td>Genuine understanding</td><td>Skip, unless the distractor scenarios surprise you</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="doc-section" id="patterns">
+        <h2 class="section-heading">The Fourteen Distractor Patterns</h2>
+        <p>What follows is not a list of facts to memorize but a catalog of the ways a plausible-sounding option gets built. Each entry names the pattern, explains why it is tempting, gives the tell that separates it from the correct answer, and notes how it typically appeared on Mock Exam 1. Read them as a set: the same handful of construction techniques account for the overwhelming majority of wrong answers on this exam, and once you can name the technique while reading an option, you stop evaluating it on vibes.</p>
+
+        <h3 class="sub-heading">1. The Right Service, Wrong Scope</h3>
+        <p>This is the most common pattern on the exam and the one that costs the most points, because the option names a service that genuinely belongs in the solution. The question is not whether the service is relevant but whether it is being applied at the right level of the hierarchy. A typical form: the scenario asks how to prevent a specific class of action across an entire organization, and one option proposes an IAM policy attached to a role in each account. IAM is absolutely part of the answer space, but an IAM policy is scoped to an identity, not to an organizational unit, so it cannot express an org-wide ceiling. The correct answer is the SCP, and the tell is the word "across all accounts" or "regardless of what the account's own administrators do."</p>
+        <p>The inverse form is equally common: the scenario asks how to grant a specific team access to one bucket, and an option proposes an SCP. SCPs never grant anything — they only cap. If the question is about enabling access rather than bounding it, any SCP-shaped answer is wrong on mechanism alone. On Mock Exam 1 this pattern showed up most often in the governance questions, where both an SCP and an IAM policy were offered and the deciding phrase was whether the constraint had to survive a hostile account administrator.</p>
+
+        <h3 class="sub-heading">2. The Service That Solves a Different Problem</h3>
+        <p>Here the distractor is a real service with a real purpose, just not this purpose. The classic pair is AWS DataSync and AWS DMS. Both move data, both are managed, both appear in migration scenarios, and the exam knows that. The tell is whether the source is a database or a file system. DataSync moves files and objects between NFS, SMB, HDFS, and S3/EFS/FSx; it has no concept of a schema, a table, or a change stream. DMS moves rows between databases and understands full load versus change data capture. A question that mentions "ongoing changes" or "minimal downtime cutover" for a database is a DMS question, and DataSync is the trap.</p>
+        <p>The same construction appears with Storage Gateway and DataSync, with MGN and DMS, and with Snowball and Direct Connect. In each case the two services overlap in the story they tell — hybrid data movement, migration, connectivity — and diverge in the mechanism. The reliable move is to identify the noun the question is actually about: file, row, server, or byte stream. That noun picks the service.</p>
+
+        <h3 class="sub-heading">3. The Correct Answer With One Fatal Constraint Violation</h3>
+        <p>This pattern is nastier than the previous two because the option is architecturally sound. It would work. It just violates a constraint the question stated in passing, usually in the first sentence. A scenario says the company has a strict data residency requirement and one option proposes a multi-region active-active design with cross-region replication. The design is excellent and it is wrong, because replication moves data out of the required jurisdiction. The constraint was stated once, early, and never repeated.</p>
+        <p>The tell is that the option is longer and more sophisticated than the others. Exam writers tend to build the constraint-violating distractor as a genuinely good architecture, because a bad architecture is easy to reject. When you find yourself admiring an option, go back and re-read the scenario's first two sentences looking for the requirement it breaks. On Mock Exam 1 this pattern concentrated in the resilience and migration domains, where cost ceilings and residency rules were the constraints most often violated.</p>
+
+        <h3 class="sub-heading">4. The Manual Answer in an Automation Question</h3>
+        <p>Whenever a scenario contains the words "automatically," "without manual intervention," or "at scale," any option that requires a human step is wrong regardless of how well it otherwise fits. The distractor here is usually a perfectly valid operational procedure — update the DNS record, run the failover script, promote the replica — that a competent engineer would actually perform. It is wrong because the question asked for a mechanism, not a procedure.</p>
+        <p>The tell is a verb that implies a person: "the team updates," "an operator promotes," "administrators rotate." Compare that against options phrased as capabilities: "Route 53 health checks remove the endpoint," "the secondary is promoted automatically." On Mock Exam 1 the automation-versus-manual fork appeared most often in the DR questions, where a manual promotion step was offered alongside an automated failover mechanism and the scenario had explicitly ruled out human latency.</p>
+
+        <h3 class="sub-heading">5. The Cheaper Option That Misses the RTO</h3>
+        <p>Cost is the most reliable lever an exam writer has, because almost every scenario can be made to sound cost-sensitive. The pattern is a DR strategy that is genuinely cheaper and genuinely insufficient. Backup and Restore is the cheapest option on the spectrum and it has an RTO measured in hours to days; if the scenario states a 15-minute RTO, Backup and Restore is not a candidate no matter how much the question talks about minimizing spend. The correct answer is the cheapest strategy that still satisfies the stated RTO and RPO, which is usually Pilot Light or Warm Standby.</p>
+        <p>The tell is a stated recovery objective. If the scenario gives you numbers, the numbers are the constraint and cost is secondary. If the scenario gives you no numbers and only says "minimize cost," then cost is the constraint and you should pick the cheapest option that meets the availability requirement. Reading which of the two the question actually supplied is the whole skill.</p>
+
+        <h3 class="sub-heading">6. The Over-Engineered Answer</h3>
+        <p>The mirror image of pattern five. A scenario describes a modest workload with a modest requirement and one option proposes multi-region active-active with Global Accelerator, DynamoDB Global Tables, and Route 53 ARC. Every component is real and the design would work, but it is disproportionate to the stated need, and the exam treats unnecessary complexity as a defect. The correct answer is usually the simplest design that satisfies the requirement, often a single-region Multi-AZ deployment.</p>
+        <p>The tell is that the option requires you to accept capabilities the scenario never asked for. If the question never mentions multiple regions, an answer that spans regions is adding scope. On Mock Exam 1 this pattern was most visible in the database questions, where Aurora Global Database and DynamoDB Global Tables were offered for workloads whose stated requirement was a single-region read-scaling problem that read replicas would have solved.</p>
+
+        <h3 class="sub-heading">7. The Service That Exists But Doesn't Do That</h3>
+        <p>Some distractors are not misapplied, they are simply false. The option names a real AWS service and attributes a capability to it that the service does not have. The most frequently tested instance is the claim that a Gateway VPC endpoint can front an arbitrary service. Gateway endpoints support S3 and DynamoDB and nothing else; every other service requires an Interface endpoint, which is ENI-backed and billed hourly. A question about exposing a custom internal API through a VPC endpoint is testing exactly this, and the Gateway endpoint option is the trap.</p>
+        <p>Other recurring instances: the claim that SCPs grant permissions, that permission boundaries grant permissions, that Memcached replicates, that Fargate supports DaemonSets, that TGW peering attachments propagate routes automatically. Each of these is a real service with a real limitation that the distractor quietly removes. The tell is that the option sounds slightly too convenient — the service does the thing you wish it did rather than the thing it does.</p>
+
+        <h3 class="sub-heading">8. The Right Answer at the Wrong Layer</h3>
+        <p>This pattern is about the OSI-ish layering of AWS controls. A scenario asks how to block traffic from a specific CIDR range and one option proposes a security group rule. Security groups are stateful and operate at the instance/ENI level; they can absolutely block a CIDR, so the option is not false. But if the scenario describes traffic that must be blocked before it reaches any instance — or describes a subnet-wide requirement — the correct layer is the network ACL or the Network Firewall, not the security group. The tell is the scope word: "all instances in the subnet," "before reaching the VPC," "centrally."</p>
+        <p>The same layering confusion appears with IAM versus SCP versus permission boundary, with ALB versus NLB versus Global Accelerator, and with CloudWatch alarms versus composite alarms. In each case the distractor is a control that works at a finer or coarser granularity than the requirement demands. Naming the required scope first, then matching the control to it, resolves these quickly.</p>
+
+        <h3 class="sub-heading">9. The Legacy Service That Was Replaced</h3>
+        <p>AWS retires and supersedes services, and the exam keeps the old names in circulation as distractors. The clearest current example is server migration: AWS Server Migration Service and CloudEndure Migration have been superseded by AWS Application Migration Service, and a question about rehosting servers at scale expects MGN. An option naming SMS is not wrong because SMS never worked, but because it is no longer the recommended tool and the exam tests current guidance.</p>
+        <p>The tell is a service name you recognize from older study material. When you see one, ask whether you have seen it in any recent AWS documentation or in the current curriculum. If the answer is no, it is probably the distractor. The same logic applies to Classic Load Balancer in scenarios that describe path-based routing, and to EC2-Classic-era networking assumptions in scenarios about VPC design.</p>
+
+        <h3 class="sub-heading">10. The Option That Ignores the Stated Blast Radius</h3>
+        <p>Some scenarios tell you exactly how much of the system is allowed to be affected, and one distractor quietly affects more. A question about testing failure tolerance in production offers an option that terminates instances across an entire Auto Scaling Group; the correct answer uses a fault injection experiment with a stop condition and a bounded target selection. Both options test failure tolerance. Only one respects the constraint that production must keep serving traffic.</p>
+        <p>The tell is a quantity or a scope qualifier in the scenario — "one instance," "a single AZ," "without customer impact" — that the distractor does not honor. On Mock Exam 1 this pattern appeared in the chaos engineering and change management questions, where the difference between a controlled experiment and an uncontrolled outage was the presence of stop conditions tied to alarms.</p>
+
+        <h3 class="sub-heading">11. The Answer That Fixes the Symptom</h3>
+        <p>When a scenario describes a problem, some options address the observable symptom rather than the cause. A DynamoDB table is throttling and one option proposes increasing the table's provisioned capacity. If the throttling is caused by a low-cardinality partition key concentrating writes onto a few partitions, raising table-level capacity does not help, because the limit being hit is per-partition. The correct answer changes the key design. The distractor is attractive because it is the first thing an operator would try.</p>
+        <p>The tell is that the option scales a resource rather than changing a design. Scaling is the right answer when the constraint is genuinely capacity; it is the wrong answer when the constraint is distribution, cardinality, or a hard per-unit limit. The exam tests this distinction most often with DynamoDB partition keys, Lambda concurrency, and Kinesis shard counts.</p>
+
+        <h3 class="sub-heading">12. The Option That Requires a Capability the Service Lacks</h3>
+        <p>Distinct from pattern seven, this one is about a capability that exists in a sibling service. The scenario needs cross-region writes with conflict resolution and one option proposes Aurora Global Database. Aurora Global Database does support multi-region replication, but the primary region is the only writer in the standard configuration; multi-active writes are a different feature with different constraints. The correct answer for multi-region multi-active writes is DynamoDB Global Tables with last-writer-wins resolution. The distractor borrows the sibling's headline capability.</p>
+        <p>The tell is a requirement for concurrent writes in more than one region. Any relational option should be scrutinized hard at that point, because relational multi-region write patterns are the exception rather than the rule on this exam. The same borrowing happens with ElastiCache Redis versus Memcached (replication), with ALB versus NLB (static IPs), and with S3 replication versus S3 versioning (deletion protection).</p>
+
+        <h3 class="sub-heading">13. The Correct Mechanism With the Wrong Trigger</h3>
+        <p>This pattern gets the service right and the event wrong. A scenario asks how to react when an object lands in S3 and one option proposes a CloudWatch alarm on a bucket metric. CloudWatch is the right family of service for monitoring, but a bucket metric alarm is a threshold on aggregate behavior, not a per-object event. The correct answer is an S3 event notification to Lambda, SQS, or EventBridge. The distractor is monitoring where the requirement is event handling.</p>
+        <p>The tell is a word like "when," "on arrival," "immediately after," or "per object." Those words describe events, and events are handled by event sources, not by metric thresholds. The inverse also appears: a scenario asks for a sustained condition to be detected and one option proposes an event notification, when the requirement is a threshold over time and the correct answer is an alarm. On Mock Exam 1 this fork showed up in the observability questions, where subscription filters, metric filters, and alarms were all offered for the same log-processing requirement.</p>
+
+        <h3 class="sub-heading">14. The Answer That Works Only in the Management Account</h3>
+        <p>The final pattern is a governance trap. Some options describe a control that would work perfectly if applied in the AWS Organizations management account, and the scenario has explicitly placed the workload somewhere else. The management account is immune to SCPs, so an SCP-based control described as protecting the management account is incoherent. Conversely, an option that proposes running a workload in the management account to simplify permissions is wrong on best practice, because the management account should hold no workloads.</p>
+        <p>The tell is any mention of the management account, the root user, or the organization's root OU. These are the places where the normal rules invert, and the exam uses them to test whether you know the exceptions. On Mock Exam 1 this pattern appeared in the multi-account governance questions, where the correct answer consistently kept the management account empty and pushed enforcement into OUs via SCPs and Control Tower guardrails.</p>
+      </section>
+
+      <section class="doc-section" id="lab">
+        <h2 class="section-heading">Hands-On Lab: Build the Weak-Spot Ledger (60 min)</h2>
+        <div class="card card-green">
+          <p>Open Mock Exam 1 and work through all 75 questions in order, but do not re-answer them. Instead, build a ledger. For each question, record four fields: the question number, the domain tag, your outcome (wrong, right-by-elimination, right-by-luck, or right-and-confident), and the pattern number from the catalog above that best describes the distractor that nearly caught you or did catch you. The pattern number is the field that matters most, because it converts 75 individual mistakes into a distribution across fourteen recurring techniques.</p>
+          <p>For every question where your outcome was wrong or right-by-elimination, write the four sentences described earlier. Sentence one: why the correct answer is correct, in your own words. Sentences two through four: for each distractor, the specific scenario in which that option would be the right answer. If you cannot construct such a scenario for a distractor, that is itself a finding — it means you do not yet understand what the service is for, and that topic goes on the review list regardless of whether you got the question right.</p>
+          <p>When the ledger is complete, produce two summaries. The first is a domain histogram: how many misses fall into each of the four exam domains. The second is a pattern histogram: how many misses fall into each of the fourteen patterns. The domain histogram tells you what to study. The pattern histogram tells you how you are being fooled, which is a different and often more actionable piece of information. A candidate who misses ten questions across four domains but eight of them are pattern one has a scoping problem, not a content problem, and the fix is different.</p>
+          <p>Finally, write a one-page cheat sheet containing only the pattern tells — the phrases and scope words that reliably distinguish the correct answer from each distractor family. Keep it to one page. This sheet is the artifact you will extend after Mock Exam 2 and the one you will re-read the morning of the exam, so it should contain triggers rather than explanations. "Across all accounts" means SCP. "Per object" means event notification. "Minimal downtime" plus a database means DMS with CDC. Those three lines are worth more on exam day than a page of service descriptions.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="quiz">
+        <h2 class="section-heading">Drill: Fifteen Questions Built From These Patterns</h2>
+        <p>Each question below is constructed around one of the fourteen patterns. The tempting wrong answer is deliberately present as an option. Answer before revealing, and when you reveal, name the pattern before reading the explanation.</p>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q1.</strong> A company wants to guarantee that no account in its organization can ever launch resources in an unapproved region, even if an account administrator attaches a policy that allows it. Which control enforces this?</p>
+          <div class="scenario-options" id="opts-d58q1">
+            <div class="scenario-option">A. An IAM policy attached to every role in every account</div>
+            <div class="scenario-option">B. A service control policy attached to the organizational unit</div>
+            <div class="scenario-option">C. A permission boundary on each account's administrator role</div>
+            <div class="scenario-option">D. An AWS Config rule that reports non-compliant resources</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d58q1', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d58q1"><strong>Correct answer: B.</strong> Pattern 1, right service wrong scope. The phrase "even if an account administrator attaches a policy" is the tell: only an SCP caps what an account can do regardless of its own IAM. A Config rule detects but does not prevent.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q2.</strong> A team must migrate a 4 TB on-premises Oracle database to Aurora PostgreSQL with under five minutes of downtime and must keep the target current until cutover. Which combination is required?</p>
+          <div class="scenario-options" id="opts-d58q2">
+            <div class="scenario-option">A. AWS DataSync with a scheduled task</div>
+            <div class="scenario-option">B. AWS DMS with full load plus change data capture, preceded by AWS SCT</div>
+            <div class="scenario-option">C. AWS Storage Gateway in volume mode</div>
+            <div class="scenario-option">D. AWS Snowball Edge with an S3 lifecycle policy</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d58q2', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d58q2"><strong>Correct answer: B.</strong> Pattern 2, service that solves a different problem. DataSync moves files, not rows, and has no change stream. Heterogeneous engine migration also requires SCT for schema conversion before DMS moves the data.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q3.</strong> A healthcare provider must keep all patient data within its home country. It wants a highly available, low-latency application for users in that country. Which design satisfies the requirement?</p>
+          <div class="scenario-options" id="opts-d58q3">
+            <div class="scenario-option">A. Multi-region active-active with DynamoDB Global Tables and Global Accelerator</div>
+            <div class="scenario-option">B. A single-region Multi-AZ deployment with read replicas in the same region</div>
+            <div class="scenario-option">C. Aurora Global Database with the secondary region in a neighboring country</div>
+            <div class="scenario-option">D. S3 Cross-Region Replication to a second region for durability</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d58q3', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d58q3"><strong>Correct answer: B.</strong> Pattern 3, correct answer with one fatal constraint violation. Options A, C, and D are all sound architectures that move data across a border, which the residency requirement forbids.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q4.</strong> A company needs its standby region to take over within seconds of a regional failure, with no human decision in the loop. Which approach meets this?</p>
+          <div class="scenario-options" id="opts-d58q4">
+            <div class="scenario-option">A. An on-call engineer promotes the Aurora secondary and updates DNS</div>
+            <div class="scenario-option">B. Route 53 health checks with failover routing and automated promotion of the secondary</div>
+            <div class="scenario-option">C. A runbook that the operations team executes during an incident</div>
+            <div class="scenario-option">D. A weekly Game Day that rehearses the manual failover procedure</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d58q4', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d58q4"><strong>Correct answer: B.</strong> Pattern 4, manual answer in an automation question. "No human decision in the loop" rules out every option that depends on a person acting, however well-rehearsed that person is.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q5.</strong> A workload has an RTO of 15 minutes and an RPO of 5 minutes. The business wants the lowest standing infrastructure cost that still meets those targets. Which DR strategy fits?</p>
+          <div class="scenario-options" id="opts-d58q5">
+            <div class="scenario-option">A. Backup and Restore with AWS Backup</div>
+            <div class="scenario-option">B. Pilot Light with continuous data replication</div>
+            <div class="scenario-option">C. Multi-Site Active-Active</div>
+            <div class="scenario-option">D. Warm Standby at full production scale</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d58q5', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d58q5"><strong>Correct answer: B.</strong> Pattern 5, cheaper option that misses the RTO. Backup and Restore is cheapest but its RTO is measured in hours to days, so it fails the stated 15-minute target. Pilot Light is the cheapest strategy that meets it.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q6.</strong> A small internal reporting application runs on a single EC2 instance and is used by twelve employees during business hours. The team wants high availability with minimal operational overhead. What should they implement?</p>
+          <div class="scenario-options" id="opts-d58q6">
+            <div class="scenario-option">A. Multi-region active-active with Global Accelerator and Aurora Global Database</div>
+            <div class="scenario-option">B. A Multi-AZ Auto Scaling Group behind an Application Load Balancer</div>
+            <div class="scenario-option">C. A cross-region read replica with Route 53 ARC routing controls</div>
+            <div class="scenario-option">D. AWS Outposts in the office for local latency</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d58q6', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d58q6"><strong>Correct answer: B.</strong> Pattern 6, over-engineered answer. The scenario never mentions multiple regions or global users; a Multi-AZ ASG behind an ALB is the simplest design that satisfies the availability requirement.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q7.</strong> A company wants to expose an internal microservice to consumers in other accounts without VPC peering and without worrying about overlapping CIDR ranges. Which mechanism should it use?</p>
+          <div class="scenario-options" id="opts-d58q7">
+            <div class="scenario-option">A. A Gateway VPC endpoint in each consumer VPC</div>
+            <div class="scenario-option">B. A VPC endpoint service with Interface endpoints in the consumer VPCs</div>
+            <div class="scenario-option">C. A Transit Gateway shared through AWS RAM</div>
+            <div class="scenario-option">D. VPC peering with a NAT gateway</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d58q7', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d58q7"><strong>Correct answer: B.</strong> Pattern 7, service that exists but doesn't do that. Gateway endpoints support only S3 and DynamoDB. PrivateLink via an endpoint service and Interface endpoints is the mechanism that works despite overlapping CIDRs.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q8.</strong> A security team must block traffic from a specific external CIDR range before it reaches any instance in a subnet, and the rule must apply to every instance in that subnet including ones launched later. Where should the rule live?</p>
+          <div class="scenario-options" id="opts-d58q8">
+            <div class="scenario-option">A. A security group attached to each instance</div>
+            <div class="scenario-option">B. A network ACL on the subnet</div>
+            <div class="scenario-option">C. An IAM policy denying the source IP</div>
+            <div class="scenario-option">D. A host-based firewall on each instance</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d58q8', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d58q8"><strong>Correct answer: B.</strong> Pattern 8, right answer at the wrong layer. Security groups work at the ENI level and would need to be attached to every instance; the subnet-wide, applies-to-future-instances requirement points to the network ACL.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q9.</strong> A company must rehost 300 physical and virtual servers to EC2 with minimal downtime and minimal application change. Which service should it use?</p>
+          <div class="scenario-options" id="opts-d58q9">
+            <div class="scenario-option">A. AWS Server Migration Service</div>
+            <div class="scenario-option">B. AWS Application Migration Service</div>
+            <div class="scenario-option">C. AWS Database Migration Service</div>
+            <div class="scenario-option">D. AWS DataSync</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d58q9', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d58q9"><strong>Correct answer: B.</strong> Pattern 9, legacy service that was replaced. MGN superseded Server Migration Service and CloudEndure Migration as the standard rehost tool; SMS is the distractor for candidates working from older material.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q10.</strong> A team wants to validate that its production service survives the loss of a single EC2 instance, without risking customer impact. What should it do?</p>
+          <div class="scenario-options" id="opts-d58q10">
+            <div class="scenario-option">A. Terminate every instance in the Auto Scaling Group during a maintenance window</div>
+            <div class="scenario-option">B. Run an AWS FIS experiment targeting one instance with a stop condition tied to an error-rate alarm</div>
+            <div class="scenario-option">C. Simulate the failure in a staging environment only</div>
+            <div class="scenario-option">D. Wait for a real instance failure and observe the outcome</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d58q10', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d58q10"><strong>Correct answer: B.</strong> Pattern 10, option that ignores the stated blast radius. The scenario says "without risking customer impact," which rules out terminating the whole group; FIS with a bounded target and a stop condition respects it.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q11.</strong> A DynamoDB table is throttling writes during peak hours. The table's provisioned write capacity is well above the observed write volume, and the partition key is a status field with six possible values. What should be changed?</p>
+          <div class="scenario-options" id="opts-d58q11">
+            <div class="scenario-option">A. Increase the table's provisioned write capacity further</div>
+            <div class="scenario-option">B. Redesign the partition key to distribute writes across many partitions</div>
+            <div class="scenario-option">C. Enable DynamoDB Streams</div>
+            <div class="scenario-option">D. Add a global secondary index on the status field</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d58q11', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d58q11"><strong>Correct answer: B.</strong> Pattern 11, answer that fixes the symptom. The throttling is per-partition, caused by a low-cardinality key, so raising table-level capacity does not help. The fix is key design.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q12.</strong> A global gaming application needs users in three regions to read and write the same player state with single-digit-millisecond latency, accepting last-writer-wins semantics. Which data store fits?</p>
+          <div class="scenario-options" id="opts-d58q12">
+            <div class="scenario-option">A. Aurora Global Database with multi-region writers</div>
+            <div class="scenario-option">B. DynamoDB Global Tables</div>
+            <div class="scenario-option">C. RDS for PostgreSQL with cross-region read replicas</div>
+            <div class="scenario-option">D. ElastiCache for Redis with Global Datastore as the system of record</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d58q12', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d58q12"><strong>Correct answer: B.</strong> Pattern 12, option that requires a capability the service lacks. Aurora Global Database's standard configuration has a single writer region; multi-region multi-active writes with last-writer-wins is DynamoDB Global Tables.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q13.</strong> A company needs to run a validation Lambda every time a new object is uploaded to a specific S3 prefix. What should it configure?</p>
+          <div class="scenario-options" id="opts-d58q13">
+            <div class="scenario-option">A. A CloudWatch alarm on the bucket's PutObject metric</div>
+            <div class="scenario-option">B. An S3 event notification filtered to the prefix, targeting Lambda</div>
+            <div class="scenario-option">C. A CloudWatch Logs subscription filter on the bucket</div>
+            <div class="scenario-option">D. An EventBridge rule on a scheduled rate expression</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d58q13', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d58q13"><strong>Correct answer: B.</strong> Pattern 13, correct mechanism with the wrong trigger. "Every time a new object is uploaded" is a per-object event, not a threshold over time, so an event notification is required rather than an alarm.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q14.</strong> A company wants to ensure that its log-archive account cannot have its CloudTrail trail deleted by anyone, including the account's own administrators. Where should the protection be applied?</p>
+          <div class="scenario-options" id="opts-d58q14">
+            <div class="scenario-option">A. An SCP on the management account</div>
+            <div class="scenario-option">B. An SCP on the Security OU containing the log-archive account</div>
+            <div class="scenario-option">C. An IAM policy on the log-archive account's root user</div>
+            <div class="scenario-option">D. A bucket policy on the trail's S3 bucket only</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d58q14', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d58q14"><strong>Correct answer: B.</strong> Pattern 14, answer that works only in the management account. SCPs do not apply to the management account, so option A is incoherent; the protection belongs on the OU that contains the log-archive account.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q15.</strong> A company is migrating 200 TB of historical data from a data center with a 200 Mbps uplink, plus roughly 40 GB of daily changes, and needs the cutover within six weeks. Which approach is most appropriate?</p>
+          <div class="scenario-options" id="opts-d58q15">
+            <div class="scenario-option">A. Transfer everything over the existing 200 Mbps link</div>
+            <div class="scenario-option">B. Use AWS Snowball Edge for the historical bulk and DMS change data capture over the network for the daily delta</div>
+            <div class="scenario-option">C. Provision a Direct Connect connection and transfer everything over it</div>
+            <div class="scenario-option">D. Use AWS DataSync for the historical data and AWS Backup for the delta</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d58q15', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d58q15"><strong>Correct answer: B.</strong> Patterns 2 and 5 combined. The link is the bottleneck for the bulk dataset, so offline transfer wins; the small daily delta is well suited to network-based CDC. DataSync is not database-aware and Backup is not a replication mechanism.</div>
+        </div>
+      </section>
+
+      <section class="doc-section" id="preview">
+        <h2 class="section-heading">Preview: Turning the Ledger Into a Study Plan</h2>
+        <div class="card card-purple">
+          <p>The ledger you built today tells you which patterns fooled you and which domains the misses came from, but it does not yet tell you what to do about it. That gap is the open question. A domain histogram showing eight misses in multi-account governance could mean you do not understand SCPs, or it could mean you understand SCPs perfectly and keep falling for pattern one's scope inversion when the question is phrased around organizational units. Those two diagnoses lead to completely different study sessions, and picking the wrong one wastes a day you cannot spare.</p>
+          <p>Tomorrow's deep review targets Domain 1 specifically — Organizations, Transit Gateway, Direct Connect, and the multi-account governance material from Weeks 1 and 2 — and the point of scoping it to one domain is to test whether the misses were content gaps or pattern gaps. If re-doing the Week 1 and 2 questions after today's pattern work produces a large jump, the problem was technique. If it does not, the problem is the material, and the review needs to go deeper than re-reading summaries.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="sources">
+        <h2 class="section-heading">Sources</h2>
         <div class="card">
-          <p>For every incorrect answer, write one sentence explaining why the correct option is right and one sentence per distractor explaining why it's wrong.</p>
+          <ul class="source-list">
+            <li><a href="https://docs.aws.amazon.com/whitepapers/latest/organizing-your-aws-environment/organizing-your-aws-environment.html" target="_blank">AWS Whitepaper: Organizing Your AWS Environment Using Multiple Accounts</a></li>
+            <li><a href="https://docs.aws.amazon.com/prescriptive-guidance/latest/migration-database-oracle/welcome.html" target="_blank">AWS Prescriptive Guidance: Migrating Oracle Databases to AWS</a></li>
+            <li><a href="https://docs.aws.amazon.com/wellarchitected/latest/reliability-pillar/welcome.html" target="_blank">AWS Well-Architected Framework: Reliability Pillar</a></li>
+            <li><a href="https://docs.aws.amazon.com/fis/latest/userguide/what-is.html" target="_blank">AWS Fault Injection Service User Guide</a></li>
+            <li><a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/bp-partition-key-design.html" target="_blank">Amazon DynamoDB: Best Practices for Designing Partition Keys</a></li>
+          </ul>
         </div>
       </section>
-      <section class="doc-section">
-        <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
-        
-      <div class="scenario-card">
-        <p class="scenario-question"><strong>Q1.</strong> Why is analyzing wrong-but-eliminated distractors as valuable as reviewing missed questions?</p>
-        <div class="scenario-options" id="opts-d58q0">
-            <div class="scenario-option">A. It isn't valuable, only review misses</div>
-            <div class="scenario-option">B. Distractors are designed around common misconceptions; understanding why they're wrong hardens your understanding of edge cases the exam repeatedly tests</div>
-            <div class="scenario-option">C. It wastes study time</div>
-            <div class="scenario-option">D. Distractors are always obviously wrong</div>
-        </div>
-        <button class="scenario-reveal-btn" onclick="revealAnswer('d58q0', 1)">Reveal Answer</button>
-        <div class="scenario-explanation" id="exp-d58q0"><strong>Correct answer: B.</strong> SAP-C02 distractors are deliberately plausible-sounding services/configurations; explicitly naming why each is wrong closes the exact conceptual gaps the exam is designed to probe.</div>
-      </div>
-      </section>
+
       <div class="day-nav">
         <a href="day-057.html">&larr; Day 57: Full-Length Mock Exam 1 — 75 Questions Timed</a>
         <button class="btn btn-green" onclick="markComplete(58, 'day-059.html')">Mark Day 58 Complete &rarr;</button>

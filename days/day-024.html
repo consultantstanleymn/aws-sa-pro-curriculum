@@ -104,37 +104,327 @@
         <span class="pill pill-green">Phase 2: Compute, Containers &amp; Global Databases</span>
       </div>
       <h1 class="hero-title">Amazon DynamoDB Deep Dive — Partitioning &amp; Capacity Modes</h1>
-      <div class="reading-meta">&#128337; ~3 min read &middot; 3 services covered</div>
+      <div class="reading-meta">&#128337; ~58 min read &middot; 3 services covered</div>
       <div class="services-grid">
         <span class="service-tag">DynamoDB</span>
         <span class="service-tag">Partition Keys</span>
         <span class="service-tag">On-Demand vs Provisioned</span>
       </div>
       <div id="tracker"></div>
-      <section class="doc-section">
-        <h2 class="section-heading">Today's Concept</h2>
+      <section class="doc-section" id="recap">
+        <h2 class="section-heading">Recap: From Standby Databases to Partitioned Tables</h2>
         <div class="card card-accent">
-          <p>DynamoDB partitions data by hash of the partition key; poor key design (low cardinality, hot keys) causes throttling regardless of overall table throughput. On-demand capacity auto-scales per request with no capacity planning (best for unpredictable traffic); provisioned capacity (with auto scaling) is cheaper for steady, predictable workloads.</p>
-        </div>
-        <h3 class="sub-heading">Hands-on Lab / Practical Action (45 min)</h3>
-        <div class="card">
-          <p>Redesign a DynamoDB table's partition key from a low-cardinality status field to a composite key that spreads load evenly, eliminating hot-partition throttling.</p>
+          <p>Day 23 was about the failure modes of a single relational primary: the Multi-AZ synchronous standby that gives you the same endpoint on failover but does nothing for read throughput, the async read replicas that scale reads while carrying promotion data-loss risk, and RDS Blue/Green Deployments that buy a fast switchover for major-version upgrades. Every one of those mechanisms assumes a single writer that the rest of the system is trying to protect. DynamoDB inverts that assumption, and the inversion is the point of today's material.</p>
+          <p>Where RDS fails by running out of a single primary's capacity and needs a standby to survive an AZ loss, DynamoDB fails by spreading load unevenly across partitions it manages for you — the same service family, the opposite failure mode. There is no standby to promote and no replica lag to reason about; there is a hash function, a set of partitions, and a throughput budget that each partition enforces independently. The operational question shifts from "how do I fail over" to "how do I keep the hash distribution even," and that question is what the rest of this day answers.</p>
         </div>
       </section>
-      <section class="doc-section">
+      <section class="doc-section" id="why-on-exam">
+        <h2 class="section-heading">1. Why This Is on the Exam</h2>
+        <p>DynamoDB appears in SAP-C02 scenarios far more often than its share of the AWS catalog would suggest, and almost never as a trivia question about API names. It shows up because it is the answer to a specific class of requirement that relational databases cannot satisfy: single-digit-millisecond latency at a scale where the request rate is unpredictable, the schema is not fully known in advance, and the operational team does not want to run a database fleet. When a scenario says "millions of requests per second," "globally distributed users," or "no capacity planning," DynamoDB is usually the intended answer, and the distractors are usually RDS or Aurora dressed up with read replicas.</p>
+        <p>The reason the exam keeps returning to partitioning is that partitioning is where DynamoDB stops being a managed service and starts being a design decision you own. AWS manages the hardware, the replication, the patching, and the partition splitting. It does not manage your key choice. A table with a well-distributed partition key will absorb whatever throughput you provision; the same table with a low-cardinality key will throttle at a fraction of that capacity while CloudWatch shows the table-level metrics looking healthy. That gap between what the table is configured to do and what it can actually do is the single most reliable source of DynamoDB scenario questions.</p>
+        <p>This maps most directly to Domain 2, Design Resilient Architectures, because throttling is a resilience failure that looks like a capacity failure. It also touches Domain 1 through the multi-account and multi-region patterns that Global Tables enable, and Domain 4 because capacity mode selection is one of the largest single line items in a high-volume workload's bill. The exam expects you to reason about all three at once: a key design that survives a hot-partition event, a capacity mode that matches the traffic shape, and a cost profile that does not require a human to tune it every week.</p>
+      </section>
+      <section class="doc-section" id="mechanism">
+        <h2 class="section-heading">2. How Partitioning Actually Works</h2>
+        <p>A DynamoDB table is not a single logical store that happens to be distributed. It is a collection of partitions, each of which is an independent unit of storage and throughput backed by its own set of replicas across Availability Zones. When you write an item, DynamoDB computes a hash of the partition key value and uses that hash to decide which partition owns the item. Every item with the same partition key lands on the same partition, permanently, for as long as the table exists. This is why the partition key is sometimes called the hash key: it is literally the input to the function that selects the partition.</p>
+        <p>The consequence that matters operationally is that throughput is provisioned at the table level but enforced at the partition level. If you provision 10,000 write capacity units on a table, DynamoDB does not hand each partition an equal share and let you borrow from your neighbors. Each partition has a ceiling, and a request that targets a partition already at its ceiling is throttled even though the table as a whole is nowhere near its limit. The table-level CloudWatch metrics will show consumed capacity well below provisioned capacity while your application receives ProvisionedThroughputExceededException, which is the signature of a hot partition and the reason table-level dashboards are insufficient for DynamoDB.</p>
+        <p>DynamoDB does adapt. When a partition grows beyond a size threshold or sustains throughput above a threshold, the service splits it into two child partitions and redistributes the key ranges. This is automatic and invisible, but it is not instantaneous, and it does not help with a hot key. Splitting a partition whose load comes from a single partition key value produces two partitions where one of them still owns that value and still receives all the traffic. Adaptive capacity, the mechanism that shifts unused throughput toward busy partitions, has the same limitation: it can move budget between partitions, but it cannot split a single key's traffic across partitions, because the hash function is deterministic and every request for that key resolves to the same place.</p>
+        <p>Sort keys change the picture in a way that is easy to miss. Within a partition, items are stored sorted by the sort key, and a composite primary key of partition key plus sort key lets you query ranges efficiently with Query rather than scanning. But the sort key does not participate in partition selection. Two items with the same partition key and different sort keys live on the same partition, so a table keyed on a low-cardinality attribute is just as hot whether or not it has a sort key. The sort key buys you query flexibility and item collection locality; it does not buy you distribution.</p>
+      </section>
+      <section class="doc-section" id="decision-boundary">
+        <h2 class="section-heading">3. The Core Decision Boundary: Key Cardinality</h2>
+        <p>Almost every DynamoDB scenario question reduces to a single judgment: does the proposed partition key distribute writes and reads evenly across the key space, or does it concentrate them? The exam will hand you a table design, describe a symptom, and expect you to connect the two. The symptom is almost always throttling under load that the provisioned capacity should have absorbed. The cause is almost always a key whose distinct value count is small relative to the request volume, or a key whose value distribution is skewed by the access pattern rather than by the data itself.</p>
+        <p>Cardinality is the first test. A partition key with five distinct values can only ever spread load across five partitions, no matter how many partitions the table has. A partition key with millions of distinct values spreads naturally. The second test is access skew, which is subtler: a key can have high cardinality and still be hot if the application's traffic concentrates on a small subset of values. A table keyed on customer ID is well distributed in storage but becomes a hot partition if one customer generates most of the traffic, which is exactly the shape of a multi-tenant SaaS workload with a whale account. The third test is whether the key is derived from something that changes over time, because a monotonically increasing key such as a timestamp concentrates all current writes on the newest partition.</p>
+        <p>The standard remedy is a composite or derived key that adds entropy without destroying query patterns. Appending a random suffix or a shard identifier to the partition key spreads writes across a known number of partitions, at the cost of turning a single-item read into a scatter-gather across those shards. Prepending a coarse time bucket to a timestamp key spreads writes across buckets while keeping range queries within a bucket efficient. The tradeoff is always the same: entropy in the partition key buys write distribution and costs read simplicity.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Key design</th><th>Distribution</th><th>Read pattern cost</th><th>Typical fit</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Low-cardinality attribute (status, region, type)</td><td>Poor — bounded by distinct value count</td><td>Cheap single-item reads</td><td>Never as a partition key; use as a filter or GSI key</td></tr>
+              <tr><td>High-cardinality natural ID (customer, device, order)</td><td>Good in storage, can skew in traffic</td><td>Cheap single-item reads</td><td>Default choice for entity tables</td></tr>
+              <tr><td>Monotonic key (timestamp, sequence)</td><td>Poor — all current writes hit the newest partition</td><td>Efficient range queries</td><td>Only with a bucketing prefix</td></tr>
+              <tr><td>Composite with random suffix (ID + shard)</td><td>Excellent, tunable by shard count</td><td>Scatter-gather across shards</td><td>Write-heavy counters, event ingestion</td></tr>
+              <tr><td>Composite with time bucket (YYYY-MM-DD#ID)</td><td>Good, bounded by bucket count</td><td>Range queries within a bucket</td><td>Time-series and log-style tables</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+      <section class="doc-section" id="capacity-modes">
+        <h2 class="section-heading">4. Capacity Modes and Their Tradeoffs</h2>
+        <p>Once the key design is settled, the next decision is how the table pays for throughput. Provisioned mode asks you to declare a read and write capacity budget up front, expressed in capacity units, and bills you for that budget whether or not you consume it. On-demand mode asks for nothing up front and bills per request, scaling automatically to whatever traffic arrives. The two modes are not a quality ranking; they are a match between a traffic shape and a billing model, and the exam will describe a traffic shape and expect you to pick the mode that fits it.</p>
+        <p>Provisioned mode is cheaper per unit of throughput, which is why it is the right answer for steady, predictable workloads. Its weakness is that the declared budget is a hard ceiling unless you enable auto scaling, and auto scaling reacts to CloudWatch metrics that are themselves averaged over a window. A workload that doubles in traffic within a minute will throttle before auto scaling catches up, because the scaling policy needs the metric to move and the alarm to fire before it can raise the ceiling. Provisioned mode with auto scaling is therefore a good fit for workloads with gradual, forecastable variation — a daily traffic curve, a weekly cycle — and a poor fit for spiky or unpredictable ones.</p>
+        <p>On-demand mode removes the ceiling entirely and the capacity planning along with it. You pay per request, at a rate that is higher than provisioned capacity for the same volume, and you get instant adaptation to any traffic shape including a tenfold spike in seconds. The tradeoff is cost predictability: a workload with a stable, high baseline will pay noticeably more on-demand than it would provisioned, and the bill scales linearly with traffic rather than being capped by a reservation. On-demand also has a warm-up consideration for tables that have never seen high throughput, since the service adjusts its internal partitioning to observed traffic.</p>
+        <p>There is a third path that the exam tests less often but that appears in cost-optimization scenarios: provisioned mode with reserved capacity, which is a commitment-based discount on a baseline of provisioned throughput. It only makes sense on top of a provisioned table whose baseline is stable enough to commit to, and it does not change the throttling behavior of the table at all. The decision sequence is therefore: pick the key design first, then pick the mode from the traffic shape, then consider a reservation only if the baseline is genuinely flat.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Dimension</th><th>Provisioned (with auto scaling)</th><th>On-demand</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Capacity planning</td><td>Required — you set the floor and ceiling</td><td>None</td></tr>
+              <tr><td>Cost per request</td><td>Lower</td><td>Higher</td></tr>
+              <tr><td>Response to a sudden spike</td><td>Delayed by metric and alarm windows</td><td>Immediate</td></tr>
+              <tr><td>Bill predictability</td><td>High — bounded by the ceiling</td><td>Low — scales with traffic</td></tr>
+              <tr><td>Best fit</td><td>Steady or forecastable traffic</td><td>New tables, spiky or unknown traffic</td></tr>
+              <tr><td>Mode switching</td><td colspan="2">Can be changed on an existing table, but not more than once in a 24-hour period</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+      <section class="doc-section" id="sizing-limits">
+        <h2 class="section-heading">5. Sizing, Limits and Quotas</h2>
+        <p>DynamoDB's numbers matter because scenario questions frequently hinge on whether a proposed design fits inside a documented limit. The unit of measurement is the capacity unit, and it is defined differently for reads and writes. One write capacity unit covers one write per second for an item up to 1 KB in size; larger items consume proportionally more, so a 3 KB item costs 3 write capacity units per write. One read capacity unit covers one strongly consistent read per second for an item up to 4 KB, or two eventually consistent reads per second for the same size. The asymmetry between the 1 KB write and 4 KB read unit is worth memorizing because it is the kind of detail a distractor will get wrong.</p>
+        <p>Item size is capped at 400 KB, which is a hard limit and a common reason a design has to be reworked — large blobs belong in S3 with the object key stored in DynamoDB, not in the item itself. Each item is limited to 400 KB including attribute names, and attribute names count toward the size, which is why short attribute names are a real optimization on large tables. A single Query or Scan operation returns at most 1 MB of data before paginating, so a query that needs more must loop on LastEvaluatedKey. A single BatchWriteItem call handles up to 25 items and a BatchGetItem up to 100 items, and neither is atomic across the batch.</p>
+        <p>On the partition side, the numbers that drive hot-partition behavior are the per-partition throughput ceilings and the split thresholds. A partition can sustain a bounded amount of read and write throughput, and when a table's provisioned capacity implies more partitions than the data volume would naturally create, DynamoDB splits partitions to spread the provisioned capacity. The practical implication is that a table with high provisioned capacity and a low-cardinality key ends up with many partitions, only a few of which receive traffic. Adaptive capacity can shift some budget toward the busy partitions, but it cannot exceed the per-partition ceiling, which is why a single hot key throttles regardless of how much capacity the table has.</p>
+        <p>Secondary indexes have their own capacity and their own limits. A local secondary index shares the partition key of the base table and therefore inherits its distribution — a hot base partition means a hot LSI. A global secondary index has its own partition key and its own provisioned capacity, which means a GSI can be hot even when the base table is healthy, and a GSI write consumes capacity on both the index and the base table. The number of GSIs per table is limited, and a GSI's key design deserves the same scrutiny as the base table's, because a poorly chosen GSI key is one of the more common causes of throttling in tables whose base key is fine.</p>
+      </section>
+      <section class="doc-section" id="failure-modes">
+        <h2 class="section-heading">6. Failure Modes and What They Look Like in Production</h2>
+        <p>The canonical DynamoDB failure is throttling, and its signature is specific enough to diagnose quickly. The application receives ProvisionedThroughputExceededException or, in on-demand mode, RequestLimitExceeded, while the table-level ConsumedWriteCapacityUnits metric sits comfortably below ProvisionedWriteCapacityUnits. That combination — errors at the client, headroom at the table — is the fingerprint of a hot partition or a hot key, and it is the first thing to check when a DynamoDB-backed service starts failing under load. If the table-level metric is at or above provisioned capacity instead, the problem is genuine under-provisioning and the fix is a capacity change, not a key redesign.</p>
+        <p>The second failure mode is the slow query that is not a query at all. A Scan operation reads every item in the table and consumes capacity proportional to table size, so a Scan added for an administrative report can consume the entire table's throughput budget and starve production traffic. The symptom is a broad latency increase across all operations rather than errors on one key, and the diagnostic move is to look at which operations are consuming capacity in the CloudWatch metrics and in CloudTrail data events. Scans in production are almost always a design smell; the fix is a GSI that supports the access pattern the scan was serving.</p>
+        <p>The third failure mode is the GSI backpressure problem, which is easy to miss because the base table looks healthy. A GSI has its own write capacity, and if the index cannot keep up with writes to the base table, the base table's writes are throttled to protect the index. The symptom is write throttling on a table whose own write capacity is fine, and the diagnostic move is to check the index's consumed versus provisioned capacity. This is why GSI capacity should be provisioned with headroom, and why on-demand mode is attractive for tables with GSIs whose write patterns are hard to forecast.</p>
+        <p>The fourth failure mode is the retry storm. DynamoDB SDKs retry throttled requests with exponential backoff by default, which is correct behavior, but an application that also implements its own retry loop on top of the SDK's can multiply the request rate during an incident and turn a transient throttle into a sustained one. The symptom is a request rate that climbs during the incident rather than falling, and the diagnostic move is to check whether the application's retry logic is layered on top of the SDK's. The fix is to let the SDK handle retries and to add jitter and a circuit breaker at the application layer rather than a second retry loop.</p>
+      </section>
+      <section class="doc-section" id="sre-angle">
+        <h2 class="section-heading">7. The Operational and SRE Angle</h2>
+        <p>DynamoDB's operational surface is smaller than a self-managed database's, but it is not zero, and the monitoring that matters is not the monitoring most teams set up first. Table-level consumed capacity and throttled request counts are the baseline, and they belong on a dashboard with alarms, but they are insufficient on their own because they cannot see a hot partition. The metrics that reveal hot-partition behavior are the ones broken out by operation and, where available, by key — and the practical substitute for per-key metrics is an application-level metric that records which partition key values are being accessed, sampled at a rate that keeps the metric cost reasonable.</p>
+        <p>The alarm design that works is a two-layer one. The first layer alarms on throttled requests at the table level, which catches genuine under-provisioning and GSI backpressure. The second layer alarms on the ratio of consumed to provisioned capacity sustained above a threshold, which catches the approach to a ceiling before requests start failing. Neither layer catches a hot partition on its own, so the third element is a synthetic or canary workload that exercises the highest-traffic key values on a schedule and reports latency, which turns a silent hot-partition condition into a visible one before customers see it.</p>
+        <p>The runbook shape follows from the failure modes. A throttle alarm should lead the responder through a fixed sequence: check whether table-level consumed capacity is at the ceiling, check whether a GSI is the bottleneck, check whether a Scan or an unbounded Query is consuming capacity, and only then look at key distribution. If the first three checks are clean, the incident is a hot key and the remediation is either a key redesign or, as a stopgap, a write-sharding layer in front of the table. Having that sequence written down matters because the instinct under pressure is to raise provisioned capacity, which does nothing for a hot partition and increases the bill.</p>
+        <p>From an SLO perspective, DynamoDB changes what you can promise. Because the service is multi-AZ by default and replicates synchronously within a region, availability SLOs are usually dominated by the application's own error handling rather than by the database's availability. Latency SLOs are dominated by item size and access pattern: a single-digit-millisecond p99 is achievable for small items accessed by primary key, and not achievable for large items or for queries that return many items. Writing an SLO that assumes uniform latency across all access patterns is a common way to end up with a permanently burning error budget.</p>
+      </section>
+      <section class="doc-section" id="gotchas">
+        <h2 class="section-heading">8. Edge Cases and Exam Gotchas</h2>
+        <p>The most frequently missed point is that a sort key does not improve partition distribution. Candidates who understand that low-cardinality partition keys are bad sometimes conclude that adding a sort key fixes it, which it does not — the partition key alone determines the partition. A related gotcha is that a GSI's partition key can be different from the base table's, which means a GSI can rescue an access pattern that the base key cannot serve, but it also means a GSI can introduce a new hot partition that the base table does not have.</p>
+        <p>Capacity unit arithmetic is a reliable source of wrong answers. Reads are measured in 4 KB blocks and writes in 1 KB blocks, strongly consistent reads cost twice an eventually consistent read of the same item, and transactional reads and writes cost double the equivalent non-transactional operation. A scenario that gives you an item size, a request rate, and a consistency requirement is asking you to do this arithmetic, and the distractors are usually the answers you get by using the wrong block size or forgetting the consistency multiplier.</p>
+        <p>Mode switching has a constraint worth remembering: a table can be switched between provisioned and on-demand, but not more than once in a 24-hour period. A scenario that proposes switching a table to on-demand for a flash sale and back afterward is testing whether you know that the switch back may have to wait. On-demand tables also have a warm-up behavior for tables that have never sustained high throughput, so a scenario that expects instant full-scale performance from a brand-new on-demand table is describing something the service does not guarantee.</p>
+        <p>Finally, the limits that show up as distractors: 400 KB maximum item size, 1 MB maximum returned per Query or Scan, 25 items per BatchWriteItem, 100 items per BatchGetItem, and the fact that a Query on a GSI is eventually consistent unless the index is configured otherwise. Each of these is a plausible-sounding constraint that a wrong answer will violate, and each is worth being able to state without looking it up.</p>
+      </section>
+      <section class="doc-section" id="vs-comparison">
+        <h2 class="section-heading">9. DynamoDB vs. the Databases It Gets Confused With</h2>
+        <p>The exam's DynamoDB distractors are usually Aurora or RDS, and the distinguishing question is almost always about access pattern and scale rather than about features. DynamoDB is a key-value and document store with a fixed set of access patterns defined at design time; Aurora is a relational engine that supports arbitrary SQL joins and ad hoc queries. If a scenario requires joins, aggregations across arbitrary dimensions, or a schema that changes shape frequently, DynamoDB is the wrong answer no matter how attractive its scale characteristics look. If a scenario requires single-digit-millisecond latency at a request rate that would overwhelm a relational primary, Aurora is the wrong answer no matter how familiar it is.</p>
+        <p>ElastiCache is the other frequent distractor, and the boundary is durability. A cache is a performance layer in front of a system of record; DynamoDB is a system of record. A scenario that describes losing cached data as acceptable is describing a cache, and a scenario that describes losing data as unacceptable is describing a database. DAX sits between the two — it is a cache for DynamoDB specifically, and it does not change the durability characteristics of the table underneath it.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Requirement</th><th>Pick DynamoDB when…</th><th>Pick the alternative when…</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Access pattern</td><td>Known at design time, key-based lookups and range queries</td><td>Ad hoc SQL, joins, or aggregations across arbitrary dimensions (Aurora/RDS)</td></tr>
+              <tr><td>Scale</td><td>Request rate exceeds what a relational primary can absorb</td><td>Moderate, steady load where relational tooling matters more</td></tr>
+              <tr><td>Schema</td><td>Flexible or evolving per item</td><td>Strict relational schema with foreign keys and constraints</td></tr>
+              <tr><td>Latency</td><td>Single-digit milliseconds at any scale</td><td>Sub-millisecond reads of hot data (ElastiCache/DAX in front of a store)</td></tr>
+              <tr><td>Durability</td><td>Data must survive; it is the system of record</td><td>Data is reconstructible; it is a cache</td></tr>
+              <tr><td>Multi-region writes</td><td>Multi-active writes across regions are required (Global Tables)</td><td>A single writer region with read replicas is sufficient (Aurora Global Database)</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+      <section class="doc-section" id="lab">
+        <h2 class="section-heading">Hands-on Lab: Redesigning a Hot Partition Key</h2>
+        <div class="card card-green">
+          <p>This lab takes a table that throttles under load despite ample provisioned capacity and walks through the diagnosis and the redesign. It assumes an AWS account with permission to create DynamoDB tables and CloudWatch alarms, and the AWS CLI configured. Budget roughly 45 minutes.</p>
+          <p><strong>1. Create the broken table.</strong> Create a table named <code>orders-hot</code> with a partition key <code>OrderStatus</code> (String) and a sort key <code>OrderId</code> (String), in provisioned mode with a modest write capacity — enough that the table-level metric will look healthy while individual partitions throttle. Enable DynamoDB Streams or point-in-time recovery if you want to observe the write path in more detail.</p>
+          <p><strong>2. Generate skewed load.</strong> Write a short script that inserts items with <code>OrderStatus</code> drawn from a small set of values — say five — while varying <code>OrderId</code> widely. Drive the write rate up until the client starts receiving <code>ProvisionedThroughputExceededException</code>. Record the request rate at which failures begin.</p>
+          <p><strong>3. Confirm the diagnosis.</strong> Open the CloudWatch metrics for the table and compare <code>ConsumedWriteCapacityUnits</code> against <code>ProvisionedWriteCapacityUnits</code>. The consumed value should be well below provisioned while the client is failing, which is the hot-partition signature. Note the <code>ThrottledRequests</code> metric and the <code>WriteThrottleEvents</code> metric, and confirm they move together with the client-side errors.</p>
+          <p><strong>4. Redesign the key.</strong> Create a second table, <code>orders-sharded</code>, with a partition key that combines the status with a shard suffix — for example <code>OrderStatus#Shard</code> where <code>Shard</code> is a value from 0 to 9 chosen at write time. Keep the same sort key. The write path now spreads each status across ten partitions instead of one.</p>
+          <p><strong>5. Re-run the load.</strong> Point the same script at the new table, writing to a randomly chosen shard for each item. Drive the write rate past the point where the first table failed and record where the second table begins to throttle. The improvement should be roughly proportional to the shard count, bounded by the table's provisioned capacity.</p>
+          <p><strong>6. Measure the read cost.</strong> Read a single order back from the sharded table. Because the shard is part of the partition key, a lookup by <code>OrderId</code> alone is no longer possible — you must either know the shard or query all ten shards and merge the results. Implement the scatter-gather read and measure its latency and consumed read capacity against the single-item read from the original table. This is the tradeoff the redesign bought.</p>
+          <p><strong>7. Add the alarm.</strong> Create a CloudWatch alarm on <code>ThrottledRequests</code> for the sharded table and a second alarm on the ratio of consumed to provisioned write capacity sustained above a threshold. Confirm both fire under a deliberately excessive load and clear when the load stops.</p>
+          <p><strong>8. Clean up.</strong> Delete both tables and the alarms. Before deleting, note the total consumed capacity for the load test on each table, which is a rough measure of how much of the provisioned budget the hot key was wasting.</p>
+        </div>
+      </section>
+      <section class="doc-section" id="quiz">
         <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
         
       <div class="scenario-card">
         <p class="scenario-question"><strong>Q1.</strong> A DynamoDB table using 'OrderStatus' (5 possible values) as the partition key is throttling under high write volume even though total table capacity is high. Why?</p>
-        <div class="scenario-options" id="opts-d24q0">
+        <div class="scenario-options" id="opts-d24q1">
             <div class="scenario-option">A. The table needs Global Tables</div>
             <div class="scenario-option">B. Low-cardinality partition keys create hot partitions since a partition's throughput is capped regardless of table-level capacity</div>
             <div class="scenario-option">C. On-demand mode isn't enabled</div>
             <div class="scenario-option">D. DynamoDB doesn't support high write volume</div>
         </div>
-        <button class="scenario-reveal-btn" onclick="revealAnswer('d24q0', 1)">Reveal Answer</button>
-        <div class="scenario-explanation" id="exp-d24q0"><strong>Correct answer: B.</strong> Each partition has its own throughput ceiling; a key with only 5 distinct values concentrates all writes onto a handful of partitions, causing throttling even with ample table-level capacity.</div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d24q1', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d24q1"><strong>Correct answer: B.</strong> Each partition has its own throughput ceiling; a key with only 5 distinct values concentrates all writes onto a handful of partitions, causing throttling even with ample table-level capacity.</div>
       </div>
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q2.</strong> A table is keyed on a high-cardinality customer ID and is well distributed in storage, but one large tenant generates most of the traffic and its requests are throttled. What is the cause?</p>
+        <div class="scenario-options" id="opts-d24q2">
+            <div class="scenario-option">A. The table needs a sort key added</div>
+            <div class="scenario-option">B. Access skew — a single partition key value is receiving disproportionate traffic, so its partition hits its ceiling</div>
+            <div class="scenario-option">C. The table is in the wrong region</div>
+            <div class="scenario-option">D. DynamoDB cannot support multi-tenant workloads</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d24q2', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d24q2"><strong>Correct answer: B.</strong> High cardinality in storage does not guarantee even traffic distribution; a whale tenant concentrates requests on one partition key value, which is the access-skew form of a hot partition.</div>
+      </div>
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q3.</strong> A team adds a sort key to a table whose partition key is a low-cardinality status attribute, expecting the throttling to stop. What happens?</p>
+        <div class="scenario-options" id="opts-d24q3">
+            <div class="scenario-option">A. Throttling stops because the sort key spreads writes</div>
+            <div class="scenario-option">B. Throttling continues — the partition key alone determines the partition, and the sort key does not participate in partition selection</div>
+            <div class="scenario-option">C. The table switches to on-demand automatically</div>
+            <div class="scenario-option">D. The sort key converts the table to a GSI</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d24q3', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d24q3"><strong>Correct answer: B.</strong> Items with the same partition key and different sort keys live on the same partition; the sort key buys query flexibility and item collection locality, not distribution.</div>
+      </div>
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q4.</strong> A new application has unpredictable traffic that can spike tenfold within seconds, and the team does not want to tune capacity. Which capacity mode fits?</p>
+        <div class="scenario-options" id="opts-d24q4">
+            <div class="scenario-option">A. Provisioned mode with auto scaling</div>
+            <div class="scenario-option">B. On-demand mode, which scales immediately to the arriving traffic with no capacity planning</div>
+            <div class="scenario-option">C. Provisioned mode with reserved capacity</div>
+            <div class="scenario-option">D. Provisioned mode with a very high fixed ceiling</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d24q4', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d24q4"><strong>Correct answer: B.</strong> Auto scaling reacts to CloudWatch metrics over a window and will lag a spike that arrives in seconds; on-demand mode adapts immediately and removes the planning burden.</div>
+      </div>
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q5.</strong> A workload has a stable, high, predictable baseline of traffic and the team wants the lowest cost per request. Which configuration fits?</p>
+        <div class="scenario-options" id="opts-d24q5">
+            <div class="scenario-option">A. On-demand mode</div>
+            <div class="scenario-option">B. Provisioned mode sized to the baseline, optionally with reserved capacity for the committed portion</div>
+            <div class="scenario-option">C. On-demand mode with DAX in front</div>
+            <div class="scenario-option">D. Provisioned mode with the ceiling set to the peak</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d24q5', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d24q5"><strong>Correct answer: B.</strong> Provisioned capacity is cheaper per unit of throughput than on-demand, and a stable baseline is exactly the traffic shape that makes a provisioned table (and a reservation on top of it) cost-effective.</div>
+      </div>
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q6.</strong> An application writes 2 KB items at 500 writes per second. How many write capacity units does it consume?</p>
+        <div class="scenario-options" id="opts-d24q6">
+            <div class="scenario-option">A. 500</div>
+            <div class="scenario-option">B. 1,000 — each 2 KB write consumes 2 write capacity units</div>
+            <div class="scenario-option">C. 250</div>
+            <div class="scenario-option">D. 2,000</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d24q6', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d24q6"><strong>Correct answer: B.</strong> One write capacity unit covers 1 KB per second, so a 2 KB item costs 2 units per write; 500 writes per second therefore consume 1,000 write capacity units.</div>
+      </div>
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q7.</strong> A read-heavy service needs 400 strongly consistent reads per second of 3 KB items. How many read capacity units are required?</p>
+        <div class="scenario-options" id="opts-d24q7">
+            <div class="scenario-option">A. 400</div>
+            <div class="scenario-option">B. 800</div>
+            <div class="scenario-option">C. 400 — a 3 KB item fits in one 4 KB read unit, and strongly consistent reads cost one unit each</div>
+            <div class="scenario-option">D. 1,600</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d24q7', 2)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d24q7"><strong>Correct answer: C.</strong> Read capacity is measured in 4 KB blocks, so a 3 KB item consumes one unit per strongly consistent read; 400 reads per second therefore need 400 read capacity units.</div>
+      </div>
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q8.</strong> A table's base write capacity is healthy, but writes to the table are being throttled. A global secondary index was added last week. What is the most likely cause?</p>
+        <div class="scenario-options" id="opts-d24q8">
+            <div class="scenario-option">A. The base table's partition key is low-cardinality</div>
+            <div class="scenario-option">B. The GSI cannot keep up with writes, so the base table's writes are throttled to protect the index</div>
+            <div class="scenario-option">C. The table needs to be switched to on-demand</div>
+            <div class="scenario-option">D. The GSI is reading from the base table too slowly</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d24q8', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d24q8"><strong>Correct answer: B.</strong> A GSI has its own write capacity; when it falls behind, the base table's writes are throttled to protect it, which is why GSI capacity should be provisioned with headroom.</div>
+      </div>
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q9.</strong> A nightly administrative report runs a Scan over a large production table, and during the scan all production operations slow down. What is the cause and the fix?</p>
+        <div class="scenario-options" id="opts-d24q9">
+            <div class="scenario-option">A. The table is under-provisioned; raise the capacity</div>
+            <div class="scenario-option">B. The Scan consumes capacity proportional to table size and starves production traffic; replace it with a GSI that serves the report's access pattern</div>
+            <div class="scenario-option">C. The Scan is fine; the slowdown is unrelated</div>
+            <div class="scenario-option">D. Enable DynamoDB Streams to isolate the scan</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d24q9', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d24q9"><strong>Correct answer: B.</strong> A Scan reads every item and consumes capacity proportional to table size, so it competes with production traffic; a GSI designed for the report's access pattern is the standard fix.</div>
+      </div>
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q10.</strong> During a throttling incident, the request rate arriving at the table climbs rather than falls. What is the most likely explanation?</p>
+        <div class="scenario-options" id="opts-d24q10">
+            <div class="scenario-option">A. The table is being scanned</div>
+            <div class="scenario-option">B. The application implements its own retry loop on top of the SDK's built-in retries, multiplying the request rate</div>
+            <div class="scenario-option">C. On-demand mode is enabled</div>
+            <div class="scenario-option">D. The partition key has too many distinct values</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d24q10', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d24q10"><strong>Correct answer: B.</strong> Layering application retries on top of the SDK's exponential backoff multiplies requests during an incident; let the SDK handle retries and add jitter and a circuit breaker at the application layer instead.</div>
+      </div>
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q11.</strong> A table stores 600 KB documents and writes are failing with an item size error. What is the correct remediation?</p>
+        <div class="scenario-options" id="opts-d24q11">
+            <div class="scenario-option">A. Increase the provisioned write capacity</div>
+            <div class="scenario-option">B. Store the document in S3 and keep the object key in DynamoDB — the maximum item size is 400 KB</div>
+            <div class="scenario-option">C. Switch the table to on-demand mode</div>
+            <div class="scenario-option">D. Add a sort key to increase the item size limit</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d24q11', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d24q11"><strong>Correct answer: B.</strong> The 400 KB item size limit is hard; large payloads belong in S3 with the object key stored in the item.</div>
+      </div>
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q12.</strong> A Query returns 1 MB of results and the application needs the remaining items. What must the application do?</p>
+        <div class="scenario-options" id="opts-d24q12">
+            <div class="scenario-option">A. Increase the read capacity units</div>
+            <div class="scenario-option">B. Loop on LastEvaluatedKey, since a single Query or Scan returns at most 1 MB before paginating</div>
+            <div class="scenario-option">C. Switch to a Scan, which has no size limit</div>
+            <div class="scenario-option">D. Add a local secondary index</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d24q12', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d24q12"><strong>Correct answer: B.</strong> A single Query or Scan returns at most 1 MB; the application must paginate using the LastEvaluatedKey returned with each page.</div>
+      </div>
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q13.</strong> A team wants to switch a table to on-demand mode for a flash sale and back to provisioned mode the next morning. What constraint applies?</p>
+        <div class="scenario-options" id="opts-d24q13">
+            <div class="scenario-option">A. Mode changes are not supported on existing tables</div>
+            <div class="scenario-option">B. A table can be switched between modes, but not more than once in a 24-hour period, so the switch back may have to wait</div>
+            <div class="scenario-option">C. Switching to on-demand deletes the table's data</div>
+            <div class="scenario-option">D. Mode changes require a support ticket</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d24q13', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d24q13"><strong>Correct answer: B.</strong> Capacity mode can be changed on an existing table, but the change is limited to once per 24-hour period, which constrains a same-day switch-and-switch-back plan.</div>
+      </div>
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q14.</strong> A time-series table keyed on an ISO timestamp is throttling on writes even though the table has ample capacity. What is the cause and the standard remedy?</p>
+        <div class="scenario-options" id="opts-d24q14">
+            <div class="scenario-option">A. The table needs a GSI on the timestamp</div>
+            <div class="scenario-option">B. A monotonically increasing key concentrates all current writes on the newest partition; add a bucketing prefix such as a date or hour to spread writes across partitions</div>
+            <div class="scenario-option">C. The table should be switched to on-demand mode</div>
+            <div class="scenario-option">D. Timestamps are not supported as partition keys</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d24q14', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d24q14"><strong>Correct answer: B.</strong> A monotonic key sends every new write to the same partition; a coarse time bucket prefix spreads writes across buckets while keeping range queries within a bucket efficient.</div>
+      </div>
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q15.</strong> A table's base partition key is well distributed, but queries against a global secondary index are throttling. What is the most likely cause?</p>
+        <div class="scenario-options" id="opts-d24q15">
+            <div class="scenario-option">A. The base table's partition key is low-cardinality</div>
+            <div class="scenario-option">B. The GSI has its own partition key and its own capacity, so a poorly chosen GSI key can be hot even when the base table is healthy</div>
+            <div class="scenario-option">C. GSIs cannot be throttled</div>
+            <div class="scenario-option">D. The GSI needs a sort key removed</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d24q15', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d24q15"><strong>Correct answer: B.</strong> A GSI has its own partition key and provisioned capacity, so its key design deserves the same scrutiny as the base table's — a hot GSI key is a common cause of throttling in otherwise healthy tables.</div>
+      </div>
+      </section>
+      <section class="doc-section" id="preview">
+        <h2 class="section-heading">Peek into Tomorrow</h2>
+        <div class="card card-purple">
+          <p>Everything in today's material assumes a single region. The partition key distributes load across partitions inside one table, the capacity mode governs throughput inside one region, and the failure modes — hot partitions, GSI backpressure, retry storms — are all local. That assumption is fine until the requirement changes from "handle a lot of traffic" to "serve users on three continents with writes originating in more than one of them," and at that point the partitioning model raises a question it cannot answer on its own.</p>
+          <p>If two regions both accept writes to the same item, what happens when they conflict? DynamoDB's answer is last-writer-wins conflict resolution, which is simple to state and has real consequences for application design — it means the application cannot rely on the database to detect or merge concurrent updates, and it means the ordering of writes across regions is not something the table will preserve for you. The other half of tomorrow's material is the read path: DAX, a read-through and write-through cache that drops read latency from milliseconds to microseconds, which raises its own question about what a cache in front of a multi-region table actually guarantees. Both answers change the design decisions made today, and neither is a simple extension of them.</p>
+        </div>
+      </section>
+      <section class="doc-section" id="sources">
+        <h2 class="section-heading">Sources</h2>
+        <div class="card">
+          <ul class="source-list">
+            <li><a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.Partitions.html" target="_blank" rel="noopener">Amazon DynamoDB Developer Guide — Partitions and data distribution</a></li>
+            <li><a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/ProvisionedThroughput.html" target="_blank" rel="noopener">Amazon DynamoDB Developer Guide — Provisioned capacity and capacity units</a></li>
+            <li><a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/on-demand-capacity-mode.html" target="_blank" rel="noopener">Amazon DynamoDB Developer Guide — On-demand capacity mode</a></li>
+            <li><a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/bp-partition-key-design.html" target="_blank" rel="noopener">Amazon DynamoDB Developer Guide — Best practices for partition key design</a></li>
+            <li><a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/ServiceQuotas.html" target="_blank" rel="noopener">Amazon DynamoDB Developer Guide — Service quotas</a></li>
+            <li><a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/GSI.html" target="_blank" rel="noopener">Amazon DynamoDB Developer Guide — Global secondary indexes</a></li>
+            <li><a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/ErrorHandling.html" target="_blank" rel="noopener">Amazon DynamoDB Developer Guide — Error handling and retries</a></li>
+            <li><a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/monitoring-metrics.html" target="_blank" rel="noopener">Amazon DynamoDB Developer Guide — Monitoring with CloudWatch metrics</a></li>
+          </ul>
+        </div>
       </section>
       <div class="day-nav">
         <a href="day-023.html">&larr; Day 23: Amazon RDS Multi-AZ vs Read Replicas &amp; Blue/Green Deployments</a>

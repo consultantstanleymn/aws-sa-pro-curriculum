@@ -23,6 +23,23 @@
   <aside class="sidebar" id="sidebar">
     <div class="search-box"><input type="text" id="navSearch" class="search-input" placeholder="Search days..." onkeyup="filterNav()"></div>
     <div class="nav-section">
+      <div class="nav-section-title">On This Page</div>
+      <a href="#recap" class="nav-link">Recap: From Outside-In Probes to Inside-Out Traces</a>
+      <a href="#why-xray" class="nav-link">1. Why X-Ray Is on the Exam</a>
+      <a href="#mechanism" class="nav-link">2. How a Trace Is Actually Built</a>
+      <a href="#decision-boundary" class="nav-link">3. The Core Decision Boundary: Trace or Don't Trace</a>
+      <a href="#config-modes" class="nav-link">4. Sampling Rules and Their Tradeoffs</a>
+      <a href="#sizing-limits" class="nav-link">5. Sizing, Limits and Quotas</a>
+      <a href="#failure-modes" class="nav-link">6. Failure Modes and What They Look Like</a>
+      <a href="#sre-angle" class="nav-link">7. The Operational and SRE Angle</a>
+      <a href="#gotchas" class="nav-link">8. Edge Cases and Exam Gotchas</a>
+      <a href="#vs-comparison" class="nav-link">9. X-Ray vs. the Services It Gets Confused With</a>
+      <a href="#lab" class="nav-link">Hands-on Lab</a>
+      <a href="#quiz" class="nav-link">Scenario Question Drills</a>
+      <a href="#preview" class="nav-link">Peek into Tomorrow</a>
+      <a href="#sources" class="nav-link">Sources</a>
+    </div>
+    <div class="nav-section">
       <div class="nav-section-title">All Days</div>
       <a href="day-001.html" class="nav-link" data-day="1">Day 1: Multi-Account Architecture &amp; AWS Organizations</a>
       <a href="day-002.html" class="nav-link" data-day="2">Day 2: Service Control Policy (SCP) Mechanics</a>
@@ -104,38 +121,362 @@
         <span class="pill pill-green">Phase 3: SRE Observability, Resilience &amp; DR</span>
       </div>
       <h1 class="hero-title">AWS X-Ray Distributed Tracing</h1>
-      <div class="reading-meta">&#128337; ~3 min read &middot; 3 services covered</div>
+      <div class="reading-meta">&#128337; ~58 min read &middot; 3 services covered</div>
       <div class="services-grid">
         <span class="service-tag">X-Ray</span>
         <span class="service-tag">Service Map</span>
         <span class="service-tag">Sampling Rules</span>
       </div>
       <div id="tracker"></div>
-      <section class="doc-section">
-        <h2 class="section-heading">Today's Concept</h2>
+
+      <section class="doc-section" id="recap">
+        <h2 class="section-heading">Recap: From Outside-In Probes to Inside-Out Traces</h2>
         <div class="card card-accent">
-          <p>X-Ray traces a request across microservices, building a service map that highlights latency and error hotspots per hop. Sampling rules control trace volume/cost, and annotations/subsegments let you filter and drill into specific downstream calls (e.g. a slow DynamoDB query inside a Lambda invocation).</p>
-        </div>
-        <h3 class="sub-heading">Hands-on Lab / Practical Action (45 min)</h3>
-        <div class="card">
-          <p>Instrument a Lambda-to-DynamoDB call chain with X-Ray and identify which downstream hop contributes most to p99 latency using the service map.</p>
+          <p>Day 30 put monitoring outside the infrastructure. Synthetics canaries are scripted Puppeteer/Selenium probes that drive real user flows against your public endpoints on a schedule, which means they answer a question your internal dashboards structurally cannot: is the thing a customer actually does still working? That is the value of synthetic probes from outside — they catch SLO breach detection at the edge, where DNS, CDN, TLS, and front-end regressions live, and they do it before a human files a ticket. The limitation is equally structural. A canary tells you the checkout flow failed and roughly how long it took; it cannot tell you which of the twelve services behind that flow was responsible.</p>
+          <p>X-Ray is the same service family — CloudWatch-adjacent observability tooling, same console, same alarms — pointed at the opposite failure mode. Where canaries observe the system from outside and report a symptom, X-Ray instruments the system from inside and reports the causal chain. The two are complementary rather than competing: a canary alarm is often the trigger that sends you into the X-Ray service map to find the hop that actually degraded. Today is about building that inside-out view, and about the sampling economics that decide how much of it you can afford to keep.</p>
         </div>
       </section>
-      <section class="doc-section">
+
+      <section class="doc-section" id="why-xray">
+        <h2 class="section-heading">1. Why X-Ray Is on the Exam</h2>
+        <p>The architectural problem X-Ray exists to solve is the observability gap created by decomposition. When a monolith handles a request, a single stack trace or a single log line with a duration tells you where the time went. Once that monolith is split into a dozen services — an API Gateway fronting Lambda functions that call DynamoDB, publish to SNS, and invoke each other — no single component has a complete picture of the request. Each service logs its own work, each service emits its own metrics, and the aggregate view you get from CloudWatch is a set of independent time series that correlate only loosely. A p99 latency increase on the front-end service and a p99 increase on a downstream service look like two separate incidents until you can prove they are the same requests.</p>
+        <p>Distributed tracing closes that gap by propagating a correlation identifier across every hop and recording the timing of each hop as a structured segment. The result is a per-request timeline rather than a per-service aggregate, and the aggregate view built from those timelines — the service map — shows you the topology and the latency contribution of each edge. This is why the topic shows up in SAP-C02 Domain 2, the resilient architectures domain, and specifically in the observability and operational-excellence sub-areas. Exam scenarios rarely ask you to configure X-Ray in detail. They ask you to choose the right diagnostic tool for a described symptom, and the discriminator is almost always whether the question describes a request that crosses service boundaries.</p>
+        <p>The pattern to internalize is this: if the scenario says "a single service is slow," CloudWatch metrics or Logs Insights may be sufficient. If the scenario says "a request traverses multiple services and we cannot tell which one is responsible," or names a specific downstream dependency like a DynamoDB table inside a Lambda invocation, the answer is X-Ray. The exam also tests the cost-control dimension, because tracing every request at scale is expensive, which is why sampling rules are a first-class part of the service rather than an afterthought.</p>
+      </section>
+
+      <section class="doc-section" id="mechanism">
+        <h2 class="section-heading">2. How a Trace Is Actually Built</h2>
+        <p>X-Ray's data model has three levels, and understanding them is what lets you reason about the service map instead of just reading it. A <strong>trace</strong> is the end-to-end record of a single request, identified by a trace ID that is generated at the entry point and propagated to every downstream call. Within a trace, each unit of work is a <strong>segment</strong>, and segments are emitted by the service that performed the work — one segment per service per request. Segments can contain <strong>subsegments</strong>, which break a single service's work into finer pieces: an outbound HTTP call, a SQL query, a DynamoDB operation, or a block of custom instrumented code. The service map is built by aggregating segments across many traces and drawing an edge wherever one service's segment references another's.</p>
+        <p>Propagation is the part that makes or breaks an implementation. X-Ray uses a tracing header — historically <code>X-Amzn-Trace-Id</code> — that carries the trace ID, the parent segment ID, and a sampling decision. When a service receives a request with that header, it joins the existing trace rather than starting a new one. When it makes an outbound call, it must forward the header, which is why the X-Ray SDK matters: it instruments common clients (HTTP libraries, AWS SDK calls, database drivers) so the header is injected automatically. A single uninstrumented hop breaks the chain, and the service map will show the trace terminating at that boundary with no downstream edges. This is the most common reason a service map looks incomplete in a real account.</p>
+        <p>Instrumentation comes in three flavors, and the exam expects you to know which applies where. The X-Ray SDK is the code-level option for applications you control, available for Java, Node.js, Python, Ruby, Go, and .NET. The X-Ray daemon is a small process that listens on UDP port 2000 and buffers segments before forwarding them to the X-Ray API in batches — it is what EC2 instances, ECS tasks, and self-managed EKS nodes run. On Lambda, the daemon is managed for you: enabling active tracing on the function is sufficient, and the execution role needs the appropriate X-Ray write permissions. AWS-managed services like API Gateway, Elastic Load Balancing, and EventBridge can emit segments natively without any code change, which is often how you get the entry-point segment for free.</p>
+      </section>
+
+      <section class="doc-section" id="decision-boundary">
+        <h2 class="section-heading">3. The Core Decision Boundary: Trace or Don't Trace</h2>
+        <p>The fork that most scenario questions hinge on is not "which tracing tool" but "is tracing the right instrument at all." Tracing is a per-request, high-cardinality signal. It is excellent at answering "which hop in this specific request path is slow or failing" and poor at answering "how many requests did we serve last hour" or "what is our total error budget consumption." Metrics are cheap, aggregated, and always-on; traces are expensive, detailed, and sampled. A well-designed observability stack uses metrics to detect that something is wrong and traces to explain why, which is exactly the division of labor the exam rewards.</p>
+        <p>The second half of the boundary is where the trace boundary itself should be drawn. X-Ray traces requests, not background processes, and it traces across services you instrument. If a scenario describes a batch job that runs on a schedule with no inbound request, tracing it requires manual segment creation rather than automatic instrumentation. If a scenario describes a third-party SaaS dependency you cannot instrument, the trace will show the outbound call as a subsegment with a duration but no downstream detail — which is still useful, because it proves the time was spent outside your boundary.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Symptom in the scenario</th><th>Right instrument</th><th>Why</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>One service is slow, no cross-service call</td><td>CloudWatch metrics, Logs Insights</td><td>Aggregate signal is sufficient; tracing adds cost without new information</td></tr>
+              <tr><td>Request crosses 3+ services, bottleneck unknown</td><td>X-Ray service map</td><td>Per-hop latency attribution is the only way to isolate the responsible service</td></tr>
+              <tr><td>Specific downstream call is suspected (DynamoDB, HTTP)</td><td>X-Ray subsegments</td><td>Subsegments time individual operations inside a service</td></tr>
+              <tr><td>User flow broken but servers look healthy</td><td>Synthetics canaries (Day 30)</td><td>Outside-in probe catches edge failures internal metrics miss</td></tr>
+              <tr><td>Need to search raw log text across accounts</td><td>Logs Insights, subscription filters (Day 32)</td><td>Logs are the right substrate for text search, not traces</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="doc-section" id="config-modes">
+        <h2 class="section-heading">4. Sampling Rules and Their Tradeoffs</h2>
+        <p>Sampling is the knob that decides how much of your traffic becomes trace data, and it is the single most consequential configuration choice in X-Ray. The default rule is a reservoir of one trace per second plus five percent of additional requests, which is designed to give you a continuous baseline without proportional cost growth. The reservoir guarantees that even a low-traffic service produces some traces every second, which matters because a purely percentage-based sampler would produce nothing at all for a service handling one request per minute. The percentage above the reservoir is what scales with volume, and it is where the cost lives.</p>
+        <p>Custom sampling rules let you override the default per service, per URL path, per HTTP method, or per resource ARN, and they are evaluated in priority order. This is how you solve the classic tension between cost and coverage: sample aggressively for high-volume, low-value endpoints and sample at a much higher rate for the low-volume, high-value paths where a single failure is expensive. A checkout endpoint handling ten requests per second can be sampled at a high percentage cheaply; a health-check endpoint handling ten thousand requests per second should be sampled at a fraction of a percent or excluded entirely.</p>
+        <p>The tradeoff to understand is that sampling is a decision made at the entry point and propagated downstream, not re-evaluated at each hop. Once a request is marked as not sampled, no downstream service will record it, which means you cannot retroactively decide to keep a trace after the fact. This has a real operational consequence: if you sample at one percent and an incident affects only a small subset of requests, you may have very few traces of the failing path. The mitigation is to raise the sampling rate temporarily during an investigation, or to use a rule that samples error paths at a higher rate — but the latter requires the sampling decision to be made where the error is known, which is usually not the entry point.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Sampling configuration</th><th>What it costs</th><th>When to use it</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Default (1/sec reservoir + 5%)</td><td>Low, predictable</td><td>Baseline coverage across all services with no tuning</td></tr>
+              <tr><td>High-rate custom rule on a specific path</td><td>Proportional to that path's volume</td><td>Low-volume, high-value endpoints (checkout, auth)</td></tr>
+              <tr><td>Low-rate or excluded high-volume path</td><td>Minimal</td><td>Health checks, static asset fetches, noisy pollers</td></tr>
+              <tr><td>100% sampling</td><td>Highest; can throttle segment delivery</td><td>Short-lived debugging windows only, never steady state</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="doc-section" id="sizing-limits">
+        <h2 class="section-heading">5. Sizing, Limits and Quotas</h2>
+        <p>X-Ray's limits fall into three buckets: trace data size, API throughput, and retention. The trace document size limit is 64 KB per segment, and exceeding it causes the segment to be dropped rather than truncated — which is why dumping large payloads into annotations or metadata is a common self-inflicted failure. Annotations are indexed and searchable but limited in number and value size; metadata is not indexed and is intended for larger, non-searchable payloads. If you need to attach a large object to a trace, the correct pattern is to store it elsewhere and put a reference in the trace.</p>
+        <p>On the API side, the daemon buffers and batches segments before sending them, which smooths bursts, but there are still per-account limits on the rate at which segments can be sent and retrieved. The practical implication is that 100% sampling on a high-throughput service can cause the daemon to drop segments under load, producing a service map that looks like it has gaps. The daemon's own logs are the place to look for this, and the fix is almost always to lower the sampling rate rather than to raise a quota.</p>
+        <p>Retention is the limit most people are surprised by. Trace data is retained for 30 days, and there is no configuration to extend it. If a scenario requires long-term retention of request-level data for compliance or trend analysis, X-Ray is the wrong tool — the answer is to export to S3 or a data warehouse, or to rely on aggregated metrics for the long view. The 30-day window is generous for incident response and adequate for weekly trend comparison, but it is not an audit log.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Limit</th><th>Value</th><th>Consequence of exceeding</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Trace document size</td><td>64 KB per segment</td><td>Segment dropped, trace incomplete</td></tr>
+              <tr><td>Trace data retention</td><td>30 days</td><td>Older traces unavailable; export required for longer retention</td></tr>
+              <tr><td>Daemon listener</td><td>UDP port 2000</td><td>Segments never reach the API if the daemon is unreachable</td></tr>
+              <tr><td>Default sampling</td><td>1 trace/sec reservoir + 5%</td><td>Higher rates increase cost and risk of dropped segments</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="doc-section" id="failure-modes">
+        <h2 class="section-heading">6. Failure Modes and What They Look Like</h2>
+        <p>The most common X-Ray failure is not an outage — it is a silently incomplete service map. The symptom is a map where traces terminate at a service boundary with no downstream edges, or where a service appears in the map but never as a caller of anything. The first diagnostic move is to check whether the tracing header is being propagated across that boundary. If the caller is instrumented but the callee is not, the callee's work is invisible. If the callee is instrumented but the caller is not forwarding the header, the callee starts a new trace instead of joining the existing one, and you get two disconnected traces rather than one connected one.</p>
+        <p>The second failure mode is missing permissions. X-Ray requires IAM permissions to send segments, and the failure is quiet: the application works, the trace simply never appears. On Lambda, the execution role needs the X-Ray write actions; on EC2 and ECS, the instance role or task role does. The diagnostic move is to check the service's own logs for X-Ray SDK errors, because the SDK logs delivery failures rather than throwing them into the application path. This is deliberate — tracing must never break the application — but it means a misconfigured role can go unnoticed for a long time.</p>
+        <p>The third failure mode is the daemon not running or not reachable. On EC2 and ECS, the SDK sends segments to the local daemon over UDP, and UDP is fire-and-forget: if nothing is listening on port 2000, the segments are simply lost with no error at the application layer. The symptom is a service that appears in the map intermittently or not at all, correlated with which instances have the daemon running. The diagnostic move is to check the daemon process and its logs on the affected instances, and to confirm the security group or network policy allows the local UDP traffic.</p>
+        <p>The fourth failure mode is sampling starvation. If the sampling rate is set very low and the traffic is bursty, an incident may occur entirely within unsampled requests, leaving you with no traces of the failure. The symptom is a service map that looks healthy during an incident that is clearly happening. The diagnostic move is to check the current sampling configuration and temporarily raise it, accepting the cost increase for the duration of the investigation.</p>
+      </section>
+
+      <section class="doc-section" id="sre-angle">
+        <h2 class="section-heading">7. The Operational and SRE Angle</h2>
+        <p>X-Ray's role in an SRE workflow is diagnostic rather than alerting. You do not typically alarm on trace data directly — you alarm on metrics, and you use traces to explain the alarm. The exception is the X-Ray-specific metrics that CloudWatch exposes, such as the count of traces with errors or faults, which can be alarmed on if you want a signal that is closer to the request level than a service-level error rate. In practice, most teams alarm on the service's own error and latency metrics and treat the service map as the first place to look once an alarm fires.</p>
+        <p>The runbook shape that works is a short decision tree. An alarm fires on elevated latency or error rate for a service. The on-call engineer opens the service map filtered to the alarm window and looks for the edge with the largest latency contribution or the highest error rate. If the responsible edge is an outbound call to a dependency, the next step is to check that dependency's own health. If the responsible edge is internal to the service, the next step is to drill into subsegments to find the specific operation. This is a five-minute investigation rather than a thirty-minute one, and the value of tracing is entirely in that compression.</p>
+        <p>From an SLO perspective, traces are what let you attribute error budget consumption to a specific dependency rather than to the service that happens to be at the edge. If your checkout SLO is breached because a downstream inventory service is slow, the trace is the evidence that lets you have the right conversation with the right team. This is also why annotations matter operationally: adding a customer tier, a tenant ID, or a feature flag as an annotation lets you filter traces by dimensions that matter to the business, which turns the service map from a debugging tool into a tool for answering questions like "is this affecting enterprise customers specifically."</p>
+      </section>
+
+      <section class="doc-section" id="gotchas">
+        <h2 class="section-heading">8. Edge Cases and Exam Gotchas</h2>
+        <p>The first gotcha is the distinction between annotations and metadata, which the exam likes because it is a real design decision. Annotations are indexed and searchable, so they are what you filter traces by; they are limited in number and size. Metadata is not indexed and is intended for larger payloads you want attached to the trace for later inspection. If a question asks how to make traces filterable by a custom attribute, the answer is annotations. If it asks how to attach a large diagnostic payload, the answer is metadata.</p>
+        <p>The second gotcha is the propagation requirement. X-Ray does not magically connect services; it connects services that forward the tracing header. Any scenario that describes an incomplete service map should be diagnosed as a propagation or instrumentation gap, not as a service outage. This is also why managed services that emit segments natively are valuable — they remove one propagation hop from the equation.</p>
+        <p>The third gotcha is the 30-day retention limit, which is a hard boundary with no configuration. Any scenario requiring long-term request-level retention needs an export path, not an X-Ray configuration change.</p>
+        <p>The fourth gotcha is the sampling decision's one-way nature. Because the decision is made at the entry point and propagated, you cannot recover a trace that was not sampled. Scenarios that describe "we need to investigate an incident that happened last week and we have no traces" are usually describing a sampling rate that was too low, and the fix is forward-looking rather than retrospective.</p>
+        <p>The fifth gotcha is the daemon's UDP transport. Because UDP is fire-and-forget, a missing or unreachable daemon produces silent data loss rather than an error. Any scenario describing intermittent missing traces on EC2 or ECS should prompt a check of the daemon, not the application.</p>
+      </section>
+
+      <section class="doc-section" id="vs-comparison">
+        <h2 class="section-heading">9. X-Ray vs. the Services It Gets Confused With</h2>
+        <p>The services X-Ray is most often confused with are CloudWatch Logs, CloudWatch metrics, and CloudWatch Synthetics, and the confusion is understandable because they all live in the same console and all answer "what is happening in production." The distinction is the shape of the data. Metrics are aggregated numeric time series with no per-request identity. Logs are per-event text records with no cross-service correlation unless you build it. Traces are per-request structured timelines with explicit cross-service correlation. Synthetics are scheduled probes that generate requests from outside. Each answers a different question, and the exam scenarios are usually written so that exactly one of these shapes fits.</p>
+        <p>A second comparison worth holding is X-Ray against third-party APM tools. The exam is AWS-centric, so the expected answer for a native AWS scenario is X-Ray, but the architectural distinction is real: X-Ray is a tracing service, not a full APM platform, and it does not do continuous profiling or code-level flame graphs. If a scenario requires that depth, the answer is likely a partner solution rather than X-Ray, though such scenarios are rare on SAP-C02.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Service</th><th>Data shape</th><th>Pick it when…</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>X-Ray</td><td>Per-request trace with cross-service segments</td><td>The question is which hop in a multi-service request is responsible</td></tr>
+              <tr><td>CloudWatch metrics</td><td>Aggregated numeric time series</td><td>You need cheap, always-on detection and alarming</td></tr>
+              <tr><td>CloudWatch Logs / Logs Insights</td><td>Per-event text, queryable</td><td>You need to search log content or build ad-hoc queries</td></tr>
+              <tr><td>CloudWatch Synthetics</td><td>Scheduled outside-in probes</td><td>You need to verify user flows work from the customer's perspective</td></tr>
+              <tr><td>VPC Flow Logs</td><td>Network-level connection records</td><td>The question is about IP-level connectivity, not application latency</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="doc-section" id="lab">
+        <h2 class="section-heading">Hands-on Lab: Instrumenting a Lambda-to-DynamoDB Chain</h2>
+        <div class="card card-green">
+          <p>The goal of this lab is to build a working trace across a real service boundary and then use the service map to attribute latency to a specific hop. You will need an AWS account with permission to create Lambda functions, DynamoDB tables, and IAM roles. Budget roughly 45 minutes, most of which is waiting for deployments.</p>
+          <p><strong>Step 1 — Create the downstream dependency.</strong> Create a DynamoDB table named <code>xray-lab-items</code> with a partition key of <code>pk</code> (string). Populate it with a few hundred items so that a scan or query takes measurable time. A table with ten items will complete too fast to produce a useful latency signal, which is the most common reason this lab appears not to work.</p>
+          <p><strong>Step 2 — Create the producer function.</strong> Create a Lambda function (Node.js or Python) that reads from the table and returns the result. Attach an execution role that includes the X-Ray write permissions in addition to the DynamoDB read permissions. Enable active tracing on the function in the Lambda console. This is the step that removes the need to run the daemon yourself — Lambda manages it.</p>
+          <p><strong>Step 3 — Create the caller function.</strong> Create a second Lambda function that invokes the first one via the AWS SDK. Enable active tracing on this function as well. The AWS SDK is instrumented by the X-Ray SDK, so the invoke call will automatically propagate the tracing header and appear as a downstream edge in the service map. If you use a raw HTTP client instead of the SDK, you will need to inject the header manually — which is a useful exercise in understanding why propagation matters, but not necessary for the lab.</p>
+          <p><strong>Step 4 — Generate traffic.</strong> Invoke the caller function a few dozen times, either from the console or with a small script. Because the default sampling rule includes a one-per-second reservoir, even a modest number of invocations will produce traces. Wait a minute or two for segments to be delivered and indexed.</p>
+          <p><strong>Step 5 — Read the service map.</strong> Open the X-Ray console and view the service map for the last fifteen minutes. You should see the caller function, the callee function, and the DynamoDB table as three nodes with edges between them. Click the edge between the callee and DynamoDB and look at the latency distribution. This is the hop that the lab is designed to isolate.</p>
+          <p><strong>Step 6 — Attribute the latency.</strong> Open a specific trace and examine the segment timeline. Identify how much of the total request duration was spent in the DynamoDB subsegment versus the Lambda execution overhead. Then deliberately slow the DynamoDB call — for example, by scanning a larger table or adding a small artificial delay — and repeat. The service map should show the callee-to-DynamoDB edge as the dominant contributor to p99 latency, which is exactly the conclusion the original lab prompt asks you to reach.</p>
+          <p><strong>Step 7 — Break it on purpose.</strong> Remove the X-Ray write permissions from the callee's execution role and invoke the caller again. The application will continue to work, but the callee will disappear from the service map. This demonstrates the silent-failure property described in section 6 and is worth doing once so you recognize the symptom in a real account.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="quiz">
         <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
-        
-      <div class="scenario-card">
-        <p class="scenario-question"><strong>Q1.</strong> A microservices app has growing p99 latency but it's unclear which of 12 services is the bottleneck. What AWS service pinpoints this?</p>
-        <div class="scenario-options" id="opts-d31q0">
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q1.</strong> A microservices application has growing p99 latency but it is unclear which of twelve services is the bottleneck. What AWS service pinpoints this?</p>
+          <div class="scenario-options" id="opts-d31q1">
             <div class="scenario-option">A. CloudWatch Logs Insights alone</div>
             <div class="scenario-option">B. AWS X-Ray, using the service map to isolate the slow hop</div>
             <div class="scenario-option">C. VPC Flow Logs</div>
             <div class="scenario-option">D. AWS Config</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d31q1', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d31q1"><strong>Correct answer: B.</strong> X-Ray's distributed tracing and service map visualize per-hop latency across the full call chain, directly identifying the bottleneck service that aggregate metrics cannot isolate.</div>
         </div>
-        <button class="scenario-reveal-btn" onclick="revealAnswer('d31q0', 1)">Reveal Answer</button>
-        <div class="scenario-explanation" id="exp-d31q0"><strong>Correct answer: B.</strong> X-Ray's distributed tracing and service map visualize per-hop latency across the full call chain, directly identifying the bottleneck service that aggregate metrics can't isolate.</div>
-      </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q2.</strong> A service map shows traces terminating at an API Gateway boundary with no downstream edges, even though the backend services are healthy and serving traffic. What is the most likely cause?</p>
+          <div class="scenario-options" id="opts-d31q2">
+            <div class="scenario-option">A. The backend services are not running</div>
+            <div class="scenario-option">B. The tracing header is not being propagated across that boundary, or the downstream services are not instrumented</div>
+            <div class="scenario-option">C. X-Ray retention has expired</div>
+            <div class="scenario-option">D. The service map requires a paid tier to show downstream edges</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d31q2', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d31q2"><strong>Correct answer: B.</strong> X-Ray connects services only when the tracing header is forwarded and the downstream service is instrumented. A map that stops at a boundary is a propagation or instrumentation gap, not an outage.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q3.</strong> A team wants to filter traces by customer tier so they can investigate whether an incident affects enterprise customers specifically. What X-Ray feature should they use?</p>
+          <div class="scenario-options" id="opts-d31q3">
+            <div class="scenario-option">A. Metadata, because it holds arbitrary payloads</div>
+            <div class="scenario-option">B. Annotations, because they are indexed and searchable</div>
+            <div class="scenario-option">C. Subsegments, because they break work into finer pieces</div>
+            <div class="scenario-option">D. Sampling rules, because they control which traces are kept</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d31q3', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d31q3"><strong>Correct answer: B.</strong> Annotations are indexed and searchable, which is what makes them the right choice for filtering traces by custom dimensions. Metadata is not indexed and is intended for larger, non-searchable payloads.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q4.</strong> A compliance requirement mandates that request-level trace data be retained for two years. What is the correct approach?</p>
+          <div class="scenario-options" id="opts-d31q4">
+            <div class="scenario-option">A. Configure X-Ray retention to two years in the console</div>
+            <div class="scenario-option">B. Export trace data to S3 or a data warehouse, because X-Ray retains traces for 30 days with no configuration to extend it</div>
+            <div class="scenario-option">C. Enable X-Ray long-term storage mode</div>
+            <div class="scenario-option">D. Use CloudWatch Logs instead, which retains data indefinitely by default</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d31q4', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d31q4"><strong>Correct answer: B.</strong> X-Ray trace retention is fixed at 30 days. Any longer retention requirement needs an export path to durable storage.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q5.</strong> A high-throughput service is traced at 100% sampling and the service map shows intermittent gaps during peak traffic. What is the most likely cause and the correct fix?</p>
+          <div class="scenario-options" id="opts-d31q5">
+            <div class="scenario-option">A. The service is failing; investigate the application logs</div>
+            <div class="scenario-option">B. The daemon is dropping segments under load; lower the sampling rate</div>
+            <div class="scenario-option">C. X-Ray does not support high-throughput services</div>
+            <div class="scenario-option">D. The trace document size limit is being exceeded</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d31q5', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d31q5"><strong>Correct answer: B.</strong> 100% sampling on a high-volume service can overwhelm the daemon's buffering and delivery capacity, producing gaps. The fix is to lower the sampling rate rather than to raise a quota.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q6.</strong> An application on EC2 emits traces intermittently, and the pattern correlates with which instances are serving the request. The application itself is healthy. What should you check first?</p>
+          <div class="scenario-options" id="opts-d31q6">
+            <div class="scenario-option">A. The DynamoDB table's provisioned capacity</div>
+            <div class="scenario-option">B. Whether the X-Ray daemon is running and reachable on UDP port 2000 on the affected instances</div>
+            <div class="scenario-option">C. The CloudWatch Logs retention setting</div>
+            <div class="scenario-option">D. The VPC route tables</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d31q6', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d31q6"><strong>Correct answer: B.</strong> On EC2 the SDK sends segments to the local daemon over UDP, which is fire-and-forget. A missing or unreachable daemon produces silent data loss with no application error.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q7.</strong> A Lambda function's traces never appear in the X-Ray console, but the function works correctly and its logs show successful invocations. What is the most likely cause?</p>
+          <div class="scenario-options" id="opts-d31q7">
+            <div class="scenario-option">A. Lambda does not support X-Ray</div>
+            <div class="scenario-option">B. Active tracing is not enabled on the function, or the execution role lacks X-Ray write permissions</div>
+            <div class="scenario-option">C. The function's timeout is too short</div>
+            <div class="scenario-option">D. The function needs a NAT gateway to reach X-Ray</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d31q7', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d31q7"><strong>Correct answer: B.</strong> Lambda manages the daemon for you, but tracing must be enabled on the function and the execution role must permit sending segments. Delivery failures are logged rather than thrown, so the application appears healthy.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q8.</strong> A team needs to attach a large JSON diagnostic payload to a trace for later inspection, but does not need to search by its contents. What should they use?</p>
+          <div class="scenario-options" id="opts-d31q8">
+            <div class="scenario-option">A. Annotations</div>
+            <div class="scenario-option">B. Metadata</div>
+            <div class="scenario-option">C. A separate subsegment per field</div>
+            <div class="scenario-option">D. A sampling rule</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d31q8', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d31q8"><strong>Correct answer: B.</strong> Metadata is not indexed and is intended for larger payloads attached to a trace. Annotations are indexed and searchable but limited in number and size.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q9.</strong> An incident occurred last week and the team has no traces of the failing requests, even though tracing has been enabled for months. What is the most likely explanation?</p>
+          <div class="scenario-options" id="opts-d31q9">
+            <div class="scenario-option">A. X-Ray was down during the incident</div>
+            <div class="scenario-option">B. The sampling rate was too low, and the failing requests were not sampled</div>
+            <div class="scenario-option">C. The traces were deleted by a lifecycle policy</div>
+            <div class="scenario-option">D. X-Ray only retains traces for 24 hours</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d31q9', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d31q9"><strong>Correct answer: B.</strong> The sampling decision is made at the entry point and propagated, so unsampled requests leave no trace. A low sampling rate can miss a failure that affects only a subset of traffic.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q10.</strong> A team wants to reduce X-Ray cost without losing visibility into their low-volume checkout endpoint. What is the correct configuration?</p>
+          <div class="scenario-options" id="opts-d31q10">
+            <div class="scenario-option">A. Disable tracing entirely and rely on metrics</div>
+            <div class="scenario-option">B. Use a custom sampling rule with a high rate for the checkout path and a low rate or exclusion for high-volume, low-value paths</div>
+            <div class="scenario-option">C. Set the global sampling rate to 100% and rely on retention to control cost</div>
+            <div class="scenario-option">D. Move tracing to a different region</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d31q10', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d31q10"><strong>Correct answer: B.</strong> Custom sampling rules are evaluated per path, which lets you spend the trace budget where it matters and exclude noisy, low-value traffic.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q11.</strong> A trace segment is being dropped, and the application logs show no errors. The segment includes a large serialized request body. What is the most likely cause?</p>
+          <div class="scenario-options" id="opts-d31q11">
+            <div class="scenario-option">A. The segment exceeded the 64 KB trace document size limit</div>
+            <div class="scenario-option">B. The daemon is not running</div>
+            <div class="scenario-option">C. The IAM role lacks permissions</div>
+            <div class="scenario-option">D. The trace ID was not propagated</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d31q11', 0)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d31q11"><strong>Correct answer: A.</strong> Segments larger than 64 KB are dropped rather than truncated. Large payloads should be stored elsewhere with a reference placed in the trace.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q12.</strong> An on-call engineer receives an alarm for elevated error rate on the front-end service. What is the most efficient first step using X-Ray?</p>
+          <div class="scenario-options" id="opts-d31q12">
+            <div class="scenario-option">A. Re-read the application source code</div>
+            <div class="scenario-option">B. Open the service map filtered to the alarm window and identify the edge with the highest error rate or latency contribution</div>
+            <div class="scenario-option">C. Restart all services</div>
+            <div class="scenario-option">D. Increase the sampling rate to 100% permanently</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d31q12', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d31q12"><strong>Correct answer: B.</strong> The service map is the fastest way to attribute an alarm to a specific hop. Drilling into subsegments comes next if the responsible edge is internal to a service.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q13.</strong> A scenario describes a scheduled batch job with no inbound request that the team wants to trace. What is the correct approach?</p>
+          <div class="scenario-options" id="opts-d31q13">
+            <div class="scenario-option">A. X-Ray cannot trace batch jobs under any circumstances</div>
+            <div class="scenario-option">B. Create a segment manually at the start of the job, since there is no inbound request to generate one automatically</div>
+            <div class="scenario-option">C. Convert the batch job to a Lambda function</div>
+            <div class="scenario-option">D. Use VPC Flow Logs instead</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d31q13', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d31q13"><strong>Correct answer: B.</strong> X-Ray traces requests, so a job with no inbound request needs a manually created segment to establish the trace root.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q14.</strong> A team wants to know whether an incident is affecting enterprise customers specifically, and their traces include a customer tier annotation. What does this enable?</p>
+          <div class="scenario-options" id="opts-d31q14">
+            <div class="scenario-option">A. Nothing; annotations are not searchable</div>
+            <div class="scenario-option">B. Filtering traces by the annotation value, which turns the service map into a tool for answering business-relevant questions</div>
+            <div class="scenario-option">C. Automatic alerting on enterprise customer errors</div>
+            <div class="scenario-option">D. Longer trace retention for those requests</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d31q14', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d31q14"><strong>Correct answer: B.</strong> Indexed annotations make traces filterable by custom dimensions, which is what allows per-segment analysis of an incident.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q15.</strong> A scenario requires code-level flame graphs and continuous profiling of a Java application, beyond per-request tracing. What is the correct conclusion?</p>
+          <div class="scenario-options" id="opts-d31q15">
+            <div class="scenario-option">A. X-Ray provides flame graphs natively</div>
+            <div class="scenario-option">B. X-Ray is a tracing service, not a full APM platform; continuous profiling requires a different tool</div>
+            <div class="scenario-option">C. Enable X-Ray Insights to get flame graphs</div>
+            <div class="scenario-option">D. Use CloudWatch Synthetics instead</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d31q15', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d31q15"><strong>Correct answer: B.</strong> X-Ray traces requests across services; it does not perform continuous profiling or produce code-level flame graphs. Those requirements point to a different class of tool.</div>
+        </div>
       </section>
+
+      <section class="doc-section" id="preview">
+        <h2 class="section-heading">Peek into Tomorrow</h2>
+        <div class="card card-purple">
+          <p>X-Ray answers the question "which hop in this request was slow," but it deliberately does not answer the question "what did the application actually say when it failed." Traces carry timing and structure; they do not carry the stack trace, the validation error message, or the business-logic branch that was taken. When an incident is caused by a bad input, a misconfigured feature flag, or an exception that was caught and swallowed, the trace will show you the hop and the duration but leave you guessing at the cause. That gap is where logs live, and it is a gap that becomes acute at organizational scale, because the logs you need are often in an account you do not have open.</p>
+          <p>Tomorrow's material addresses both halves of that problem. The first half is querying: how to ask structured questions of log data without standing up a separate analytics stack, which is what the Logs Insights query language provides. The second half is aggregation: how to get logs from every account in an organization into one place in near real time, which is what subscription filters streaming to a centralized logging account via Kinesis Data Firehose or Streams accomplish. The open question worth carrying forward is how you would correlate a trace you have already identified with the log lines from the specific invocation it represents — and what has to be true about your logging setup for that correlation to be possible at all.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="sources">
+        <h2 class="section-heading">Sources</h2>
+        <div class="card">
+          <ul class="source-list">
+            <li><a href="https://docs.aws.amazon.com/xray/latest/devguide/aws-xray.html" target="_blank" rel="noopener">AWS X-Ray Developer Guide — What is AWS X-Ray?</a></li>
+            <li><a href="https://docs.aws.amazon.com/xray/latest/devguide/xray-concepts.html" target="_blank" rel="noopener">AWS X-Ray Concepts — Traces, Segments, Subsegments, Annotations, Metadata</a></li>
+            <li><a href="https://docs.aws.amazon.com/xray/latest/devguide/xray-console-servicemap.html" target="_blank" rel="noopener">Viewing the Service Map in the X-Ray Console</a></li>
+            <li><a href="https://docs.aws.amazon.com/xray/latest/devguide/xray-console-sampling.html" target="_blank" rel="noopener">Configuring Sampling Rules in the X-Ray Console</a></li>
+            <li><a href="https://docs.aws.amazon.com/lambda/latest/dg/services-xray.html" target="_blank" rel="noopener">Using AWS X-Ray with AWS Lambda</a></li>
+            <li><a href="https://docs.aws.amazon.com/xray/latest/devguide/xray-daemon.html" target="_blank" rel="noopener">AWS X-Ray Daemon — Running the Daemon Locally</a></li>
+            <li><a href="https://docs.aws.amazon.com/general/latest/gr/xray.html" target="_blank" rel="noopener">AWS X-Ray Endpoints and Quotas</a></li>
+            <li><a href="https://docs.aws.amazon.com/wellarchitected/latest/operational-excellence-pillar/welcome.html" target="_blank" rel="noopener">AWS Well-Architected Framework — Operational Excellence Pillar</a></li>
+          </ul>
+        </div>
+      </section>
+
       <div class="day-nav">
         <a href="day-030.html">&larr; Day 30: CloudWatch Synthetics &amp; Canaries for SLO Monitoring</a>
         <button class="btn btn-green" onclick="markComplete(31, 'day-032.html')">Mark Day 31 Complete &rarr;</button>

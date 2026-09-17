@@ -104,7 +104,7 @@
         <span class="pill pill-green">Phase 5: Practice Exams &amp; Exam Technique</span>
       </div>
       <h1 class="hero-title">Deep Review — Domain 3 Weak Areas (Migration &amp; Modernization)</h1>
-      <div class="reading-meta">&#128337; ~3 min read &middot; 5 services covered</div>
+      <div class="reading-meta">&#128337; ~58 min read &middot; 5 services covered</div>
       <div class="services-grid">
         <span class="service-tag">MGN</span>
         <span class="service-tag">DMS</span>
@@ -113,19 +113,271 @@
         <span class="service-tag">Snow Family</span>
       </div>
       <div id="tracker"></div>
-      <section class="doc-section">
-        <h2 class="section-heading">Today's Concept</h2>
+      <section class="doc-section" id="recap">
+        <h2 class="section-heading">Recap</h2>
         <div class="card card-accent">
-          <p>Revisit Week 7-8 migration content (the 7 Rs, MGN, DMS/SCT, DataSync, Snow Family, hybrid networking capacity) focused on flagged weak areas.</p>
-        </div>
-        <h3 class="sub-heading">Hands-on Lab / Practical Action (45 min)</h3>
-        <div class="card">
-          <p>Re-do all missed Week 7-8 practice questions from Days 43-56, plus 10 new scenario questions targeting your weakest sub-topic.</p>
+          <p>Mock Exam 2's distractor analysis was the prerequisite for this pass, and the reason is structural rather than procedural. Round two of that analysis did two things the first round could not: it told us whether the previously weak domains actually improved, and it surfaced new gaps that only became visible once the obvious ones were closed. A domain that scored badly on Mock Exam 1 and scored well on Mock Exam 2 is a domain where the Day 59-60 deep review worked. A domain that scored badly on both, or that scored well on Mock Exam 1 and badly on Mock Exam 2, is a domain where the miss was never a knowledge gap at all — it was a reading or elimination failure that survived the review because the review was aimed at content.</p>
+          <p>Domain 3 is where that distinction matters most, because migration questions are unusually good at hiding a correct answer behind a plausible-sounding service. The 7 Rs, MGN, DMS and SCT, DataSync, the Snow Family, and hybrid networking capacity all sit close enough together that a question can be answered "correctly" by someone who has the wrong mental model and simply got lucky on the option ordering. That is exactly the failure mode this day exists to catch, and it is why the format below is a catalogue of wrong answers rather than a summary of right ones.</p>
         </div>
       </section>
-      <section class="doc-section">
+      <section class="doc-section" id="patterns">
+        <h2 class="section-heading">Distractor Patterns from Domain 3</h2>
+        <p>Each entry below names a tempting-but-wrong answer pattern, explains why it is tempting, and gives the specific tell that separates it from the correct answer. Where a pattern is likely to have shown up on Mock Exam 2, that is called out. Read these as a checklist against your own flagged questions rather than as new material — every service referenced here was covered in Days 43 through 56.</p>
+
+        <h3 class="sub-heading">Pattern 1: Rehost chosen for a deadline that also has a licensing blocker</h3>
+        <p>The most common Domain 3 miss is a question that gives you two constraints at once — a hard deadline and a workload that cannot legally move yet — and then offers a single strategy as the answer. The tempting wrong option is always the one that satisfies the deadline: Rehost everything via MGN, or Refactor everything to serverless, or Repurchase the whole portfolio as SaaS. Each of those is a real strategy and each is defensible in isolation, which is what makes the option feel right. The tell is that the question never asks you to pick one strategy for the portfolio; it asks what the plan is, and a plan can contain more than one R.</p>
+        <p>The correct answer almost always pairs a fast strategy for the majority with an explicit Retain for the blocked workloads. Retain is the R that candidates forget exists, because it sounds like doing nothing. It is not doing nothing — it is a deliberate, documented decision to leave a workload in place until a specific blocker clears, which is exactly what a licensing negotiation is. If you flagged a question on Mock Exam 2 where you picked a single strategy and the explanation mentioned Retain, this is the pattern you hit.</p>
+
+        <h3 class="sub-heading">Pattern 2: MGN offered for a database migration</h3>
+        <p>MGN replicates servers at the block level, so it will happily move a database server to EC2 — and that is precisely why the option is tempting. The question will describe a database migration with minimal downtime, and MGN will appear as an option alongside DMS. The tell is the word "database" combined with any requirement about the data itself: keeping the target current, converting schema, or cutting over without a freeze. MGN moves the machine; it has no concept of a table, a transaction, or a change stream.</p>
+        <p>If the scenario is about getting an application server off aging hardware with minimal application change, MGN is correct. If it is about getting rows from one engine into another, or about keeping a target in sync while the source stays live, MGN is the distractor and DMS is the answer. A useful test: ask whether the question would still make sense if the workload were a stateless web server. If yes, MGN is plausible. If the question only makes sense because there is data with structure, MGN is wrong.</p>
+
+        <h3 class="sub-heading">Pattern 3: SCT assumed to migrate the data</h3>
+        <p>SCT and DMS are frequently offered as a pair, and the distractor is choosing SCT alone for a heterogeneous migration. SCT converts schema, views, stored procedures, and functions between engines and produces a conversion report; it does not move rows. The tempting logic is that a heterogeneous migration is mostly a schema problem, so the schema tool must be the answer. The tell is any mention of the actual data volume, the cutover, or keeping the target current — none of which SCT addresses.</p>
+        <p>The correct pairing for a heterogeneous migration is SCT for schema and code, then DMS for the data, with the SCT conversion report driving the manual remediation work. Watch for the sub-pattern where the question quotes a high conversion percentage and asks whether the migration can proceed unattended. It cannot. A high automatic conversion rate still leaves complex procedural logic that a developer has to rewrite, and the exam uses that number specifically to see whether you treat it as a completion signal.</p>
+
+        <h3 class="sub-heading">Pattern 4: DataSync chosen for a database</h3>
+        <p>DataSync moves files and objects between on-prem storage and AWS storage on a schedule, with integrity validation and bandwidth throttling. It is the right answer for NFS, SMB, or HDFS shares landing in S3, EFS, or FSx. The distractor is offering it for a database migration, usually because the question mentions a large volume of data and a recurring schedule — both of which sound like DataSync's vocabulary. The tell is that DataSync is not database-aware: it has no notion of consistency across a running database's files, and it cannot do change data capture.</p>
+        <p>If the source is a file share and the target is object or file storage, DataSync wins. If the source is a database and the requirement is a consistent copy or an ongoing delta, DMS wins. The reverse error also appears: choosing DMS for a plain file share migration, on the theory that DMS is the "data migration" service. DMS needs a supported database endpoint; a directory of PDFs is not one.</p>
+
+        <h3 class="sub-heading">Pattern 5: Snowball chosen when the network is adequate</h3>
+        <p>The Snow Family is the offline-transfer answer, and the distractor is reaching for it whenever a question mentions a large dataset. The tempting reasoning is that large data plus slow transfer equals physical shipping. The tell is whether the question actually gives you a network constraint — an inadequate uplink, no connectivity at all, or a timeline that arithmetic rules out. If the question gives you a healthy link and a generous window, Snowball is the wrong answer and the exam is testing whether you did the division.</p>
+        <p>Do the arithmetic explicitly when a question gives you both a volume and a bandwidth. A one-time transfer over a constrained link is the classic case for Snowball Edge, and petabyte-scale with no viable uplink is the case for Snowmobile or a fleet of Snowball Edge devices. The sub-pattern to watch is the hybrid answer: Snowball for the bulk historical dataset plus DMS CDC or DataSync over the network for the ongoing delta. That combination is a frequent correct answer and a frequent thing candidates reject because it feels like two answers instead of one.</p>
+
+        <h3 class="sub-heading">Pattern 6: Direct Connect capacity ignored until the migration window</h3>
+        <p>Questions that describe a large migration over a hybrid link often bury the capacity requirement in a single clause. The distractor is planning the migration without addressing bandwidth at all — picking MGN or DMS and moving on. The tell is any mention of a sustained transfer volume against a link whose capacity is stated or implied. Direct Connect capacity, including Link Aggregation Groups for higher aggregate throughput, has to be provisioned ahead of the window; it is not something you scale up on the morning of the cutover.</p>
+        <p>This pattern is a prerequisite relationship in disguise: the migration tool is correct, but the answer is incomplete without the capacity work. When a question offers both a tool and a capacity plan as separate options, the capacity plan is usually the one being tested, because the tool choice was the easy half.</p>
+
+        <h3 class="sub-heading">Pattern 7: Relocate confused with Rehost</h3>
+        <p>Relocate and Rehost both move a workload without re-architecting it, which is why they get swapped. The distractor is choosing MGN for a question that specifies the workload must stay in its existing VMware format with its existing VMware tooling. The tell is any mention of preserving the hypervisor layer, of VMware management tooling continuing to work, or of explicitly not converting to native EC2 or AMIs. MGN lands workloads on native EC2; Relocate via VMware Cloud on AWS does not.</p>
+        <p>The second half of this pattern is the interim-step framing: Relocate is often described as a waypoint before a later native refactor, and a question may ask what the immediate next step is. The immediate step is Relocate, not Refactor. If you flagged a question where you picked Refactor because the long-term goal was cloud-native, you answered the question two steps ahead of what was asked.</p>
+
+        <h3 class="sub-heading">Pattern 8: Storage Gateway flavors swapped</h3>
+        <p>File, Volume, and Tape Gateway are three different products sharing one name, and the distractor is picking the wrong flavor because the question's phrasing matches the wrong one's vocabulary. The tell is the interface the on-prem workload speaks. A question about presenting S3 as an NFS or SMB share is File Gateway. A question about iSCSI block storage backed by S3 is Volume Gateway, and the cached-versus-stored distinction turns on where the primary copy lives. A question about retiring physical tape hardware while keeping existing backup software unchanged is Tape Gateway, because only the virtual tape library presents a tape interface.</p>
+        <p>The most common miss is choosing File Gateway for a backup-software question, on the reasoning that backups are files. They are not, from the backup software's point of view — it expects a tape library, and Tape Gateway is what gives it one without changing the workflow.</p>
+
+        <h3 class="sub-heading">Pattern 9: Outposts, Local Zones, and Wavelength treated as interchangeable</h3>
+        <p>All three push AWS infrastructure closer to the workload, so the distractor is picking whichever one the question's latency language seems to match. The tell is the reason for the proximity. Data residency — the requirement that data physically stay on the customer's premises — is Outposts, and it is the only one of the three that puts AWS-managed hardware in your own data center. Metro-level latency without owning hardware is Local Zones. Ultra-low-latency mobile workloads at a telco 5G edge are Wavelength.</p>
+        <p>Regulatory language is the strongest signal here. If a question says patient data must remain on-premises for compliance, no amount of latency discussion makes Local Zones correct, because Local Zones are AWS-operated facilities in a metro area, not your building.</p>
+
+        <h3 class="sub-heading">Pattern 10: Full Load chosen when the source cannot be frozen</h3>
+        <p>DMS's three migration types are the highest-yield detail in Domain 3, and the distractor is Full Load whenever the question does not explicitly say "no downtime." Full Load takes a point-in-time snapshot and writes it to the target; it has no mechanism for capturing writes that happen during the copy. The tell is any statement that the source must stay available, that a maintenance window is unacceptable, or that the cutover must be near-zero-downtime. Those phrases are describing Full Load plus CDC.</p>
+        <p>The mechanism is worth being able to state rather than recognize: DMS takes the snapshot while simultaneously caching changes, applies the cached changes when the snapshot completes, then streams CDC forward from that point. If you can explain why that sequence produces a consistent target, you will not be fooled by an option that offers Full Load plus a longer maintenance window as an alternative.</p>
+
+        <h3 class="sub-heading">Pattern 11: Replication instance sizing treated as an afterthought</h3>
+        <p>Questions that focus on the migration strategy often omit the replication instance entirely, and the distractor is an answer that never mentions it. The tell is a scenario with high change volume, many tables, or large LOBs — all of which put load on the replication instance rather than on the source or target. Undersizing it produces a migration that starts fine and falls behind during CDC, which is a failure mode the exam likes because it looks like a network problem.</p>
+        <p>LOB handling is the specific sub-pattern. Large binary objects need explicit configuration and can dominate replication time; a question that mentions them and offers an answer with no LOB consideration is testing whether you know they are a separate concern from row data.</p>
+
+        <h3 class="sub-heading">Pattern 12: Migration Hub assumed to perform the migration</h3>
+        <p>Migration Hub tracks progress across migration tools; it does not move anything. The distractor is choosing it as the mechanism for a migration, usually because the question asks how to coordinate a multi-tool portfolio and Migration Hub is the only option that sounds like coordination. The tell is whether the question asks what performs the migration or what reports on it. If the answer needs to actually transfer data, Migration Hub is wrong.</p>
+        <p>The same confusion attaches to Application Discovery Service, which inventories and maps dependencies but does not migrate. Both are assessment and tracking services, and both appear as distractors in questions whose real answer is MGN, DMS, or DataSync.</p>
+
+        <h3 class="sub-heading">Pattern 13: Agentless discovery assumed to capture process dependencies</h3>
+        <p>Discovery comes in two forms, and the distractor is agentless whenever the question mentions dependencies. Agentless discovery gives you VM-level inventory and utilization; agent-based discovery installs a lightweight agent per server and captures process-to-process network connections. The tell is the granularity the question asks for. If it needs to know which process on server A talks to which process on server B in order to plan migration waves, that is agent-based.</p>
+        <p>Utilization data for right-sizing is available either way, which is why the distinction is easy to miss. The dependency-mapping requirement is the discriminator, and it is usually stated as a need to group applications into waves.</p>
+
+        <h3 class="sub-heading">Pattern 14: The 7 Rs collapsed into a single choice</h3>
+        <p>Beyond the deadline-and-blocker case in Pattern 1, the broader distractor is treating the 7 Rs as mutually exclusive for a portfolio. The tell is a question that describes several workloads with different constraints and asks for a migration approach. The correct answer is usually a mix, and the wrong answers are the ones that apply one R uniformly — Refactor everything, Rehost everything, Repurchase everything.</p>
+        <p>Replatform is the R most often overlooked as the correct middle ground. Moving a self-managed MySQL instance to RDS is neither a pure rehost nor a refactor; it is lift-tinker-and-shift, and questions that describe a small managed-service substitution with no application rewrite are pointing at it.</p>
+
+        <h3 class="sub-heading">Pattern 15: Hybrid transfer strategies rejected as overcomplicated</h3>
+        <p>The last pattern is a meta-pattern: rejecting a two-part answer because it feels like it should be one answer. Questions about large migrations over constrained links frequently have a correct answer that combines offline bulk transfer with network-based delta sync, and candidates who have been trained by simpler questions to expect a single service will eliminate it. The tell is a dataset with two distinct shapes — a large historical bulk and a small ongoing delta — and a link that cannot carry the bulk in the available window.</p>
+        <p>When you see that shape, do not look for the one service that does both. Look for the pair that divides the work by what each part is good at. This is the same reasoning that makes Snowball plus DMS CDC a recurring correct answer, and it is worth internalizing as a general habit rather than a migration-specific trick.</p>
+      </section>
+      <section class="doc-section" id="lab">
+        <h2 class="section-heading">Hands-on Lab / Practical Action (45 min)</h2>
+        <div class="card card-green">
+          <p>Re-do every missed Week 7-8 question from Days 43 through 56, but change the review method. Instead of reading the explanation and moving on, write down the distractor you chose and match it to one of the fifteen patterns above. If a miss does not map to any pattern, that is a genuine content gap and it goes on a separate list. If it maps cleanly, the gap was in elimination rather than knowledge, and the fix is pattern recognition rather than re-reading the lesson.</p>
+          <p>Then work the fifteen drill questions below under the same conditions you would use in the exam: answer first, reveal second, and for any question you get right, state the tell out loud before revealing. Getting a question right without being able to name the tell is the same as getting it wrong, because the next variant of that question will not have the same option ordering.</p>
+          <p>Finish by adding ten new scenario questions of your own targeting whichever sub-topic produced the most unmapped misses. Write them in the same shape as the exam — a constraint, a distractor that satisfies part of it, and a correct answer that satisfies all of it — and note which pattern each one is testing. Writing the distractor yourself is the fastest way to stop being fooled by it.</p>
+        </div>
+      </section>
+      <section class="doc-section" id="quiz">
         <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
-        <p style="color:var(--text-muted);font-style:italic;">Detailed scenario questions for this day will be added when the curriculum reaches it — see the <a href="day-056.html">Day 56 DMS lesson</a> for the full format this site is building toward.</p>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q1.</strong> A data center lease expires in five months. Ten applications must move, but two have unresolved software licensing blockers that will not clear before the deadline. What is the correct migration plan?</p>
+          <div class="scenario-options" id="opts-d63q1">
+            <div class="scenario-option">A. Refactor all ten applications to serverless to eliminate the licensing dependency</div>
+            <div class="scenario-option">B. Rehost the eight unblocked applications via MGN to meet the deadline, and Retain the two blocked applications until licensing is resolved</div>
+            <div class="scenario-option">C. Repurchase all ten applications as SaaS to avoid the licensing issue entirely</div>
+            <div class="scenario-option">D. Delay the migration until all licensing is resolved</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d63q1', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d63q1"><strong>Correct answer: B.</strong> A migration plan can contain more than one R. Rehost is the fastest path for the unblocked majority, and Retain is the deliberate, documented decision to leave the blocked workloads in place until the blocker clears. Refactor and Repurchase both assume the licensing problem disappears, which it does not.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q2.</strong> A company must move a 4 TB Oracle database to Aurora PostgreSQL with under five minutes of cutover downtime. Which combination is correct?</p>
+          <div class="scenario-options" id="opts-d63q2">
+            <div class="scenario-option">A. AWS Application Migration Service (MGN) with a short maintenance window</div>
+            <div class="scenario-option">B. AWS Schema Conversion Tool alone, since the migration is mostly a schema problem</div>
+            <div class="scenario-option">C. AWS SCT for schema and code conversion, then AWS DMS with CDC for the data</div>
+            <div class="scenario-option">D. AWS DataSync with a nightly schedule</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d63q2', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d63q2"><strong>Correct answer: C.</strong> Heterogeneous migrations split into schema and code (SCT) and data (DMS). CDC is what delivers the near-zero-downtime cutover. MGN moves the server but has no concept of tables or change streams, SCT does not move rows, and DataSync is not database-aware.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q3.</strong> SCT reports a 94% automatic conversion rate for an Oracle-to-PostgreSQL migration. What does this mean for the remaining 6%?</p>
+          <div class="scenario-options" id="opts-d63q3">
+            <div class="scenario-option">A. The migration can proceed unattended, since 94% is above the threshold for automatic cutover</div>
+            <div class="scenario-option">B. Complex objects such as certain stored procedures and functions could not be auto-converted and need manual developer remediation before cutover</div>
+            <div class="scenario-option">C. SCT failed and DMS cannot be used for this migration</div>
+            <div class="scenario-option">D. 6% of the data will be lost during the migration</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d63q3', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d63q3"><strong>Correct answer: B.</strong> The conversion percentage covers schema and code objects only, and a high rate still leaves complex procedural logic that a developer must rewrite. The number is a planning input, not a completion signal.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q4.</strong> A company needs to continuously sync a large on-prem NFS file share into Amazon EFS on a nightly schedule, with integrity validation and bandwidth throttling, without writing custom scripts. Which service fits?</p>
+          <div class="scenario-options" id="opts-d63q4">
+            <div class="scenario-option">A. AWS DMS</div>
+            <div class="scenario-option">B. AWS DataSync</div>
+            <div class="scenario-option">C. AWS Snowball Edge</div>
+            <div class="scenario-option">D. AWS Storage Gateway Volume Gateway</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d63q4', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d63q4"><strong>Correct answer: B.</strong> DataSync is purpose-built for scheduled, validated file and object transfer between on-prem file systems and AWS storage such as EFS, FSx, and S3. DMS needs a database endpoint, Snowball is for offline bulk transfer, and Volume Gateway presents iSCSI block storage rather than syncing a share.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q5.</strong> A migration must move 300 TB of historical data plus roughly 50 GB of daily deltas. The available network link is capped at 500 Mbps. What is the appropriate approach?</p>
+          <div class="scenario-options" id="opts-d63q5">
+            <div class="scenario-option">A. Transfer everything, including the historical data, over the 500 Mbps link</div>
+            <div class="scenario-option">B. Use Snowball Edge for the 300 TB bulk transfer, then DMS CDC or DataSync over the network link for the ongoing deltas</div>
+            <div class="scenario-option">C. Wait for the network link to be upgraded before starting the migration</div>
+            <div class="scenario-option">D. Use Snowmobile for the entire migration, including the daily deltas</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d63q5', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d63q5"><strong>Correct answer: B.</strong> The dataset has two shapes: a large historical bulk that the link cannot carry in the available window, and a small ongoing delta that it can. Dividing the work by what each method is good at is the standard pattern, and Snowmobile is not a recurring transfer mechanism for daily deltas.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q6.</strong> A company needs to rehost 200 on-prem VMs to EC2 as quickly as possible with minimal application changes and a cutover window of under ten minutes. Which service should they use?</p>
+          <div class="scenario-options" id="opts-d63q6">
+            <div class="scenario-option">A. AWS DataSync</div>
+            <div class="scenario-option">B. AWS Application Migration Service (MGN)</div>
+            <div class="scenario-option">C. AWS Schema Conversion Tool</div>
+            <div class="scenario-option">D. AWS Database Migration Service</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d63q6', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d63q6"><strong>Correct answer: B.</strong> MGN performs continuous block-level replication to a staging area, so test instances can be launched repeatedly and the cutover itself is short. The other three options are data or schema tools with no server-rehost capability.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q7.</strong> A team wants to move VMware VMs to AWS while keeping the exact same hypervisor-level configuration and VMware management tooling, with no conversion to native EC2 or AMIs. Which strategy applies?</p>
+          <div class="scenario-options" id="opts-d63q7">
+            <div class="scenario-option">A. Rehost via MGN to native EC2</div>
+            <div class="scenario-option">B. Relocate to VMware Cloud on AWS</div>
+            <div class="scenario-option">C. Refactor to containers on EKS</div>
+            <div class="scenario-option">D. Replatform onto managed RDS</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d63q7', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d63q7"><strong>Correct answer: B.</strong> Relocate is the only strategy that moves the VM without converting it out of the VMware format. Rehost lands on native EC2, which is exactly what the requirement rules out.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q8.</strong> An enterprise wants to retire its physical backup tape infrastructure while keeping its existing backup software and workflows unchanged. Which Storage Gateway flavor applies?</p>
+          <div class="scenario-options" id="opts-d63q8">
+            <div class="scenario-option">A. File Gateway</div>
+            <div class="scenario-option">B. Volume Gateway in stored mode</div>
+            <div class="scenario-option">C. Tape Gateway (virtual tape library)</div>
+            <div class="scenario-option">D. AWS Backup with a vault lock</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d63q8', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d63q8"><strong>Correct answer: C.</strong> Only Tape Gateway presents a virtual tape library interface that existing backup software recognizes, which is what allows the physical tape hardware to be retired without changing the workflow. File Gateway presents an NFS or SMB share, which backup software expecting a tape library will not use.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q9.</strong> A hospital must keep patient data physically on its own premises for regulatory reasons while still using native AWS APIs for its applications. Which option satisfies this?</p>
+          <div class="scenario-options" id="opts-d63q9">
+            <div class="scenario-option">A. AWS Local Zones</div>
+            <div class="scenario-option">B. AWS Wavelength</div>
+            <div class="scenario-option">C. AWS Outposts</div>
+            <div class="scenario-option">D. A standard AWS Region with encryption at rest</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d63q9', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d63q9"><strong>Correct answer: C.</strong> Outposts is the only option that places AWS-managed infrastructure inside the customer's own data center, which is what a physical data-residency requirement demands. Local Zones and Wavelength are AWS-operated facilities elsewhere, and encryption does not change where the data lives.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q10.</strong> A production database cannot be taken offline, and the cutover must be near-zero-downtime. Which DMS configuration is required?</p>
+          <div class="scenario-options" id="opts-d63q10">
+            <div class="scenario-option">A. Full Load only, run during a maintenance window</div>
+            <div class="scenario-option">B. Full Load plus Change Data Capture</div>
+            <div class="scenario-option">C. CDC only, with no initial load</div>
+            <div class="scenario-option">D. Full Load with a longer replication instance timeout</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d63q10', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d63q10"><strong>Correct answer: B.</strong> Full Load alone takes a point-in-time snapshot with no mechanism for capturing writes during the copy, which implies a freeze proportional to dataset size. Full Load plus CDC caches changes during the snapshot, applies them when it completes, then streams forward — which is what makes a near-zero-downtime cutover possible.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q11.</strong> A DMS migration starts successfully but falls progressively behind during the CDC phase. The source and target both show healthy resource utilization. What is the most likely cause?</p>
+          <div class="scenario-options" id="opts-d63q11">
+            <div class="scenario-option">A. The replication instance is undersized for the change volume</div>
+            <div class="scenario-option">B. The target database engine is unsupported</div>
+            <div class="scenario-option">C. CDC cannot be used with this source engine</div>
+            <div class="scenario-option">D. The migration needs to be restarted from scratch</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d63q11', 0)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d63q11"><strong>Correct answer: A.</strong> The replication instance carries the CDC workload, so high change volume, many tables, or large LOBs can overwhelm it while the source and target look fine. This failure mode is easy to misread as a network problem because the symptom is lag rather than an error.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q12.</strong> A migration team needs to map process-to-process network connections between servers in order to group applications into migration waves. What captures this?</p>
+          <div class="scenario-options" id="opts-d63q12">
+            <div class="scenario-option">A. Agentless discovery via a Discovery Connector</div>
+            <div class="scenario-option">B. Agent-based discovery, which captures process-level network connections</div>
+            <div class="scenario-option">C. AWS Migration Hub</div>
+            <div class="scenario-option">D. AWS Config</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d63q12', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d63q12"><strong>Correct answer: B.</strong> Agentless discovery provides VM-level inventory and utilization only. Process-to-process dependency mapping requires the agent-based collector, and Migration Hub tracks progress rather than discovering dependencies.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q13.</strong> A company runs a self-managed MySQL instance on EC2 and wants to move it to Amazon RDS with no application code changes. Which of the 7 Rs does this represent?</p>
+          <div class="scenario-options" id="opts-d63q13">
+            <div class="scenario-option">A. Rehost</div>
+            <div class="scenario-option">B. Replatform</div>
+            <div class="scenario-option">C. Refactor</div>
+            <div class="scenario-option">D. Repurchase</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d63q13', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d63q13"><strong>Correct answer: B.</strong> Substituting a managed service for a self-managed one without rewriting the application is lift-tinker-and-shift, which is Replatform. Rehost would keep the database on EC2, and Refactor implies application-level change.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q14.</strong> A company must migrate 2 PB of data from a facility with no viable network uplink for bulk transfer. What is the appropriate approach?</p>
+          <div class="scenario-options" id="opts-d63q14">
+            <div class="scenario-option">A. AWS DataSync over the internet</div>
+            <div class="scenario-option">B. Direct Connect provisioned overnight</div>
+            <div class="scenario-option">C. Multiple AWS Snowball Edge Storage Optimized devices, or Snowmobile for the full 2 PB in one engagement</div>
+            <div class="scenario-option">D. AWS Storage Gateway in cached mode</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d63q14', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d63q14"><strong>Correct answer: C.</strong> With no viable uplink, physical transfer is the only option. Snowball Edge devices handle the volume in bulk, and Snowmobile is the exabyte-scale single-engagement alternative. Direct Connect cannot be provisioned overnight, and the other two options both depend on the network that does not exist.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q15.</strong> A migration program spans MGN, DMS, and DataSync across several teams, and leadership wants a single view of progress. Which service provides this?</p>
+          <div class="scenario-options" id="opts-d63q15">
+            <div class="scenario-option">A. AWS Application Migration Service</div>
+            <div class="scenario-option">B. AWS Migration Hub</div>
+            <div class="scenario-option">C. AWS Application Discovery Service</div>
+            <div class="scenario-option">D. AWS Database Migration Service</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d63q15', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d63q15"><strong>Correct answer: B.</strong> Migration Hub is the tracking layer that aggregates progress across migration tools. It does not perform migrations, and Application Discovery Service inventories and maps dependencies rather than reporting migration status.</div>
+        </div>
+      </section>
+      <section class="doc-section" id="preview">
+        <h2 class="section-heading">Preview</h2>
+        <div class="card card-purple">
+          <p>Every pattern above assumed the migration was the right thing to do at the price being paid for it. That assumption is the one Domain 4 attacks directly. A rehost that meets the deadline can still be the wrong answer if the resulting fleet is committed to the wrong purchase instrument, and the exam is comfortable asking you to choose between a migration plan and a cost plan that would make the same migration cheaper.</p>
+          <p>The open question for tomorrow is which commitment matches which workload shape. Compute Savings Plans apply across any instance family, region, and operating system, and even to Fargate and Lambda usage, at a slightly lower discount than EC2 Instance Savings Plans, which are cheaper but locked to a family and region. Reserved Instances add a capacity reservation that Savings Plans do not. Spot reaches the steepest discounts but comes with a two-minute interruption notice and only suits fault-tolerant work. Add Compute Optimizer's right-sizing recommendations, Cost Explorer's forecasts, and the tagging discipline that makes any of it attributable, and the question becomes not "what is cheapest" but "what is cheapest given what this workload actually does."</p>
+        </div>
+      </section>
+      <section class="doc-section" id="sources">
+        <h2 class="section-heading">Sources</h2>
+        <div class="card">
+          <ul class="source-list">
+            <li><a href="https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Task.CDC.html" target="_blank">AWS DMS — Using a task with change data capture</a></li>
+            <li><a href="https://docs.aws.amazon.com/application-migration-service/latest/userguide/what-is-service.html" target="_blank">AWS Application Migration Service — What it is</a></li>
+            <li><a href="https://docs.aws.amazon.com/datasync/latest/userguide/what-is-datasync.html" target="_blank">AWS DataSync — What it is</a></li>
+            <li><a href="https://docs.aws.amazon.com/snowball/latest/developer-guide/what-is-snowball.html" target="_blank">AWS Snow Family — What it is</a></li>
+            <li><a href="https://docs.aws.amazon.com/migrationhub/latest/ug/whatishub.html" target="_blank">AWS Migration Hub — What it is</a></li>
+          </ul>
+        </div>
       </section>
       <div class="day-nav">
         <a href="day-062.html">&larr; Day 62: Mock Exam 2 Distractor Analysis &amp; Weak Domain Review</a>

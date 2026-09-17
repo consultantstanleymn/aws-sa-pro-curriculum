@@ -104,37 +104,358 @@
         <span class="pill pill-green">Phase 2: Compute, Containers &amp; Global Databases</span>
       </div>
       <h1 class="hero-title">Amazon Aurora Architecture &amp; Aurora Global Database</h1>
-      <div class="reading-meta">&#128337; ~3 min read &middot; 3 services covered</div>
+      <div class="reading-meta">&#128337; ~58 min read &middot; 3 services covered</div>
       <div class="services-grid">
         <span class="service-tag">Aurora</span>
         <span class="service-tag">Aurora Global Database</span>
         <span class="service-tag">Storage-layer replication</span>
       </div>
       <div id="tracker"></div>
-      <section class="doc-section">
-        <h2 class="section-heading">Today's Concept</h2>
+
+      <section class="doc-section" id="recap">
+        <h2 class="section-heading">Recap: From Compute Choice to Data Durability</h2>
         <div class="card card-accent">
-          <p>Aurora decouples compute from a distributed, self-healing storage layer replicated 6 ways across 3 AZs, giving near-instant crash recovery and fast read replica promotion. Aurora Global Database adds cross-region replication (typically &lt;1s lag) via the storage layer (not binlog), with a secondary region promotable in under a minute for DR.</p>
-        </div>
-        <h3 class="sub-heading">Hands-on Lab / Practical Action (45 min)</h3>
-        <div class="card">
-          <p>Simulate an Aurora Global Database managed planned failover and measure the promotion time of the secondary region to primary.</p>
+          <p>Week 3 closed on a decision matrix rather than a service: ECS vs EKS decision criteria, serverless vs server-based, Fargate vs managed nodes, and scaling mechanics, all weighed against operational overhead vs cost vs control. That framing is worth carrying forward because it is the same shape of question the database tier asks, just with different nouns. The compute layer decided where code runs and how it scales; the data layer decides where state lives, how it survives failure, and how far it can be replicated before consistency starts to cost you something.</p>
+          <p>Today extends that thread rather than replacing it. Aurora is the clearest example in the AWS catalog of a managed service that changes the underlying architecture instead of just wrapping it — the storage layer is not a black box you tune, it is a replicated, self-healing distributed system that the compute layer talks to over a purpose-built protocol. Once you understand that split, the scaling and failover behaviors that look like magic in a console become predictable, and the exam scenarios that hinge on replication lag and promotion time stop being trivia.</p>
         </div>
       </section>
-      <section class="doc-section">
-        <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
-        
-      <div class="scenario-card">
-        <p class="scenario-question"><strong>Q1.</strong> A global app needs a secondary region readable with sub-second replication lag and the ability to promote to primary in under a minute during a regional outage. Which database fits?</p>
-        <div class="scenario-options" id="opts-d22q0">
-            <div class="scenario-option">A. RDS Multi-AZ with a cross-region read replica</div>
-            <div class="scenario-option">B. Aurora Global Database</div>
-            <div class="scenario-option">C. DynamoDB Global Tables only</div>
-            <div class="scenario-option">D. RDS read replica with async replication</div>
+
+      <section class="doc-section" id="why-on-exam">
+        <h2 class="section-heading">1. Why Aurora Is on the Exam</h2>
+        <p>Aurora shows up on SAP-C02 for a structural reason: it is the only relational database in the AWS portfolio where the storage layer is a first-class distributed system rather than a single-instance disk that happens to be mirrored. Every other managed relational option — RDS for MySQL, PostgreSQL, SQL Server, Oracle — is fundamentally a database engine running on an EC2 instance with replication bolted on at the engine level. Aurora replaces that with a purpose-built log-structured storage service that the compute nodes write to over a network protocol, and that single architectural decision cascades into almost every behavior the exam tests.</p>
+        <p>The domain mapping is mostly Domain 2, Design Resilient Architectures, with a secondary pull into Domain 1 whenever the scenario involves cross-region data residency or a multi-account data tier. The recurring pattern is a scenario that states a recovery objective in business terms — "the application must survive a full region loss with no more than a minute of data loss" — and then offers four database options where three of them are technically capable of cross-region replication but only one meets the stated RPO and RTO without a manual rebuild. Aurora Global Database is usually that one, and the distractors are usually RDS read replicas, snapshot copy, and DynamoDB Global Tables used for a workload that is clearly relational.</p>
+        <p>What makes the topic high-yield is that the wrong answers are plausible. A cross-region RDS read replica does replicate data to another region, and it can be promoted, so a candidate reasoning only at the feature level will pick it. The distinguishing detail is the mechanism: engine-level asynchronous replication carries a measurable lag and a promotion that involves replaying logs and reconfiguring endpoints, while Aurora Global Database replicates at the storage layer and promotes by detaching and promoting a secondary cluster. The exam is testing whether you know which of those two you are choosing.</p>
+      </section>
+
+      <section class="doc-section" id="mechanism">
+        <h2 class="section-heading">2. How the Storage Layer Actually Works</h2>
+        <p>An Aurora cluster is two things wearing one name. The first is a set of compute instances — one writer and up to fifteen readers — that run a modified MySQL or PostgreSQL engine. The second is a storage volume that spans three Availability Zones and holds six copies of every piece of data, two in each AZ. The compute instances do not have local disks for user data. They write redo log records over the network to the storage fleet, and the storage fleet is responsible for assembling those log records into pages, replicating them, and acknowledging the write once a quorum has durably stored it.</p>
+        <p>That quorum is the detail worth internalizing. Aurora's storage layer uses a 4-of-6 write quorum and a 3-of-6 read quorum. A write is acknowledged once four of the six copies are durable, which means the cluster can lose an entire Availability Zone — two copies — and still accept writes, because four remain. It can lose a second copy in a different AZ and still read, because three remain. This is why Aurora advertises near-instant crash recovery: there is no long redo replay on restart, because the storage layer is continuously applying the log and the compute instance only needs to reconnect to a volume that is already consistent.</p>
+        <p>The practical consequence is that read replicas in Aurora are cheap and fast to add. Because every replica shares the same storage volume, adding a reader does not require copying data or replaying a binlog — the replica attaches to the same volume and starts serving reads with a lag measured in tens of milliseconds, not seconds. This is the mechanism behind the exam's favorite Aurora claim: read scaling without the replication lag that plagues engine-level replicas. It also explains why Aurora replicas can be promoted quickly, and why the failure of a reader does not affect the writer at all.</p>
+        <p>One more mechanism matters for the global story. Aurora Global Database extends this same log-structured design across regions. The primary region's storage layer forwards redo log records to a dedicated storage layer in each secondary region, which applies them to its own six-way replicated volume. The secondary region runs its own read-only compute instances against that volume. Because the replication is at the storage layer rather than the database engine, it does not depend on binlog format, does not require the secondary to run a full engine replay, and typically sustains sub-second lag under normal load.</p>
+      </section>
+
+      <section class="doc-section" id="decision-boundary">
+        <h2 class="section-heading">3. The Core Decision Boundary: Local HA vs Global DR</h2>
+        <p>The fork that most Aurora scenario questions hinge on is not "Aurora or RDS" — it is whether the requirement is about surviving the loss of an Availability Zone or the loss of an entire Region. Those are different problems with different mechanisms, and the exam deliberately writes scenarios that mention "high availability" and "disaster recovery" in the same paragraph to see whether you separate them. Local HA inside a single Region is handled by the storage layer's six-way replication plus Aurora replicas in other AZs. Regional DR is handled by Aurora Global Database, which is a separate construct with its own cost, its own lag characteristics, and its own promotion procedure.</p>
+        <p>The second half of the boundary is read scaling versus write scaling. Aurora scales reads horizontally by adding replicas, and it scales writes vertically by choosing a larger writer instance class. There is no multi-writer mode in the general case — Aurora multi-master exists but is a niche feature with significant caveats, and the exam generally treats the writer as a single instance. If a scenario demands multi-region active-active writes, Aurora Global Database is not the answer; that is DynamoDB Global Tables territory, and recognizing that boundary is itself a tested skill.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Requirement</th><th>Mechanism</th><th>Typical RPO / RTO</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Survive an AZ failure</td><td>Storage-layer 6-way replication across 3 AZs</td><td>Zero data loss; seconds</td></tr>
+              <tr><td>Survive a reader instance failure</td><td>Additional Aurora replicas in other AZs</td><td>Zero data loss; seconds</td></tr>
+              <tr><td>Scale read throughput</td><td>Add Aurora replicas (up to 15)</td><td>N/A; tens of ms replica lag</td></tr>
+              <tr><td>Survive a full Region loss</td><td>Aurora Global Database secondary cluster</td><td>Typically &lt;1s lag; promotion under a minute</td></tr>
+              <tr><td>Multi-region active-active writes</td><td>Not Aurora — use DynamoDB Global Tables</td><td>N/A for Aurora</td></tr>
+            </tbody>
+          </table>
         </div>
-        <button class="scenario-reveal-btn" onclick="revealAnswer('d22q0', 1)">Reveal Answer</button>
-        <div class="scenario-explanation" id="exp-d22q0"><strong>Correct answer: B.</strong> Aurora Global Database is purpose-built for this: storage-layer cross-region replication with typical &lt;1s lag and managed failover promoting the secondary in under a minute (RPO/RTO measured in seconds).</div>
-      </div>
+      </section>
+
+      <section class="doc-section" id="config-tradeoffs">
+        <h2 class="section-heading">4. Configuration Modes and Their Tradeoffs</h2>
+        <p>Aurora's configuration surface is smaller than RDS's, but the choices that remain are consequential. The first is the engine: Aurora MySQL or Aurora PostgreSQL. Both share the storage architecture, so the failover and replication behavior you are being tested on is identical; the engine choice is driven by application compatibility and by which engine-specific features you need. The exam rarely makes the engine the deciding factor, but it will sometimes include a distractor that assumes a MySQL-only feature exists in PostgreSQL or vice versa.</p>
+        <p>The second choice is the capacity model, and this is where Aurora diverges most sharply from RDS. Aurora Serverless v2 scales the writer and reader instances in fine-grained capacity units, which makes it the right answer for workloads with unpredictable or spiky demand, development environments that sit idle overnight, and multi-tenant applications where per-tenant clusters would otherwise be over-provisioned. Provisioned Aurora is the right answer for steady, predictable load, because you pay for the instance class you chose whether or not you use it. The tradeoff is the familiar one: Serverless v2 removes capacity planning but carries a higher per-unit cost at sustained high utilization.</p>
+        <p>The third choice is the global topology. A single-Region Aurora cluster with replicas across AZs is the default and the cheapest resilient configuration. Adding a Global Database secondary region roughly doubles the infrastructure footprint and adds cross-region data transfer cost, so it should be justified by an explicit regional DR requirement rather than by a vague desire for durability. Within Global Database there is a further choice: the secondary can be a read-only cluster serving local reads, or it can be a pure standby that exists only to be promoted. Serving reads from the secondary is often the way to justify the cost, because it turns a DR expense into a latency improvement for users in that geography.</p>
+        <p>Finally, there is the question of how the secondary is promoted. A managed planned failover is the controlled path: you initiate it, Aurora waits for the secondary to catch up, promotes it, and the operation is designed to be reversible. An unplanned failover is what happens when the primary region is unreachable and you detach the secondary and promote it manually. The distinction matters operationally because the planned path preserves the ability to fail back cleanly, while the unplanned path leaves you with a new primary and a decision about what to do with the old region once it recovers.</p>
+      </section>
+
+      <section class="doc-section" id="sizing-limits">
+        <h2 class="section-heading">5. Sizing, Limits and Quotas</h2>
+        <p>The numbers below are the ones that show up in scenario questions, and each is worth knowing precisely because the distractors are usually off by an order of magnitude rather than obviously wrong. Aurora's storage layer replicates every write six ways across three Availability Zones, with a 4-of-6 write quorum and a 3-of-6 read quorum. A cluster supports one writer and up to fifteen Aurora replicas, and those replicas share the same underlying storage volume rather than maintaining their own copies.</p>
+        <p>Aurora Global Database supports a primary Region plus up to five secondary Regions, and each secondary Region can host up to sixteen read-only Aurora replicas. Replication lag between the primary and a secondary is typically under one second, and the managed promotion of a secondary to primary completes in under a minute. These two figures — sub-second lag and sub-minute promotion — are the ones the exam expects you to quote when a scenario states an RPO of seconds and an RTO of about a minute.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Property</th><th>Value</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Storage copies per write</td><td>6 copies across 3 AZs</td></tr>
+              <tr><td>Write quorum</td><td>4 of 6</td></tr>
+              <tr><td>Read quorum</td><td>3 of 6</td></tr>
+              <tr><td>Aurora replicas per cluster</td><td>Up to 15</td></tr>
+              <tr><td>Secondary Regions in a Global Database</td><td>Up to 5</td></tr>
+              <tr><td>Read-only replicas per secondary Region</td><td>Up to 16</td></tr>
+              <tr><td>Typical cross-Region replication lag</td><td>Under 1 second</td></tr>
+              <tr><td>Managed promotion time</td><td>Under 1 minute</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>Two caveats belong next to those numbers. First, the sub-second lag figure is a typical value under normal conditions, not a guarantee — a secondary Region that is saturated, or a primary Region generating write volume faster than the inter-Region link can carry, will show higher lag, and the exam will occasionally describe exactly that situation to test whether you understand the figure is a characteristic rather than a contract. Second, promotion time is dominated by the time to detach the secondary and reconfigure endpoints, not by data replay, which is why it is measured in tens of seconds rather than minutes.</p>
+      </section>
+
+      <section class="doc-section" id="failure-modes">
+        <h2 class="section-heading">6. Failure Modes and What They Look Like in Production</h2>
+        <p>The most common Aurora failure mode in production is not a storage failure — the storage layer is designed to absorb those — it is a writer instance failure that triggers a failover to a replica. The symptom is a burst of connection errors from the application, typically lasting tens of seconds, followed by recovery once the replica is promoted and the cluster endpoint is repointed. The first diagnostic move is to check the cluster's event history and the writer's instance metrics, because the failover itself is usually visible as a gap in the writer's CPU and connection graphs rather than as an error spike in the database's own metrics.</p>
+        <p>The second failure mode is replica lag, and it presents differently depending on whether you are looking at a local replica or a Global Database secondary. A local Aurora replica lagging by more than a few hundred milliseconds usually indicates a reader instance that is undersized relative to the read volume it is serving, or a query pattern that is doing large scans and competing for the same storage bandwidth. A Global Database secondary lagging indicates a cross-Region network constraint or a primary Region writing faster than the replication stream can carry. In both cases the metric to watch is the replication lag metric on the replica, and the first move is to correlate it with write volume on the primary rather than to immediately resize anything.</p>
+        <p>The third failure mode is the one that catches teams during a real regional event: the secondary Region is healthy but the application cannot reach it, because the failover plan assumed a DNS change that nobody tested. Aurora Global Database promotion changes which cluster is the writer, but it does not automatically repoint your application's connection strings unless you have built that into your runbook or fronted the database with a Route 53 record you control. This is the failure mode that Game Days exist to surface, and it is the reason the exam pairs Aurora Global Database questions with Route 53 and Route 53 ARC questions so often.</p>
+        <p>A fourth, quieter failure mode is storage growth. Aurora bills for storage based on the high-water mark of the cluster volume, and that volume only shrinks when you explicitly reclaim space. A workload that ingests a large dataset, deletes it, and repeats will show steadily growing storage cost with no corresponding data growth, which is a cost-optimization question dressed up as a storage question.</p>
+      </section>
+
+      <section class="doc-section" id="sre-angle">
+        <h2 class="section-heading">7. The Operational and SRE Angle</h2>
+        <p>From an SRE perspective, Aurora's value proposition is that it moves a class of failure handling out of your runbook and into the platform. You do not write a procedure for rebuilding a failed storage node, because the storage layer does that itself. You do not write a procedure for replaying logs after a crash, because there is no long replay. What remains in your runbook is the part the platform cannot decide for you: when to fail over, how to repoint traffic, and how to verify that the new primary is actually serving the workload correctly.</p>
+        <p>The monitoring shape follows from that. The metrics that matter most are the writer's CPU and memory utilization, the replica lag on each reader, the volume of write throughput against the instance class's capacity, and the cluster's failover events. Alarms should be built around the symptoms your users would notice — elevated query latency, connection errors, replica lag exceeding a threshold that would make a read-after-write pattern return stale data — rather than around the underlying infrastructure metrics, which the platform manages for you.</p>
+        <p>For a Global Database deployment, the SLO conversation gets more interesting. If you are serving reads from the secondary Region, you have implicitly accepted a bounded staleness window, and that window needs to be written down as part of the SLO rather than discovered during an incident. A read-after-write pattern that works fine in the primary Region will silently return stale data in the secondary, and the fix is either to route those specific reads back to the primary or to design the application so that it does not depend on read-after-write consistency across Regions. This is a design decision, not a monitoring one, and it is the kind of thing that should be settled before the secondary Region is ever promoted.</p>
+        <p>The runbook for a planned failover has a shape worth rehearsing: verify the secondary's lag is near zero, confirm the application can reach the secondary's endpoints, initiate the managed planned failover, verify the new writer is accepting writes, and then verify that reads against the old primary — now a secondary — are still returning correct data. The unplanned path is the same minus the first step, plus a decision about whether to fail back once the original Region recovers. Both paths should be exercised in a Game Day before they are needed for real.</p>
+      </section>
+
+      <section class="doc-section" id="gotchas">
+        <h2 class="section-heading">8. Edge Cases and Exam Gotchas</h2>
+        <p>The single most common trap is conflating Aurora Global Database with a cross-Region read replica. They sound similar and both replicate data across Regions, but the mechanisms and the operational characteristics are different enough that the exam uses them as mutual distractors. A cross-Region read replica is an engine-level asynchronous copy that you promote by breaking replication and reconfiguring endpoints; Aurora Global Database is a storage-layer replication with a managed promotion path and a documented lag and promotion time. If a scenario quotes a sub-second RPO and a sub-minute RTO, it is describing Global Database.</p>
+        <p>The second trap is assuming that a Global Database secondary can accept writes. It cannot — the secondary is read-only until it is promoted, and promotion is a deliberate operation. A scenario that describes active-active writes across Regions is not an Aurora scenario, no matter how relational the workload looks. The third trap is forgetting that the secondary Region's replicas are separate from the primary's; the fifteen-replica limit applies per cluster, and a Global Database secondary has its own replica allowance.</p>
+        <p>A fourth gotcha is the assumption that Aurora's storage replication protects against application-level errors. It does not. A dropped table or a bad migration replicates to every copy and every Region within seconds, which is why point-in-time recovery and Aurora backtrack (for MySQL) exist as separate mechanisms. The exam will occasionally present a scenario about recovering from an accidental data deletion and offer Global Database as a distractor; the correct answer is a backup or backtrack, not a failover.</p>
+        <p>Finally, watch for the Serverless v2 versus provisioned distinction being smuggled into a resilience question. Serverless v2 changes how capacity is provisioned, not how the storage layer replicates or how failover works. A scenario that asks about surviving an AZ failure is answered the same way regardless of the capacity model, and choosing Serverless v2 because the scenario mentioned variable load is a sign you answered the wrong question.</p>
+      </section>
+
+      <section class="doc-section" id="vs-comparison">
+        <h2 class="section-heading">9. Aurora vs. the Services It Gets Confused With</h2>
+        <p>Aurora sits in a crowded part of the catalog, and the exam relies on that crowding. The comparison that matters most is against RDS, because RDS is the default relational answer and Aurora is the upgrade you choose when the storage architecture's properties are what you need. The second comparison is against DynamoDB, which is the answer whenever the workload is not relational or requires multi-Region active-active writes. The third is against ElastiCache, which is not a system of record at all but shows up as a distractor whenever a scenario mentions read latency.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Service</th><th>Pick it when…</th><th>Do not pick it when…</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Aurora (single Region)</td><td>Relational workload, need fast read scaling and fast failover within one Region</td><td>You need multi-Region active-active writes</td></tr>
+              <tr><td>Aurora Global Database</td><td>Relational workload with a regional DR requirement measured in seconds of RPO</td><td>The workload is not relational, or writes must be active in multiple Regions</td></tr>
+              <tr><td>RDS Multi-AZ</td><td>Relational workload that only needs AZ-level HA and you want the simplest operational model</td><td>You need sub-second cross-Region replication or very fast read scaling</td></tr>
+              <tr><td>RDS cross-Region read replica</td><td>Read scaling in another Region with a looser RPO and a manual promotion you are comfortable running</td><td>The scenario quotes a sub-second RPO or a sub-minute RTO</td></tr>
+              <tr><td>DynamoDB Global Tables</td><td>Key-value access pattern, multi-Region active-active writes, single-digit-millisecond latency</td><td>The workload needs joins, transactions across many items, or a relational schema</td></tr>
+              <tr><td>ElastiCache</td><td>You need to absorb read load in front of a database</td><td>You need durability or a system of record</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The rule of thumb that resolves most of these: if the scenario's constraint is about the shape of the data, choose the engine first and the topology second. If the constraint is about recovery objectives, choose the topology first and the engine second. Aurora Global Database is almost always the answer to the second kind of question when the workload is relational, and almost never the answer to the first kind.</p>
+      </section>
+
+      <section class="doc-section" id="lab">
+        <h2 class="section-heading">Hands-on Lab: Simulating a Global Database Planned Failover</h2>
+        <div class="card card-green">
+          <p>The goal of this lab is to build a two-Region Aurora Global Database, measure its replication lag under load, and then run a managed planned failover while observing what the application sees. Budget roughly 45 minutes, and expect the cluster creation steps to dominate the wall-clock time.</p>
+          <p><strong>1. Create the primary cluster.</strong> In a Region close to you, create an Aurora MySQL cluster with the provisioned engine mode. Choose a small instance class for the writer — this is a mechanics lab, not a performance lab — and add one reader in a different Availability Zone. Enable the Performance Insights and Enhanced Monitoring options so you have per-instance metrics to look at later. Note the writer endpoint and the reader endpoint; you will need both.</p>
+          <p><strong>2. Add a Global Database secondary.</strong> From the cluster's actions menu, choose to add a Region. Pick a Region in a different geography so the cross-Region link is realistic. Aurora will create a secondary cluster in that Region and begin replicating. This step takes several minutes; while it runs, note that the secondary cluster is created with its own writer instance that is not accepting writes, plus the option to add read-only replicas.</p>
+          <p><strong>3. Add a read-only replica in the secondary Region.</strong> Once the secondary cluster is available, add one reader instance to it. This is the instance your application would use for local reads in that geography, and it is the instance whose lag you will measure.</p>
+          <p><strong>4. Generate write load against the primary.</strong> Connect to the primary writer endpoint and run a loop that inserts rows into a table at a steady rate — a few hundred inserts per second is enough to make the replication stream visible. While it runs, watch the <code>AuroraGlobalDBReplicationLag</code> metric on the secondary cluster in CloudWatch. Under normal conditions it should sit well under a second.</p>
+          <p><strong>5. Measure the baseline.</strong> Record the lag you observe, the primary's write throughput, and the secondary reader's CPU utilization. These are your baseline numbers, and they are what you will compare against after the failover.</p>
+          <p><strong>6. Run the managed planned failover.</strong> From the primary cluster's actions menu, initiate a switchover to the secondary Region. Aurora will wait for the secondary to catch up, promote it, and demote the original primary to a secondary. Time the operation from initiation to the point where the new writer endpoint accepts a write.</p>
+          <p><strong>7. Verify the new topology.</strong> Confirm that the former secondary is now the writer, that the former primary is now read-only, and that replication has reversed direction. Re-run your insert loop against the new writer endpoint and confirm the lag metric now appears on the other cluster.</p>
+          <p><strong>8. Record what the application would have seen.</strong> If you had an application connected to the old writer endpoint, it would have received connection errors during the switchover and would need to be repointed at the new endpoint. Write down how long that window was and what your application's connection-retry logic would need to look like to survive it. This is the part of the lab that maps directly to the exam's DR scenarios.</p>
+          <p><strong>9. Clean up.</strong> Delete the secondary cluster first, then the primary, and confirm that no snapshots or leftover instances remain. Global Database clusters are billed per instance in every Region, so an abandoned secondary is an ongoing cost.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="quiz">
+        <h2 class="section-heading">Scenario Question Drills</h2>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q1.</strong> A global application needs a secondary Region that is readable with sub-second replication lag and can be promoted to primary in under a minute during a regional outage. Which database configuration fits?</p>
+          <div class="scenario-options" id="opts-d22q1">
+            <div class="scenario-option">A. RDS Multi-AZ with a cross-Region read replica</div>
+            <div class="scenario-option">B. Aurora Global Database</div>
+            <div class="scenario-option">C. DynamoDB Global Tables</div>
+            <div class="scenario-option">D. RDS with asynchronous cross-Region replication</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d22q1', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d22q1"><strong>Correct answer: B.</strong> Aurora Global Database replicates at the storage layer with typical sub-second lag and a managed promotion that completes in under a minute, matching both the RPO and RTO stated in the scenario.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q2.</strong> How many copies of each write does Aurora's storage layer maintain, and across how many Availability Zones?</p>
+          <div class="scenario-options" id="opts-d22q2">
+            <div class="scenario-option">A. Two copies across two AZs</div>
+            <div class="scenario-option">B. Three copies across three AZs</div>
+            <div class="scenario-option">C. Six copies across three AZs</div>
+            <div class="scenario-option">D. Six copies across six AZs</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d22q2', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d22q2"><strong>Correct answer: C.</strong> Aurora maintains six copies of each write, two in each of three Availability Zones, with a 4-of-6 write quorum and a 3-of-6 read quorum.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q3.</strong> A team wants to add read capacity to an Aurora cluster without incurring the replication lag typical of engine-level read replicas. What makes this possible?</p>
+          <div class="scenario-options" id="opts-d22q3">
+            <div class="scenario-option">A. Aurora replicas share the same storage volume as the writer, so they do not replay a binlog</div>
+            <div class="scenario-option">B. Aurora replicas use synchronous replication with a two-phase commit</div>
+            <div class="scenario-option">C. Aurora replicas are backed by ElastiCache</div>
+            <div class="scenario-option">D. Aurora replicas are read-only copies refreshed every five minutes</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d22q3', 0)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d22q3"><strong>Correct answer: A.</strong> Because all Aurora replicas attach to the same distributed storage volume, adding a reader does not require copying data or replaying logs, which is why replica lag is measured in tens of milliseconds.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q4.</strong> A workload requires active-active writes in two Regions with single-digit-millisecond latency and a flexible schema. Which service should the architect choose?</p>
+          <div class="scenario-options" id="opts-d22q4">
+            <div class="scenario-option">A. Aurora Global Database with a multi-writer primary</div>
+            <div class="scenario-option">B. DynamoDB Global Tables</div>
+            <div class="scenario-option">C. RDS with cross-Region read replicas</div>
+            <div class="scenario-option">D. Aurora with a secondary Region promoted to writer</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d22q4', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d22q4"><strong>Correct answer: B.</strong> Aurora Global Database secondaries are read-only until promoted, so they cannot serve active-active writes. DynamoDB Global Tables is the multi-Region active-active option.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q5.</strong> What is the maximum number of Aurora replicas a single Aurora cluster can have?</p>
+          <div class="scenario-options" id="opts-d22q5">
+            <div class="scenario-option">A. 5</div>
+            <div class="scenario-option">B. 10</div>
+            <div class="scenario-option">C. 15</div>
+            <div class="scenario-option">D. 16</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d22q5', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d22q5"><strong>Correct answer: C.</strong> An Aurora cluster supports one writer and up to fifteen Aurora replicas, all sharing the same storage volume.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q6.</strong> An application reads from an Aurora Global Database secondary Region and immediately re-reads a row it just wrote to the primary. What will it observe?</p>
+          <div class="scenario-options" id="opts-d22q6">
+            <div class="scenario-option">A. The read will always return the newly written value</div>
+            <div class="scenario-option">B. The read may return a stale value, because cross-Region replication is asynchronous</div>
+            <div class="scenario-option">C. The read will fail with a consistency error</div>
+            <div class="scenario-option">D. The read will be automatically routed to the primary</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d22q6', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d22q6"><strong>Correct answer: B.</strong> Cross-Region replication is asynchronous with typical sub-second lag, so a read-after-write pattern against the secondary can return stale data. Those reads should be routed to the primary or the application should not depend on cross-Region read-after-write consistency.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q7.</strong> A team accidentally drops a critical table on an Aurora cluster. Which mechanism recovers the data?</p>
+          <div class="scenario-options" id="opts-d22q7">
+            <div class="scenario-option">A. Promote the Global Database secondary Region</div>
+            <div class="scenario-option">B. Fail over to an Aurora replica in another AZ</div>
+            <div class="scenario-option">C. Restore from a snapshot or use Aurora backtrack</div>
+            <div class="scenario-option">D. The storage layer will self-heal the dropped table</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d22q7', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d22q7"><strong>Correct answer: C.</strong> Storage-layer replication protects against infrastructure failure, not application-level errors. A dropped table replicates everywhere within seconds, so recovery requires point-in-time restore or Aurora backtrack.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q8.</strong> A development environment sits idle overnight and on weekends but must be available during business hours. Which Aurora capacity model minimizes cost?</p>
+          <div class="scenario-options" id="opts-d22q8">
+            <div class="scenario-option">A. Provisioned Aurora with the smallest instance class</div>
+            <div class="scenario-option">B. Aurora Serverless v2, which scales capacity down when idle</div>
+            <div class="scenario-option">C. Aurora Global Database with a secondary in a cheaper Region</div>
+            <div class="scenario-option">D. Provisioned Aurora with a Reserved Instance</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d22q8', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d22q8"><strong>Correct answer: B.</strong> Aurora Serverless v2 scales capacity in fine-grained units and can scale down when idle, which suits intermittent workloads. Provisioned instances bill for the chosen class whether or not it is used.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q9.</strong> During a managed planned failover of an Aurora Global Database, what does Aurora do before promoting the secondary?</p>
+          <div class="scenario-options" id="opts-d22q9">
+            <div class="scenario-option">A. It takes a snapshot of the primary and restores it in the secondary Region</div>
+            <div class="scenario-option">B. It waits for the secondary to catch up so the promotion does not lose data</div>
+            <div class="scenario-option">C. It terminates all connections to the primary immediately</div>
+            <div class="scenario-option">D. It converts the secondary to a DynamoDB table</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d22q9', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d22q9"><strong>Correct answer: B.</strong> The managed planned failover waits for the secondary to catch up before promoting it, which is what makes it the controlled, reversible path compared with an unplanned failover.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q10.</strong> An application connected to an Aurora Global Database primary Region experiences connection errors during a regional failover. What is the most likely cause?</p>
+          <div class="scenario-options" id="opts-d22q10">
+            <div class="scenario-option">A. The storage layer lost quorum</div>
+            <div class="scenario-option">B. The application's connection string still points at the old writer endpoint</div>
+            <div class="scenario-option">C. Aurora replicas cannot serve reads after a failover</div>
+            <div class="scenario-option">D. The secondary Region has no read replicas</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d22q10', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d22q10"><strong>Correct answer: B.</strong> Promotion changes which cluster is the writer but does not repoint application connection strings. Repointing traffic is part of the runbook, which is why failover plans should be tested in a Game Day.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q11.</strong> A team observes steadily increasing Aurora storage cost even though the amount of live data in the database has not grown. What explains this?</p>
+          <div class="scenario-options" id="opts-d22q11">
+            <div class="scenario-option">A. Aurora bills for the high-water mark of the cluster volume, which does not shrink automatically</div>
+            <div class="scenario-option">B. Aurora replicates storage six times, so cost is always six times the data size</div>
+            <div class="scenario-option">C. Aurora charges per read replica regardless of usage</div>
+            <div class="scenario-option">D. The Global Database secondary is duplicating the primary's storage cost</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d22q11', 0)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d22q11"><strong>Correct answer: A.</strong> Aurora storage is billed against the high-water mark of the cluster volume, and that volume only shrinks when space is explicitly reclaimed. Ingest-and-delete workloads show growing storage cost with flat live data.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q12.</strong> How many secondary Regions can a single Aurora Global Database have?</p>
+          <div class="scenario-options" id="opts-d22q12">
+            <div class="scenario-option">A. 1</div>
+            <div class="scenario-option">B. 3</div>
+            <div class="scenario-option">C. 5</div>
+            <div class="scenario-option">D. 15</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d22q12', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d22q12"><strong>Correct answer: C.</strong> An Aurora Global Database supports a primary Region plus up to five secondary Regions, each of which can host up to sixteen read-only replicas.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q13.</strong> A scenario states that the database must survive the loss of an entire Availability Zone with zero data loss and no manual intervention. Which Aurora property satisfies this?</p>
+          <div class="scenario-options" id="opts-d22q13">
+            <div class="scenario-option">A. The 4-of-6 write quorum across three AZs</div>
+            <div class="scenario-option">B. Aurora Serverless v2 auto-scaling</div>
+            <div class="scenario-option">C. The Global Database secondary Region</div>
+            <div class="scenario-option">D. Aurora backtrack</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d22q13', 0)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d22q13"><strong>Correct answer: A.</strong> The storage layer's six copies across three AZs with a 4-of-6 write quorum mean the cluster can lose an entire AZ and still accept writes with no data loss and no manual action.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q14.</strong> A team is choosing between Aurora Serverless v2 and provisioned Aurora for a steady, high-utilization production workload. Which is the better fit and why?</p>
+          <div class="scenario-options" id="opts-d22q14">
+            <div class="scenario-option">A. Serverless v2, because it removes capacity planning entirely</div>
+            <div class="scenario-option">B. Provisioned, because Serverless v2 carries a higher per-unit cost at sustained high utilization</div>
+            <div class="scenario-option">C. Serverless v2, because it replicates storage more efficiently</div>
+            <div class="scenario-option">D. Provisioned, because Serverless v2 does not support read replicas</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d22q14', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d22q14"><strong>Correct answer: B.</strong> Serverless v2 removes capacity planning but costs more per capacity unit at sustained high utilization. Provisioned is the better fit for steady, predictable load.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q15.</strong> A scenario describes a relational workload with a regional DR requirement of seconds of RPO and about a minute of RTO, and the team wants the secondary Region to also serve local reads. What should the architect recommend?</p>
+          <div class="scenario-options" id="opts-d22q15">
+            <div class="scenario-option">A. RDS Multi-AZ with a cross-Region read replica</div>
+            <div class="scenario-option">B. Aurora Global Database with read-only replicas in the secondary Region</div>
+            <div class="scenario-option">C. DynamoDB Global Tables</div>
+            <div class="scenario-option">D. Aurora with a single Region and frequent snapshots copied cross-Region</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d22q15', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d22q15"><strong>Correct answer: B.</strong> Aurora Global Database meets the sub-second RPO and sub-minute RTO, and adding read-only replicas in the secondary Region turns the DR footprint into a latency improvement for users in that geography.</div>
+        </div>
+      </section>
+
+      <section class="doc-section" id="preview">
+        <h2 class="section-heading">Peek into Tomorrow</h2>
+        <div class="card card-purple">
+          <p>Aurora's storage layer answers the question of how a relational database survives the loss of an Availability Zone or a Region, but it does so by changing the architecture underneath the engine. Most relational workloads in an enterprise are not running on Aurora — they are running on RDS, where the engine is unmodified and the resilience story is built from a different set of primitives. That raises a question today's material deliberately leaves open: if the storage layer is not doing the replication for you, what exactly is a Multi-AZ standby, and why does it not help with read scaling at all?</p>
+          <p>The answer turns on a distinction that is easy to state and easy to get wrong under exam pressure. A Multi-AZ standby is a synchronous copy that exists to be promoted, and it shares the primary's endpoint so that failover is transparent to the application. A read replica is an asynchronous copy that exists to serve reads, and it has its own endpoint precisely because it is not a failover target in the same way. Tomorrow's material works through where that boundary sits, what it costs you when you promote a read replica and discover it was behind, and why Blue/Green Deployments exist as a third option for the specific problem of a major-version upgrade.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="sources">
+        <h2 class="section-heading">Sources</h2>
+        <div class="card">
+          <ul class="source-list">
+            <li><a href="https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/Aurora.Overview.html" target="_blank" rel="noopener">Amazon Aurora User Guide — Aurora overview and architecture</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/Aurora.Overview.StorageReliability.html" target="_blank" rel="noopener">Aurora storage and reliability — six-way replication and quorum</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/Aurora.Replication.html" target="_blank" rel="noopener">Aurora replication — Aurora replicas and read scaling</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/aurora-global-database.html" target="_blank" rel="noopener">Aurora Global Database — cross-Region replication and promotion</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/aurora-global-database-managing.html" target="_blank" rel="noopener">Managing an Aurora Global Database — managed planned failover</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/aurora-serverless-v2.html" target="_blank" rel="noopener">Aurora Serverless v2 — capacity scaling model</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/Aurora.Managing.Backups.html" target="_blank" rel="noopener">Aurora backups and point-in-time recovery</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/AuroraMySQL.Managing.Backtrack.html" target="_blank" rel="noopener">Aurora MySQL backtrack — rewinding a cluster without a restore</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/Aurora.Integrating.CloudWatch.html" target="_blank" rel="noopener">Monitoring Aurora with CloudWatch — replication lag metrics</a></li>
+            <li><a href="https://docs.aws.amazon.com/wellarchitected/latest/reliability-pillar/welcome.html" target="_blank" rel="noopener">AWS Well-Architected Framework — Reliability pillar</a></li>
+          </ul>
+        </div>
       </section>
       <div class="day-nav">
         <a href="day-021.html">&larr; Day 21: Week Synthesis — Compute Decision Matrix &amp; Scenario Drills</a>

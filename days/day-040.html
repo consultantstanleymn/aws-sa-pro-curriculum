@@ -104,36 +104,351 @@
         <span class="pill pill-green">Phase 3: SRE Observability, Resilience &amp; DR</span>
       </div>
       <h1 class="hero-title">Well-Architected Reliability Pillar Deep Dive</h1>
-      <div class="reading-meta">&#128337; ~3 min read &middot; 1 services covered</div>
+      <div class="reading-meta">&#128337; ~58 min read &middot; 1 services covered</div>
       <div class="services-grid">
         <span class="service-tag">Well-Architected Framework</span>
       </div>
       <div id="tracker"></div>
-      <section class="doc-section">
-        <h2 class="section-heading">Today's Concept</h2>
+
+      <section class="doc-section" id="recap">
+        <h2 class="section-heading">Recap: From Backup Mechanics to Reliability Design</h2>
         <div class="card card-accent">
-          <p>The Reliability pillar centers on foundations (service quotas, network topology), workload architecture (distributed system design, graceful degradation), change management (automated deployment, monitoring), and failure management (backup, DR, tested recovery procedures).</p>
-        </div>
-        <h3 class="sub-heading">Hands-on Lab / Practical Action (45 min)</h3>
-        <div class="card">
-          <p>Run a Reliability pillar review against a sample architecture, identifying single points of failure and missing automated recovery.</p>
+          <p>Yesterday's work on AWS Backup established a concrete mechanism: policy-based backup schedules that sweep EBS volumes, RDS instances, DynamoDB tables, and EFS file systems from one console, with cross-region and cross-account copy for isolation and Vault Lock enforcing WORM immutability so that even a compromised administrator cannot delete a backup before its retention expires. That is a strong answer to the ransomware question, and it is the answer most exam scenarios about "protect backups from a compromised account" are looking for.</p>
+          <p>What that material deliberately did not answer is the larger question of where backup sits inside a reliability strategy. Backup is one of four failure-management activities, and it is the cheapest and slowest of them. Today extends yesterday's material by widening the frame from "how do I protect the data" to "how do I design a workload that survives failure at all" — the Well-Architected Reliability pillar, which treats backup as the last line of defense rather than the first. The pillar's four areas — foundations, workload architecture, change management, and failure management — are the vocabulary the exam uses to describe every resilience scenario you will see from here forward.</p>
         </div>
       </section>
-      <section class="doc-section">
+
+      <section class="doc-section" id="why-on-exam">
+        <h2 class="section-heading">1. Why the Reliability Pillar Is on the Exam</h2>
+        <p>The Reliability pillar is the single largest source of scenario material on SAP-C02. The exam's second domain, "Design for New Solutions," and its resilience-adjacent questions in the first domain both lean on the same underlying question: given a stated business requirement, which architectural choice actually delivers the required availability at the lowest reasonable cost and operational burden? The pillar exists because AWS found that most outages are not caused by AWS infrastructure failing — they are caused by customers building workloads that cannot tolerate a component failing, or by changes that were deployed without a rollback path. The pillar is therefore written as a design discipline, not a service catalog.</p>
+        <p>What makes this examinable is that the pillar gives you a shared vocabulary for trade-offs that would otherwise be argued in adjectives. "Highly available" is not a requirement; "99.99% availability, RTO of 15 minutes, RPO of 5 minutes" is. Every reliability scenario on the exam is ultimately asking you to map a stated requirement onto one of the four areas and then pick the cheapest design that satisfies it. A question that says "the business cannot tolerate more than five minutes of data loss" is an RPO question, which is a failure-management question, which points at replication rather than backup. A question that says "deployments occasionally take down production" is a change-management question, which points at canary releases and automated rollback rather than at Multi-AZ.</p>
+        <p>The trap is that candidates reach for the most resilient-sounding answer rather than the one that matches the stated requirement. Multi-region active-active is almost never the right answer to a question that specifies a 15-minute RTO, because it costs an order of magnitude more than the pilot-light design that meets the requirement. The pillar's framing — design to the requirement, not to the maximum — is what the exam is testing when it offers you four technically valid architectures and only one that is proportionate.</p>
+      </section>
+
+      <section class="doc-section" id="mechanism">
+        <h2 class="section-heading">2. How the Pillar Is Structured: Four Areas and Their Design Questions</h2>
+        <p>The Reliability pillar is organized into four areas, and the exam expects you to know which area a given scenario belongs to because the remediation differs by area. Foundations covers the things you must get right before the workload exists: service quotas that will silently throttle you at scale, network topology that determines whether an AZ failure is survivable, and account structure that determines blast radius. Workload architecture covers how the workload itself is built — whether it is distributed across multiple AZs, whether it degrades gracefully when a dependency is slow, and whether it can scale horizontally rather than vertically. Change management covers how you modify the workload: automated deployment, monitoring of the deployment itself, and the ability to reverse a change quickly. Failure management covers what happens when something fails anyway: backup, disaster recovery, and — critically — tested recovery procedures.</p>
+        <p>The reason the four areas matter more than any individual best practice is that they form a progression of cost. Foundations are nearly free and prevent entire classes of failure. Workload architecture costs engineering effort and some infrastructure duplication. Change management costs tooling and discipline. Failure management is the most expensive per unit of protection, because you are paying for capacity that sits idle until something goes wrong. A mature design invests in the cheap areas first and only buys failure-management capacity to cover the residual risk that the first three areas cannot eliminate. This is why the pillar's guidance reads as a sequence rather than a checklist.</p>
+        <p>There is also a design principle that cuts across all four areas and shows up constantly in exam distractors: stop guessing capacity. The pillar's position is that you should scale horizontally and automatically rather than provisioning for peak, because a workload sized for peak is over-provisioned for the 95% of the time it is not at peak, and a workload sized for average fails at peak. This is the principle behind Auto Scaling groups, DynamoDB on-demand capacity, and Aurora Serverless — and it is why "provision a larger instance type" is almost always a wrong answer on a reliability question.</p>
+      </section>
+
+      <section class="doc-section" id="decision-boundary">
+        <h2 class="section-heading">3. The Core Decision Boundary: Which Area Does This Scenario Belong To?</h2>
+        <p>Almost every reliability scenario on the exam can be routed to one of the four areas by asking a single question: is the failure being described something that happens before the workload runs, during normal operation, when you change the workload, or when something breaks despite your design? The answer determines which set of remediations is even relevant, and picking the wrong area is the most common way to arrive at a technically valid but wrong answer. A candidate who reads "the application went down during a deployment" and reaches for Multi-AZ has misrouted the scenario — Multi-AZ protects against infrastructure failure, not against a bad deployment, and the correct remediation is a canary release with automated rollback.</p>
+        <p>The routing question is worth internalizing because the exam frequently presents a scenario with a plausible-sounding symptom and a root cause in a different area. "The application is intermittently slow under load" could be a workload-architecture problem (no horizontal scaling, a single-threaded component) or a foundations problem (a service quota being hit, a NAT gateway bottleneck). The diagnostic move is to ask what changes when the failure occurs: if it correlates with traffic volume, it is a scaling or quota issue; if it correlates with a deployment, it is change management; if it correlates with an AZ or region event, it is workload architecture or failure management.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Scenario symptom</th><th>Area</th><th>First remediation to consider</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Throttling at a predictable scale point</td><td>Foundations</td><td>Raise the service quota; request increases ahead of launch</td></tr>
+              <tr><td>Single AZ outage takes the workload down</td><td>Workload architecture</td><td>Multi-AZ deployment behind a load balancer</td></tr>
+              <tr><td>Deployment caused an outage</td><td>Change management</td><td>Canary/blue-green release with automated rollback</td></tr>
+              <tr><td>Data loss after a corruption event</td><td>Failure management</td><td>Backup with point-in-time recovery, tested restore</td></tr>
+              <tr><td>Slow dependency cascades into full outage</td><td>Workload architecture</td><td>Timeouts, circuit breakers, graceful degradation</td></tr>
+              <tr><td>Region-wide event exceeds RTO</td><td>Failure management</td><td>DR strategy matched to the stated RTO/RPO</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The table is not a lookup you should memorize as a mapping; it is a demonstration that the four areas partition the failure space cleanly. Once you can name the area, the candidate answers narrow to two or three, and the remaining choice is usually about cost proportionality — which is exactly the judgment the exam is scoring.</p>
+      </section>
+
+      <section class="doc-section" id="config-tradeoffs">
+        <h2 class="section-heading">4. Design Tradeoffs Within Each Area</h2>
+        <p>Within foundations, the tradeoff is between pre-provisioning headroom and paying for capacity you do not use. Service quotas are the clearest example: they are per-account, per-region limits that are generous by default but not infinite, and a workload that scales to thousands of instances or millions of Lambda invocations will hit them. The pillar's guidance is to treat quotas as a design input — know which quotas your architecture will approach, and request increases before launch rather than during an incident. The cost of doing this is essentially zero; the cost of not doing it is an outage that looks like an AWS problem but is actually a planning failure.</p>
+        <p>Within workload architecture, the central tradeoff is between coupling and complexity. A tightly coupled monolith is simpler to operate but fails as a unit; a distributed system can isolate failures but introduces partial-failure modes that did not exist before. The pillar's answer is not "always distribute" but "distribute where the failure isolation is worth the operational cost, and make the boundaries explicit." This is why the pillar emphasizes loose coupling via queues and asynchronous messaging: a synchronous call chain of five services has five places to fail and no way to degrade, while an asynchronous handoff lets the caller continue working while the downstream recovers.</p>
+        <p>Within change management, the tradeoff is between deployment velocity and blast radius. Deploying everything at once is fast and simple; deploying in small increments with automated rollback is slower per change but bounds the damage of a bad change. The pillar's position is that small, reversible changes are safer in aggregate even though each one takes longer, because the failure mode of a bad small change is a partial degradation rather than a full outage. Within failure management, the tradeoff is the familiar RTO/RPO-versus-cost spectrum: backup and restore is cheapest and slowest, pilot light is a middle ground, warm standby is faster and more expensive, and multi-site active-active is fastest and most expensive. The exam almost always gives you the RTO and RPO in the question precisely so you can pick the cheapest point on that spectrum that satisfies them.</p>
+      </section>
+
+      <section class="doc-section" id="sizing-limits">
+        <h2 class="section-heading">5. Concrete Numbers: Quotas, Targets, and What They Imply</h2>
+        <p>Reliability discussions become actionable only when they are quantified, and the exam rewards candidates who can attach numbers to design choices. The most important numbers are the availability targets themselves, because they determine how much redundancy is required. A 99.9% availability target permits roughly 43 minutes of downtime per month; 99.99% permits about 4.4 minutes; 99.999% permits about 26 seconds. Those figures are the reason a single-AZ deployment cannot credibly claim 99.99% — an AZ failure alone would consume the entire monthly budget — and why multi-region designs are reserved for targets at or above 99.99%.</p>
+        <p>Service quotas are the second category of numbers worth knowing. AWS publishes per-service, per-region quotas in the Service Quotas console and in each service's documentation, and the pillar's guidance is to treat them as design constraints rather than as trivia. The pattern that matters for the exam is not memorizing specific values but knowing that quotas exist, that they are adjustable by request, and that they are per-account and per-region — which means a multi-region design has independent quota headroom in each region, and a multi-account design has independent headroom in each account.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Availability target</th><th>Allowed downtime per month</th><th>Typical design implication</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>99.9%</td><td>~43 minutes</td><td>Multi-AZ within a single region is sufficient</td></tr>
+              <tr><td>99.95%</td><td>~22 minutes</td><td>Multi-AZ plus automated recovery and health checks</td></tr>
+              <tr><td>99.99%</td><td>~4.4 minutes</td><td>Multi-AZ plus tested failover; multi-region for the data tier</td></tr>
+              <tr><td>99.999%</td><td>~26 seconds</td><td>Multi-region active-active with automated traffic steering</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The third category is RTO and RPO, which are business inputs rather than AWS limits, but which map onto concrete service capabilities. An RPO of zero requires synchronous replication, which is what Multi-AZ provides within a region. An RPO of seconds to minutes permits asynchronous replication, which is what cross-region read replicas and Aurora Global Database provide. An RPO of hours permits backup and restore. The exam will state one of these and expect you to select the replication mechanism that matches, so the mapping is worth having at hand.</p>
+      </section>
+
+      <section class="doc-section" id="failure-modes">
+        <h2 class="section-heading">6. Failure Modes and What They Look Like in Production</h2>
+        <p>The most instructive failure mode in reliability work is the one that is invisible until it matters: a design that has redundancy on paper but a single point of failure in practice. The classic example is a Multi-AZ Auto Scaling group whose instances all depend on a single NAT gateway in one AZ, or a multi-AZ database fronted by an application that caches a connection to a specific replica. The infrastructure is redundant; the dependency graph is not. These failures present as an outage that "should not have happened" given the architecture diagram, and the first diagnostic move is to trace the actual request path rather than to trust the diagram.</p>
+        <p>The second common failure mode is the cascading failure, where a slow dependency consumes resources until the caller fails too. A downstream service that responds in 30 seconds instead of 50 milliseconds will exhaust the connection pool or thread pool of every caller, and the failure propagates upstream until the whole system is down even though only one component is actually degraded. The symptoms are latency climbing before errors appear, and thread or connection pool saturation on the callers rather than on the failing service. The first diagnostic move is to look at the caller's resource utilization, not the failing service's error rate, because the caller is where the exhaustion is happening.</p>
+        <p>The third is the quota exhaustion failure, which is particularly nasty because it looks like a capacity problem and is actually a configuration problem. A workload that scales out during a traffic spike and hits an EC2 or Lambda concurrency quota will fail to scale, and the resulting errors look identical to an application bug. The first diagnostic move is to check the relevant service quota against current usage, and the preventive move is to alarm on quota utilization as a leading indicator rather than waiting for the failure. The fourth is the untested-recovery failure: a backup that has never been restored, a failover that has never been executed, a runbook that has never been followed. These are not failures of the design but of the verification, and they are the reason the pillar treats tested recovery as a first-class requirement rather than a nice-to-have.</p>
+      </section>
+
+      <section class="doc-section" id="sre-angle">
+        <h2 class="section-heading">7. The Operational Angle: Monitoring, Alarms, and Runbook Shape</h2>
+        <p>Reliability is not a property you design once and then possess; it is a property you observe continuously and defend operationally. The pillar's operational guidance is to instrument the workload against its stated objectives rather than against raw infrastructure metrics, because infrastructure metrics tell you that a server is healthy while the user experience is broken. The practical expression of this is to define service-level objectives for the user-facing behaviors that matter — request success rate, latency at the 99th percentile, end-to-end availability — and to alarm on the error budget those objectives imply rather than on CPU utilization.</p>
+        <p>The alarm design that follows from this is composite rather than single-metric. A latency alarm alone will page on transient spikes that self-resolve; a latency alarm combined with an error-rate alarm, using a composite alarm, pages only when both signals are present, which is a much better proxy for a real incident. The same logic applies to the choice of evaluation periods: a single 1-minute datapoint is noise, while a sustained breach over several periods is a signal. The pillar's framing is that alarms should be actionable — every page should correspond to a runbook entry, and every runbook entry should correspond to a page.</p>
+        <p>The runbook itself is the operational artifact the pillar cares most about, and its shape is diagnostic rather than prescriptive. A good runbook for a reliability incident starts with how to confirm the failure is real, then how to determine which area it belongs to, then the specific remediation for that area, and finally how to verify recovery. It should be executable by someone who did not build the system, which is the test that separates a real runbook from a note-to-self. The pillar's operational-excellence sibling makes the same point from the other direction: if a procedure is performed more than once, it should be automated, because manual procedures drift and drift is a reliability risk.</p>
+      </section>
+
+      <section class="doc-section" id="gotchas">
+        <h2 class="section-heading">8. Edge Cases and Exam Gotchas</h2>
+        <p>The most common gotcha is confusing high availability with disaster recovery. Multi-AZ is an HA pattern: it protects against the failure of a single Availability Zone within a region, and it does so with synchronous replication and automatic failover. It does nothing for a region-wide event, and it does not provide a separate copy of the data in a different geography. A question that mentions a regional outage, a geographic compliance requirement, or a data-residency constraint is a DR question, and the answer will involve cross-region replication or backup rather than Multi-AZ. Candidates lose points here constantly because Multi-AZ is the most familiar resilience pattern and therefore the most tempting.</p>
+        <p>The second gotcha is treating backup as a substitute for replication. Backup protects against data corruption and accidental deletion, and it has an RPO measured in hours because backups are periodic. Replication protects against infrastructure failure and has an RPO measured in seconds or zero. A scenario that specifies a five-minute RPO cannot be satisfied by backup alone, no matter how frequent the backup schedule, because the backup interval is the RPO. The exam will offer "increase backup frequency" as a distractor for exactly this reason.</p>
+        <p>The third gotcha is assuming that a managed service removes the need for reliability design. RDS Multi-AZ, Aurora, DynamoDB, and S3 all provide strong durability and availability guarantees, but they do not protect against a bad schema migration, a runaway query, an application bug that deletes data, or a misconfigured security group. The pillar's position is that managed services shift the reliability work rather than eliminating it, and the exam reflects this by presenting scenarios where the managed service is healthy and the customer's configuration is the failure. The fourth gotcha is the untested failover: a design that has never been exercised is an assumption, not a capability, and the pillar's answer to this is the Game Day, which is the subject of the next subsection's comparison.</p>
+      </section>
+
+      <section class="doc-section" id="vs-comparison">
+        <h2 class="section-heading">9. Reliability vs. the Other Pillars, and Where Each One Stops</h2>
+        <p>The Reliability pillar is frequently confused with the Operational Excellence pillar because both are concerned with how a workload behaves over time, and with the Cost Optimization pillar because resilience is expensive. The distinction is that Reliability asks whether the workload continues to work, Operational Excellence asks whether the team can operate and change it effectively, and Cost Optimization asks whether the resilience is proportionate to the requirement. A scenario about a deployment process that causes outages is an Operational Excellence scenario with reliability consequences; a scenario about over-provisioning for peak is a Cost Optimization scenario with reliability consequences. The exam expects you to name the primary pillar and then acknowledge the secondary one.</p>
+        <p>The practical rule for choosing between reliability patterns is to start from the stated RTO and RPO and work outward. If the requirement is hours, backup and restore is correct and anything more is waste. If it is tens of minutes, pilot light is the proportionate answer. If it is minutes, warm standby. If it is seconds or less, active-active. The exam will almost always give you the numbers, and the correct answer is the cheapest pattern that satisfies them — not the most resilient pattern available.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Pattern</th><th>Typical RTO</th><th>Typical RPO</th><th>Pick it when…</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Backup and restore</td><td>Hours to days</td><td>Hours</td><td>The business can tolerate a long outage and cost is the dominant constraint</td></tr>
+              <tr><td>Pilot light</td><td>Tens of minutes</td><td>Minutes</td><td>Core data must be current but standby infrastructure can be minimal</td></tr>
+              <tr><td>Warm standby</td><td>Minutes</td><td>Seconds to minutes</td><td>A scaled-down full replica can run continuously and be promoted quickly</td></tr>
+              <tr><td>Multi-site active-active</td><td>Seconds or less</td><td>Near zero</td><td>Near-zero RTO/RPO is required and budget is not the primary constraint</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The same proportionality logic applies within a single region. Multi-AZ is the right answer for a 99.9% target and the wrong answer for a 99.999% target, because no amount of intra-region redundancy can survive a regional event. The pillar's contribution to the exam is this habit of matching the design to the number, and it is the habit that separates a passing score from a marginal one.</p>
+      </section>
+
+      <section class="doc-section" id="lab">
+        <h2 class="section-heading">Hands-On Lab: Running a Reliability Pillar Review (45 min)</h2>
+        <div class="card card-green">
+          <p>This lab walks a sample three-tier web application through a structured Reliability pillar review. The goal is not to fix the architecture but to produce the artifact a real review produces: a list of findings, each tagged to one of the four areas, each with a stated remediation and a stated cost. Work through the steps in order and write down your findings as you go; the value is in the discipline of the review, not in the sample architecture.</p>
+          <ol>
+            <li><strong>Draw the actual request path.</strong> Start from the user's browser and trace every hop to the database and back, including DNS, the load balancer, the application tier, any cache, and the data tier. Do not use the architecture diagram — reconstruct the path from the configuration. The purpose of this step is to find dependencies that the diagram omits, such as a shared NAT gateway, a single bastion host, or a hard-coded endpoint.</li>
+            <li><strong>Mark every single point of failure.</strong> For each hop, ask what happens if that component fails entirely and what happens if it becomes slow. A component that is redundant but whose callers all depend on one instance of it is still a single point of failure. Record the failure mode, not just the component name.</li>
+            <li><strong>Tag each finding to one of the four areas.</strong> Foundations, workload architecture, change management, or failure management. If a finding seems to belong to two areas, split it into two findings; the remediation differs by area and conflating them produces vague recommendations.</li>
+            <li><strong>Check the quotas.</strong> For every service in the path, look up the relevant per-account, per-region quota and compare it to the workload's expected peak. Record any quota the workload will approach within a factor of two, and note whether an increase has been requested.</li>
+            <li><strong>Review the change process.</strong> Ask how a deployment reaches production, whether it can be rolled back automatically, and whether the rollback has been exercised. A deployment process with no automated rollback is a change-management finding regardless of how good the architecture is.</li>
+            <li><strong>Review the recovery process.</strong> Ask when the last restore from backup was actually performed, whether the failover has been executed, and whether the runbook has been followed by someone other than its author. Untested recovery is a finding even when the backup configuration is correct.</li>
+            <li><strong>Quantify the requirement.</strong> Write down the availability target, RTO, and RPO the business has actually stated. If they have not been stated, that is the first finding, because every other decision depends on them.</li>
+            <li><strong>Match the design to the requirement.</strong> For each finding, propose the cheapest remediation that satisfies the stated requirement, and estimate its cost. A finding whose remediation costs more than the requirement justifies should be recorded as accepted risk rather than as a defect.</li>
+            <li><strong>Produce the findings list.</strong> Order the findings by the ratio of risk reduced to cost incurred, and identify the three that should be fixed first. This ordering is the deliverable; a review that produces an unordered list of everything wrong is not actionable.</li>
+          </ol>
+          <p>When you have finished, compare your findings against the four-area structure. A review that produces only failure-management findings is usually a sign that the earlier areas were not examined closely enough, because foundations and workload-architecture problems are cheaper to fix and therefore should be found first.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="quiz">
         <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
-        
+
       <div class="scenario-card">
         <p class="scenario-question"><strong>Q1.</strong> Which best exemplifies the Reliability pillar's 'failure management' best practice?</p>
-        <div class="scenario-options" id="opts-d40q0">
+        <div class="scenario-options" id="opts-d40q1">
             <div class="scenario-option">A. Using the largest possible instance type</div>
             <div class="scenario-option">B. Automatically testing recovery procedures via Game Days and setting quantified RTO/RPO targets</div>
             <div class="scenario-option">C. Manually reviewing logs weekly</div>
             <div class="scenario-option">D. Avoiding all managed services</div>
         </div>
-        <button class="scenario-reveal-btn" onclick="revealAnswer('d40q0', 1)">Reveal Answer</button>
-        <div class="scenario-explanation" id="exp-d40q0"><strong>Correct answer: B.</strong> Failure management is about anticipating failure, testing recovery (Game Days), and having quantified, validated RTO/RPO — not just provisioning bigger resources.</div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d40q1', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d40q1"><strong>Correct answer: B.</strong> Failure management is about anticipating failure, testing recovery (Game Days), and having quantified, validated RTO/RPO — not just provisioning bigger resources.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q2.</strong> A workload runs in a single Availability Zone behind an Application Load Balancer and claims a 99.99% availability target. What is the primary reliability finding?</p>
+        <div class="scenario-options" id="opts-d40q2">
+            <div class="scenario-option">A. The load balancer is unnecessary for a single-AZ deployment</div>
+            <div class="scenario-option">B. A single-AZ deployment cannot meet 99.99% because one AZ failure would consume the entire monthly error budget</div>
+            <div class="scenario-option">C. The target is fine as long as the instance is large enough</div>
+            <div class="scenario-option">D. 99.99% requires multi-region active-active in all cases</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d40q2', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d40q2"><strong>Correct answer: B.</strong> 99.99% permits roughly 4.4 minutes of downtime per month, which a single AZ failure would exceed. Multi-AZ is the proportionate fix; multi-region is not required by the stated target.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q3.</strong> An application's Multi-AZ Auto Scaling group instances all route outbound traffic through a single NAT gateway in one AZ. An AZ failure takes the application down despite the Multi-AZ design. Which area does this finding belong to?</p>
+        <div class="scenario-options" id="opts-d40q3">
+            <div class="scenario-option">A. Foundations</div>
+            <div class="scenario-option">B. Workload architecture — the dependency graph is not redundant even though the compute tier is</div>
+            <div class="scenario-option">C. Change management</div>
+            <div class="scenario-option">D. Cost optimization</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d40q3', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d40q3"><strong>Correct answer: B.</strong> Redundancy on paper is not redundancy in practice. The NAT gateway is a single point of failure in the request path, which is a workload-architecture finding.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q4.</strong> A downstream service begins responding in 30 seconds instead of 50 milliseconds, and within minutes the entire system is returning errors even though only that one service is degraded. What is the most likely mechanism?</p>
+        <div class="scenario-options" id="opts-d40q4">
+            <div class="scenario-option">A. A regional AWS outage</div>
+            <div class="scenario-option">B. Cascading failure — callers exhaust their connection or thread pools waiting on the slow dependency</div>
+            <div class="scenario-option">C. A service quota being exceeded</div>
+            <div class="scenario-option">D. A bad deployment</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d40q4', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d40q4"><strong>Correct answer: B.</strong> Slow dependencies consume caller resources until the callers fail. The first diagnostic move is to inspect the callers' resource utilization, not the failing service's error rate.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q5.</strong> A workload scales out during a traffic spike and begins returning errors that look like application bugs. CloudWatch shows the application is healthy. What should you check first?</p>
+        <div class="scenario-options" id="opts-d40q5">
+            <div class="scenario-option">A. The application's source code</div>
+            <div class="scenario-option">B. The relevant service quota against current usage — quota exhaustion presents as a capacity failure</div>
+            <div class="scenario-option">C. The database's storage size</div>
+            <div class="scenario-option">D. The load balancer's SSL certificate</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d40q5', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d40q5"><strong>Correct answer: B.</strong> Quota exhaustion looks like a capacity problem and is actually a configuration problem. Alarm on quota utilization as a leading indicator rather than waiting for the failure.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q6.</strong> A business requires an RPO of five minutes. The current design takes a nightly backup to S3. What is the correct remediation?</p>
+        <div class="scenario-options" id="opts-d40q6">
+            <div class="scenario-option">A. Increase the backup frequency to hourly</div>
+            <div class="scenario-option">B. Add replication with an RPO measured in seconds or minutes — backup alone cannot satisfy a five-minute RPO because the backup interval is the RPO</div>
+            <div class="scenario-option">C. Enable S3 versioning</div>
+            <div class="scenario-option">D. Move the backup to Glacier</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d40q6', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d40q6"><strong>Correct answer: B.</strong> Backup protects against corruption and deletion with an RPO equal to the backup interval. A five-minute RPO requires replication, not more frequent backups.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q7.</strong> A team has documented DR runbooks and configured cross-region replication, but has never executed a failover. Which Reliability pillar area is the gap?</p>
+        <div class="scenario-options" id="opts-d40q7">
+            <div class="scenario-option">A. Foundations</div>
+            <div class="scenario-option">B. Failure management — tested recovery procedures are a first-class requirement, not a nice-to-have</div>
+            <div class="scenario-option">C. Cost optimization</div>
+            <div class="scenario-option">D. There is no gap; the configuration is complete</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d40q7', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d40q7"><strong>Correct answer: B.</strong> An untested failover is an assumption, not a capability. The pillar treats tested recovery as a requirement, which is why Game Days exist.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q8.</strong> A workload must survive the loss of an entire AWS region with an RTO of 15 minutes and an RPO of 5 minutes, and the business wants to minimize standing infrastructure cost. Which DR pattern fits?</p>
+        <div class="scenario-options" id="opts-d40q8">
+            <div class="scenario-option">A. Backup and restore</div>
+            <div class="scenario-option">B. Pilot light — core data continuously replicated with minimal standby infrastructure</div>
+            <div class="scenario-option">C. Multi-site active-active</div>
+            <div class="scenario-option">D. Multi-AZ within the primary region</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d40q8', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d40q8"><strong>Correct answer: B.</strong> Pilot light matches a ~15-minute RTO at much lower cost than warm standby or active-active, and Multi-AZ does not address a regional event at all.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q9.</strong> On-call engineers are paged repeatedly by isolated latency spikes that self-resolve within a minute. What alarm design reduces the noise while preserving sensitivity to real incidents?</p>
+        <div class="scenario-options" id="opts-d40q9">
+            <div class="scenario-option">A. Delete the latency alarm</div>
+            <div class="scenario-option">B. A composite alarm requiring both the latency alarm and the error-rate alarm to be in ALARM state</div>
+            <div class="scenario-option">C. Raise the latency threshold until the pages stop</div>
+            <div class="scenario-option">D. Set the evaluation period to 24 hours</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d40q9', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d40q9"><strong>Correct answer: B.</strong> Composite alarms require correlated signals before paging, which cuts single-metric false positives while preserving sensitivity to genuine multi-symptom incidents.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q10.</strong> A deployment process occasionally takes production down, and the team's response is to add more Multi-AZ redundancy. Which area does the actual problem belong to?</p>
+        <div class="scenario-options" id="opts-d40q10">
+            <div class="scenario-option">A. Workload architecture — more AZs will fix it</div>
+            <div class="scenario-option">B. Change management — the fix is a canary or blue-green release with automated rollback, not more redundancy</div>
+            <div class="scenario-option">C. Foundations — a service quota is being hit</div>
+            <div class="scenario-option">D. Failure management — the backups are insufficient</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d40q10', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d40q10"><strong>Correct answer: B.</strong> Multi-AZ protects against infrastructure failure, not against a bad deployment. The remediation is a safer change process with automated rollback.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q11.</strong> A team wants to verify that its automated recovery actually works before relying on it in an incident. Which Reliability pillar practice addresses this directly?</p>
+        <div class="scenario-options" id="opts-d40q11">
+            <div class="scenario-option">A. Increasing the instance size</div>
+            <div class="scenario-option">B. Running a Game Day that simulates the failure and validates the runbook and automated recovery</div>
+            <div class="scenario-option">C. Adding a second load balancer</div>
+            <div class="scenario-option">D. Enabling more detailed CloudWatch metrics</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d40q11', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d40q11"><strong>Correct answer: B.</strong> A Game Day exercises the real failure mode against real infrastructure to confirm the stated RTO/RPO targets are actually achievable.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q12.</strong> A workload uses RDS Multi-AZ and the team argues this satisfies the business's requirement to survive a regional outage. What is wrong with this reasoning?</p>
+        <div class="scenario-options" id="opts-d40q12">
+            <div class="scenario-option">A. Nothing — Multi-AZ replicates across regions</div>
+            <div class="scenario-option">B. Multi-AZ is an HA pattern within a single region; it provides no protection against a region-wide event</div>
+            <div class="scenario-option">C. Multi-AZ is only available for Aurora</div>
+            <div class="scenario-option">D. Multi-AZ requires a read replica to function</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d40q12', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d40q12"><strong>Correct answer: B.</strong> Multi-AZ protects against an AZ failure with synchronous replication and automatic failover. A regional outage requires cross-region replication or backup.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q13.</strong> A workload's architecture diagram shows redundancy at every tier, but an incident review finds that all application instances resolve a critical dependency through a hard-coded endpoint pointing at one instance. What is the first diagnostic move in a future incident?</p>
+        <div class="scenario-options" id="opts-d40q13">
+            <div class="scenario-option">A. Trust the architecture diagram</div>
+            <div class="scenario-option">B. Trace the actual request path from configuration rather than from the diagram, to find dependencies the diagram omits</div>
+            <div class="scenario-option">C. Increase the instance count</div>
+            <div class="scenario-option">D. Enable Multi-AZ on the database</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d40q13', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d40q13"><strong>Correct answer: B.</strong> Redundancy on paper is not redundancy in practice. Reconstructing the request path from configuration surfaces the dependencies the diagram omits.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q14.</strong> A team is deciding whether to invest next in automated deployment rollback or in a warm standby region. The workload currently has no automated rollback and a stated RTO of four hours. Which investment is proportionate?</p>
+        <div class="scenario-options" id="opts-d40q14">
+            <div class="scenario-option">A. The warm standby region, because resilience always comes first</div>
+            <div class="scenario-option">B. Automated rollback, because the stated RTO of four hours is satisfied by backup and restore, and the change-management gap is the larger unaddressed risk</div>
+            <div class="scenario-option">C. Neither; the workload is already reliable</div>
+            <div class="scenario-option">D. Both, in parallel, regardless of cost</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d40q14', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d40q14"><strong>Correct answer: B.</strong> Match the design to the requirement. A four-hour RTO does not justify a warm standby region, and the change-management gap is the larger risk.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q15.</strong> A reliability review produces a long list of findings, all tagged to failure management. What does this most likely indicate about the review?</p>
+        <div class="scenario-options" id="opts-d40q15">
+            <div class="scenario-option">A. The workload is unusually fragile</div>
+            <div class="scenario-option">B. The earlier areas — foundations and workload architecture — were probably not examined closely enough, since their problems are cheaper to fix and should be found first</div>
+            <div class="scenario-option">C. Failure management is the only area that matters</div>
+            <div class="scenario-option">D. The review is complete and the findings should be actioned as-is</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d40q15', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d40q15"><strong>Correct answer: B.</strong> A review that produces only failure-management findings usually means the cheaper areas were skipped. Foundations and workload-architecture problems should be found first.</div>
       </div>
       </section>
+
+      <section class="doc-section" id="preview">
+        <h2 class="section-heading">Peek into Tomorrow</h2>
+        <div class="card card-purple">
+          <p>Everything in today's review assumed that the workload's design is the thing that fails. But the incident that started the review — the deployment that took production down — was not a design failure at all. It was a process failure, and no amount of Multi-AZ redundancy would have prevented it. That raises the question the Reliability pillar deliberately leaves open: if the workload is well designed and still goes down because of how the team changes it, what does the discipline of operating it actually look like?</p>
+          <p>The answer is not more architecture. It is operations as code — codifying the procedures that today live in runbooks and tribal knowledge, so that a change is a reviewed, reversible artifact rather than a sequence of manual steps. It is the practice of making small reversible changes rather than large risky ones, and of treating a blameless post-incident review as the mechanism that turns an outage into a permanent improvement. Tomorrow's material takes the runbook shape we sketched here and asks what happens when you automate it, and what a team's operating model looks like when the procedures themselves are version-controlled.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="sources">
+        <h2 class="section-heading">Sources</h2>
+        <div class="card">
+          <ul class="source-list">
+            <li><a href="https://docs.aws.amazon.com/wellarchitected/latest/reliability-pillar/welcome.html" target="_blank">AWS Well-Architected Framework — Reliability Pillar</a></li>
+            <li><a href="https://docs.aws.amazon.com/wellarchitected/latest/framework/welcome.html" target="_blank">AWS Well-Architected Framework — General Design Principles</a></li>
+            <li><a href="https://docs.aws.amazon.com/wellarchitected/latest/reliability-pillar/design-principles.html" target="_blank">Reliability Pillar — Design Principles</a></li>
+            <li><a href="https://docs.aws.amazon.com/wellarchitected/latest/reliability-pillar/rel.html" target="_blank">Reliability Pillar — Best Practices (Foundations, Workload Architecture, Change Management, Failure Management)</a></li>
+            <li><a href="https://docs.aws.amazon.com/general/latest/gr/aws_service_limits.html" target="_blank">AWS Service Quotas Reference</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/AlarmThatSendsEmail.html" target="_blank">Amazon CloudWatch — Using Alarms</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CompositeAlarms.html" target="_blank">Amazon CloudWatch — Composite Alarms</a></li>
+            <li><a href="https://docs.aws.amazon.com/whitepapers/latest/aws-fault-isolation-boundaries/abstract-and-introduction.html" target="_blank">AWS Whitepaper — Fault Isolation Boundaries</a></li>
+          </ul>
+        </div>
+      </section>
+
       <div class="day-nav">
         <a href="day-039.html">&larr; Day 39: RTO/RPO Design Patterns &amp; Backup Strategies (AWS Backup)</a>
         <button class="btn btn-green" onclick="markComplete(40, 'day-041.html')">Mark Day 40 Complete &rarr;</button>

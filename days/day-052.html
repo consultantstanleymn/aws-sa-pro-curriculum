@@ -104,37 +104,347 @@
         <span class="pill pill-green">Phase 4: Migration, Hybrid &amp; Cost Optimization</span>
       </div>
       <h1 class="hero-title">Direct Connect Capacity Planning for Large-Scale Migration</h1>
-      <div class="reading-meta">&#128337; ~3 min read &middot; 2 services covered</div>
+      <div class="reading-meta">&#128337; ~58 min read &middot; 2 services covered</div>
       <div class="services-grid">
         <span class="service-tag">Direct Connect</span>
         <span class="service-tag">Link Aggregation Groups (LAG)</span>
       </div>
       <div id="tracker"></div>
-      <section class="doc-section">
-        <h2 class="section-heading">Today's Concept</h2>
+
+      <section class="doc-section" id="recap">
+        <h2 class="section-heading">Recap: Where We Left Off</h2>
         <div class="card card-accent">
-          <p>For sustained large-scale migration traffic, provision Direct Connect capacity (or LAG-bundled connections for higher aggregate throughput) ahead of the migration window, and consider temporarily using Snowball for the bulk historical dataset while DX/DMS CDC handles the ongoing delta — hybrid transfer strategies are common on the exam.</p>
-        </div>
-        <h3 class="sub-heading">Hands-on Lab / Practical Action (45 min)</h3>
-        <div class="card">
-          <p>Calculate whether a planned migration's data volume and timeline justify provisioning additional Direct Connect capacity versus a one-time Snowball bulk transfer plus CDC delta sync.</p>
+          <p>Day 51 covered the Relocate strategy — moving VMware workloads to VMware Cloud on AWS without converting them to native EC2/AMI, preserving the hypervisor layer and the existing VMware tooling, with HCX handling the migration itself. That strategy is attractive precisely because it defers the hard work: the application keeps running on the same hypervisor, the same management plane, and the same operational assumptions it had on-premises. What it does not defer is the data movement. Every one of those VMs, and every database behind them, still has to cross the wire between the source data center and AWS, and the Relocate strategy says nothing about how that wire is sized or how long the crossing takes.</p>
+          <p>That is the gap this day fills, and it is why capacity planning was a prerequisite for the Relocate decision rather than a follow-on to it. Choosing VMware Cloud on AWS commits you to a migration window, and the migration window is a function of available bandwidth, not of hypervisor compatibility. Teams that pick the strategy first and size the link second routinely discover that their cutover date is physically impossible. The exam tests the same ordering: the scenario gives you a data volume and a timeline, and the correct answer is the transfer mechanism that actually fits inside the window.</p>
         </div>
       </section>
-      <section class="doc-section">
+
+      <section class="doc-section" id="why-on-exam">
+        <h2 class="section-heading">1. Why This Is on the Exam</h2>
+        <p>Migration bandwidth planning sits at the intersection of two SAP-C02 domains that are usually tested separately: Domain 3 (Migration and Modernization) and Domain 1 (Design Solutions for Organizational Complexity, specifically hybrid connectivity). The exam writers like this intersection because it forces a candidate to reason about a physical constraint — how many bits per second a link can carry — rather than about a service feature. You cannot answer these questions by pattern-matching a service name to a keyword. You have to do arithmetic, and then choose the transfer mechanism whose arithmetic works.</p>
+        <p>The architectural problem is straightforward to state and surprisingly easy to get wrong. A migration has a total data volume, a deadline, and a set of ongoing changes that continue to accumulate while the migration is in flight. The network path between source and target has a finite capacity, and that capacity is shared with production traffic that cannot simply be starved. If the bulk volume divided by the available bandwidth exceeds the deadline, no amount of clever tooling fixes it — the transfer has to be split across a faster path, a physical shipment, or both. The exam presents this as a scenario with numbers and expects you to recognize which of those three levers the scenario is asking you to pull.</p>
+        <p>There is a second reason this topic recurs. Direct Connect is the only AWS connectivity service where the customer is responsible for provisioning physical capacity ahead of time, and where that provisioning has a lead time measured in weeks. Most AWS services scale elastically and instantly; a hosted connection or a dedicated port does not. That asymmetry — elastic compute, inelastic network — is a recurring theme in well-architected reviews and a favorite source of exam distractors. An answer that says "increase the Direct Connect bandwidth during the migration" is wrong not because the bandwidth is unavailable but because the lead time makes it unavailable <em>in time</em>.</p>
+        <p>Finally, the hybrid pattern itself is exam-tested as a pattern, not as a service. The combination of offline bulk transfer for the historical dataset plus network-based change replication for the ongoing delta appears in multiple scenario shapes: database migrations, file share migrations, and full data center exits. Recognizing the shape — large static volume, small continuous delta, constrained link — is worth more than memorizing any individual service's limits.</p>
+      </section>
+
+      <section class="doc-section" id="mechanism">
+        <h2 class="section-heading">2. How Direct Connect Capacity Actually Works</h2>
+        <p>A Direct Connect connection is a physical or hosted circuit between a customer device in a colocation facility and an AWS Direct Connect endpoint. The capacity of that circuit is fixed at provisioning time: dedicated connections are ordered at 1 Gbps, 10 Gbps, or 100 Gbps, and hosted connections are ordered at a fraction of a partner's port, commonly 50 Mbps up to 10 Gbps depending on the partner. There is no burst, no elastic ceiling, and no way to temporarily exceed the ordered rate. Whatever you ordered is what you get, continuously, in both directions.</p>
+        <p>On top of the physical circuit, Direct Connect supports virtual interfaces — VLANs that carry traffic to different AWS destinations. A private VIF reaches a single VPC through a virtual private gateway, a transit VIF reaches a Direct Connect gateway and from there a Transit Gateway (and therefore many VPCs), and a public VIF reaches AWS public service endpoints. All of these virtual interfaces share the bandwidth of the underlying connection. This is the detail that trips people up in migration planning: adding a transit VIF does not add capacity, it just gives the existing capacity a new destination. If your migration traffic and your steady-state hybrid traffic both ride the same 10 Gbps connection, they compete for the same 10 Gbps.</p>
+        <p>When a single connection is not enough, Link Aggregation Groups bundle multiple connections between the same pair of endpoints into one logical connection. A LAG presents a single interface to the routing layer while aggregating the member connections' bandwidth, and it also provides resilience: if one member fails, the LAG continues on the remaining members. The constraints matter for planning. All connections in a LAG must be the same speed, must terminate at the same Direct Connect location, and must be dedicated connections — hosted connections cannot be bundled. A LAG also does not multiply the per-flow throughput of any single TCP flow, because ECMP hashing distributes flows across members rather than splitting one flow across them. A single-threaded rsync or a single DMS task will still be limited by one member's capacity.</p>
+        <p>That last point is the mechanism that most migration plans get wrong. Aggregate bandwidth and per-flow bandwidth are different numbers, and migration tooling is often single-flow or few-flow by default. DMS runs a configurable number of parallel load threads per table; DataSync runs a configurable number of concurrent tasks; rsync over SSH is single-flow unless you deliberately shard it. If your plan assumes 20 Gbps of LAG capacity but your tooling opens four flows, you will measure something much closer to 4 Gbps and conclude the link is underperforming when in fact the tooling is the bottleneck. Sizing the link and sizing the parallelism are two halves of the same calculation.</p>
+      </section>
+
+      <section class="doc-section" id="decision-boundary">
+        <h2 class="section-heading">3. The Core Decision Boundary: Wire, Ship, or Both</h2>
+        <p>Every migration capacity question reduces to one fork. Given a bulk volume, a delta rate, and a deadline, do you move the bulk over the network, ship it physically, or split the two — ship the historical bulk and replicate the delta over the network? The fork is decided by a single comparison: the time the bulk transfer takes over the available network path, measured against the time you actually have. If the network transfer fits comfortably inside the window with headroom for production traffic, use the network. If it does not, the bulk has to move physically, because no amount of tooling tuning changes the arithmetic.</p>
+        <p>The reason the split pattern dominates exam answers is that it resolves a tension the pure options cannot. A pure network transfer is operationally simple and keeps the data continuously current, but it is bounded by bandwidth. A pure physical shipment moves the bulk quickly regardless of bandwidth, but the data is stale the moment the device leaves the building, and the delta that accumulates during shipping has to be reconciled somehow. Splitting the problem — physical for the historical bulk, network for the delta — uses each mechanism where it is strong. The physical shipment handles the volume that the wire cannot, and the network handles the small continuous change stream that the shipment cannot.</p>
+        <p>The decision also has a timing dimension that the exam tests. Direct Connect capacity has a provisioning lead time, so the question is not only "is the link big enough" but "will the link be big enough by the time the window opens." A migration planned for six weeks out cannot rely on a new dedicated connection that takes longer than six weeks to provision. This is where the split pattern earns its keep again: a Snowball device can be ordered and shipped on a much shorter cycle than a new Direct Connect circuit, so it can absorb the bulk while an existing or newly ordered link handles the delta.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Condition</th><th>Bulk transfer mechanism</th><th>Delta mechanism</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Bulk fits in window over existing link with headroom</td><td>Network (DataSync, DMS full load, rsync)</td><td>Network (DMS CDC, DataSync incremental)</td></tr>
+              <tr><td>Bulk does not fit, deadline is fixed</td><td>Physical (Snowball Edge, Snowmobile)</td><td>Network (DMS CDC, DataSync incremental)</td></tr>
+              <tr><td>Bulk does not fit, deadline is flexible</td><td>Network, with a longer window</td><td>Network</td></tr>
+              <tr><td>Bulk does not fit, no viable network path at all</td><td>Physical only</td><td>Physical re-ship or offline reconciliation</td></tr>
+              <tr><td>Bulk fits, but production traffic cannot be starved</td><td>Network with bandwidth throttling, or physical to preserve production</td><td>Network</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>Read the table as a decision procedure rather than a lookup. The first question is always whether the arithmetic works; the second is whether the arithmetic works without harming production; the third is whether the provisioning timeline allows the link you need. Only when all three pass does a pure network transfer become the answer.</p>
+      </section>
+
+      <section class="doc-section" id="config-tradeoffs">
+        <h2 class="section-heading">4. Configuration Modes and Their Tradeoffs</h2>
+        <p>Once the fork is decided, the remaining choices are about how the transfer is configured. On the network side, the two knobs that matter are how much of the link the migration is allowed to consume and how many parallel streams the tooling opens. Bandwidth throttling exists in DataSync as a per-task setting and in DMS as a replication instance sizing and task-count decision; both let you cap migration traffic so production hybrid traffic keeps its share of the link. The tradeoff is direct: throttle harder and the migration takes longer, throttle less and you risk degrading the production workloads that share the circuit. There is no free lunch here, only an explicit allocation decision that should be made with the application owners rather than by the migration team alone.</p>
+        <p>Parallelism is the second knob and it is the one that determines whether you actually achieve the link's capacity. A single TCP flow over a high-latency path is limited by the bandwidth-delay product, not by the link rate — a 10 Gbps connection with 100 ms of round-trip latency cannot be filled by one flow no matter how fast the endpoints are. Migration tools that support parallel streams (DataSync tasks, DMS parallel load threads, sharded rsync) are how you fill the pipe. The tradeoff is operational complexity and, for databases, source-side load: more parallel readers mean more concurrent queries against the source system, which may itself be the constraint.</p>
+        <p>On the physical side, the configuration choice is device class and count. Snowball Edge Storage Optimized devices carry a usable capacity in the tens of terabytes each, so a petabyte-scale bulk transfer is a multi-device engagement with a logistics plan attached. Snowmobile is the single-engagement option at exabyte scale. The tradeoff is granularity versus overhead: many small devices give you incremental progress and let you start shipping sooner, while one large engagement reduces handling overhead but commits you to a single large shipment whose arrival date is a single point of failure in the plan.</p>
+        <p>For the delta side, the configuration choice is between change data capture and file-level incremental sync. DMS CDC reads the database's change stream and applies row-level changes to the target, which is the right tool when the source is a database and the target must stay transactionally consistent. DataSync incremental transfer compares source and destination and moves only what changed, which is the right tool for file shares and object stores. Choosing the wrong one — running DataSync against a live database's data files, for example — produces a target that is not transactionally consistent and a cutover that requires a full outage to reconcile.</p>
+      </section>
+
+      <section class="doc-section" id="sizing-limits">
+        <h2 class="section-heading">5. Sizing, Limits, and the Arithmetic</h2>
+        <p>The arithmetic that drives every one of these decisions is the same: total bytes divided by effective throughput gives transfer time, and effective throughput is never the link's nominal rate. Protocol overhead, TCP window behavior, encryption, and the source and destination storage systems' own read and write rates all reduce the achievable number. A useful planning habit is to assume you will achieve roughly half of the nominal link rate for a well-tuned parallel transfer, and to treat anything above that as a bonus rather than a plan. The exam does not require you to model TCP, but it does expect you to recognize that a 500 Mbps link does not move 500 megabits of payload per second.</p>
+        <p>The concrete numbers worth carrying into the exam are the connection rates and the device capacities. Dedicated Direct Connect connections are ordered at 1 Gbps, 10 Gbps, or 100 Gbps. Hosted connections are ordered at a fraction of a partner port, commonly from 50 Mbps up to 10 Gbps. LAG members must all be the same speed and must all be dedicated connections at the same Direct Connect location. Snowball Edge Storage Optimized devices provide usable capacity in the tens of terabytes each, and Snowmobile is the exabyte-scale single-engagement option. These are the figures that let you sanity-check a scenario's arithmetic in your head.</p>
+        <p>Worked example, because this is the shape the exam uses. Suppose the bulk dataset is 300 TB and the available link is 500 Mbps. At a nominal 500 Mbps, 300 TB is roughly 2.4 petabits, which is about 4,800 seconds of transfer at full rate — but at a realistic 50 percent efficiency that becomes roughly 9,600 seconds, or about 2.7 hours. That sounds fine until you notice the link is shared with production and the migration is only allowed a fraction of it. If the migration gets 20 percent of the link, the transfer stretches to roughly 13 hours, and if the dataset is 3 PB instead of 300 TB, it stretches to roughly five and a half days of continuous transfer with no margin for retries. That is the point at which the scenario is telling you to ship the bulk physically.</p>
+        <p>The delta side has its own sizing question, and it is usually the easier one. A daily delta of tens of gigabytes over a link that is otherwise idle is trivial; the same delta over a link that is already saturated by the bulk transfer is not. This is why the split pattern is so often correct: it removes the bulk from the link entirely, leaving the link free to carry the delta with plenty of headroom. The delta rate also determines how long the cutover window can be, because the longer the final sync takes, the more new changes accumulate while it runs.</p>
+      </section>
+
+      <section class="doc-section" id="failure-modes">
+        <h2 class="section-heading">6. Failure Modes and What They Look Like in Production</h2>
+        <p>The most common failure in a large migration is not a hard failure at all — it is a transfer that runs slower than planned and quietly misses the window. The symptom is a migration job whose completion estimate keeps sliding, and the first diagnostic move is to measure actual throughput at the link rather than trusting the tool's reported progress. If the link is saturated but the tool reports low throughput, the bottleneck is the tool's parallelism or the source's read rate. If the link is not saturated, the bottleneck is upstream of the network and the network is not the problem to solve.</p>
+        <p>The second failure mode is production degradation caused by the migration itself. A migration that consumes the whole Direct Connect circuit will starve the hybrid workloads that share it, and the symptom appears as latency and packet loss in unrelated applications rather than as a migration error. The first diagnostic move is to check whether the migration was throttled at all; if it was not, the fix is a bandwidth cap, not a bigger link. This failure mode is insidious because the migration team sees success and the application teams see an incident, and the two reports do not obviously connect.</p>
+        <p>The third failure mode is a delta that outruns the cutover. If the change rate on the source is high enough that the final synchronization never converges — the target is always behind by more than the sync can close — the cutover will never complete cleanly. The symptom is a replication lag metric that plateaus rather than trending to zero. The first diagnostic move is to compare the delta rate against the replication throughput; if the delta rate exceeds it, the only fixes are to increase replication throughput, reduce the change rate by pausing non-essential writers, or accept a longer outage for a final bulk reconciliation.</p>
+        <p>The fourth failure mode is physical shipment damage or loss, which is rare but has a specific mitigation: encrypt the data on the device before shipping and keep the keys in AWS, so a lost device is a logistics problem rather than a data breach. The fifth is a provisioning timeline miss — the new Direct Connect circuit is not ready when the window opens — which is mitigated by ordering capacity early and by having the physical-shipment fallback already planned rather than improvised.</p>
+      </section>
+
+      <section class="doc-section" id="sre-angle">
+        <h2 class="section-heading">7. The Operational and SRE Angle</h2>
+        <p>From an operations perspective, a migration is a temporary workload with a hard deadline, and it should be monitored like one. The metrics that matter are the ones that tell you whether the plan is still viable: bytes transferred versus bytes remaining, current throughput versus planned throughput, replication lag on the delta stream, and the link's utilization relative to its capacity. The first three tell you whether you will finish on time; the fourth tells you whether you are harming production while you try. An alarm on link utilization above a threshold you agreed with the application owners is the single most valuable control in the whole migration.</p>
+        <p>The SLO implication is that the migration has its own availability target, and it is usually stricter than the steady-state target because the window is fixed. A migration that is 95 percent complete when the window closes has failed, not partially succeeded. This argues for treating the migration as a project with explicit checkpoints — bulk transfer complete, delta replication caught up, cutover rehearsal passed — rather than as a background job that either finishes or does not. Each checkpoint is a go/no-go decision, and the value of the checkpoints is that they surface a slipping schedule while there is still time to change the plan.</p>
+        <p>The runbook shape follows from the failure modes. It should open with a throughput check that distinguishes a link bottleneck from a tooling bottleneck, because that single distinction determines which of two very different remediation paths you take. It should then branch into the production-impact check, the delta-convergence check, and the provisioning-timeline check. Each branch has a small number of concrete actions: raise parallelism, apply a bandwidth cap, pause non-essential writers, or escalate to the physical-shipment fallback. A runbook that says "investigate slow migration" is useless; one that says "if link utilization is above 80 percent and production latency is elevated, apply the throttle profile" is actionable at three in the morning.</p>
+        <p>Finally, the cutover itself deserves a rehearsal. A dry run of the final synchronization against a non-production target validates the tooling configuration, the parallelism settings, and the actual achievable throughput before the real window opens. The rehearsal is cheap and it converts the plan's assumptions into measured facts, which is exactly the property that makes the difference between a migration that completes on schedule and one that discovers its own infeasibility on the night of the cutover.</p>
+      </section>
+
+      <section class="doc-section" id="gotchas">
+        <h2 class="section-heading">8. Edge Cases and Exam Gotchas</h2>
+        <p>The first gotcha is that aggregate bandwidth is not per-flow bandwidth. A LAG with four 10 Gbps members does not give a single TCP flow 40 Gbps; it gives the aggregate 40 Gbps across many flows. Any scenario that describes a single-threaded transfer and a LAG is testing whether you know this. The second is that hosted connections cannot be members of a LAG, so a scenario that proposes bundling hosted connections is proposing something the service does not support.</p>
+        <p>The third gotcha is the provisioning lead time. Direct Connect capacity is not elastic, and a scenario that requires more bandwidth next week is not solved by ordering a bigger circuit next week. The correct answer in that shape is almost always the physical-shipment fallback for the bulk, with the existing link carrying the delta. The fourth is that virtual interfaces share the underlying connection's bandwidth, so adding a transit VIF to reach more VPCs does not add capacity — a scenario that treats VIFs as bandwidth is testing this distinction.</p>
+        <p>The fifth gotcha is the difference between a full load and a full load plus CDC. A scenario that says the source cannot be taken offline is describing CDC, and a scenario that says the source can be frozen for the duration is describing a full load. The sixth is that the delta stream must be sized against the change rate, not against the bulk volume; a small dataset with a very high change rate can be harder to migrate than a large dataset with a low one.</p>
+        <p>The seventh gotcha is encryption of shipped devices. A scenario that asks about the security of a Snowball shipment is asking whether the data is encrypted at rest on the device with keys held in AWS, not whether the shipment is insured. The eighth is that the migration's bandwidth consumption is a production concern, so a scenario that mentions latency-sensitive hybrid workloads sharing the link is asking you to throttle, not to provision more capacity. The ninth, and the one that catches the most candidates, is that the split pattern is usually the answer when the scenario contains both a large static volume and a small continuous delta — the exam is testing whether you recognize the shape rather than whether you can name a service.</p>
+      </section>
+
+      <section class="doc-section" id="vs-comparison">
+        <h2 class="section-heading">9. This vs. the Services It Gets Confused With</h2>
+        <p>The services that appear alongside migration capacity planning in scenarios are DataSync, DMS, the Snow Family, Storage Gateway, and Direct Connect itself, and the confusion is usually about which layer each one operates at. Direct Connect is the transport — it moves bits and knows nothing about what they contain. DataSync and DMS are the movers — they understand files and databases respectively and run on top of whatever transport exists. The Snow Family is the offline transport — it replaces the wire entirely for the bulk. Storage Gateway is the steady-state hybrid bridge — it presents on-premises storage as AWS storage continuously, which is a different problem from moving a dataset once.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Service</th><th>Layer</th><th>Pick it when…</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Direct Connect</td><td>Transport</td><td>You need a dedicated, consistent private path and can wait for provisioning</td></tr>
+              <tr><td>DataSync</td><td>File/object mover</td><td>You are moving file shares or object stores, scheduled and validated</td></tr>
+              <tr><td>DMS</td><td>Database mover</td><td>You are moving a database and need transactional consistency plus CDC</td></tr>
+              <tr><td>Snowball Edge</td><td>Offline transport</td><td>The bulk does not fit in the window over the available link</td></tr>
+              <tr><td>Snowmobile</td><td>Offline transport</td><td>The bulk is at exabyte scale and a single engagement is warranted</td></tr>
+              <tr><td>Storage Gateway</td><td>Steady-state hybrid</td><td>You need ongoing on-premises access to AWS storage, not a one-time move</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The rule that resolves most scenarios: if the question is about how fast data can move, the answer is about transport capacity and the split pattern. If the question is about what moves the data, the answer is DataSync or DMS depending on whether the source is files or a database. If the question is about whether the data can move at all over the wire, the answer is the Snow Family. And if the question is about ongoing hybrid access rather than a migration, the answer is Storage Gateway and the migration framing is a distractor.</p>
+      </section>
+
+      <section class="doc-section" id="lab">
+        <h2 class="section-heading">Hands-On Lab: Sizing a Migration Window (45 min)</h2>
+        <div class="card card-green">
+          <p>This lab walks through the arithmetic and the decision procedure for a realistic migration, using only a calculator and the AWS documentation. The goal is to produce a defensible transfer plan with a stated window, a stated throttle, and a stated fallback.</p>
+          <ol>
+            <li><strong>State the inputs.</strong> Write down the bulk volume (start with 300 TB), the daily delta (start with 50 GB), the available link (start with 500 Mbps), the fraction of the link the migration may use (start with 20 percent), and the deadline (start with 14 days). Every subsequent step is a function of these five numbers, so changing one should visibly change the plan.</li>
+            <li><strong>Compute the bulk transfer time.</strong> Convert the bulk volume to bits, divide by the effective throughput (link rate times the allowed fraction times a 50 percent efficiency assumption), and express the result in hours. For the starting numbers this lands in the low tens of hours, which fits the deadline — so the first pass says the network is viable.</li>
+            <li><strong>Stress the assumption.</strong> Re-run the calculation with the bulk at 3 PB instead of 300 TB. The transfer time grows by an order of magnitude and now exceeds the deadline. This is the step that teaches the shape: the decision flips on volume, not on tooling.</li>
+            <li><strong>Size the delta.</strong> Compute how long the daily delta takes to replicate at the same effective throughput. Confirm that it is a small fraction of the day, and note the headroom that remains on the link once the bulk is removed from it.</li>
+            <li><strong>Choose the split point.</strong> For the 3 PB case, decide how many Snowball Edge Storage Optimized devices are needed to carry the bulk, and write down the shipping and handling time you are assuming. Then confirm that the delta replication over the link can keep up during the shipping window.</li>
+            <li><strong>Define the throttle profile.</strong> Pick a bandwidth cap for the migration that leaves production hybrid traffic with a stated minimum share of the link. Write the cap down as a number, not as a policy statement.</li>
+            <li><strong>Write the checkpoints.</strong> Define three go/no-go checkpoints — bulk transfer complete, delta replication caught up, cutover rehearsal passed — each with a date and a measurable criterion.</li>
+            <li><strong>Write the fallback.</strong> State explicitly what happens if the link is not provisioned in time or if the bulk transfer falls behind: which volume moves physically, and how the delta is reconciled afterward.</li>
+            <li><strong>Validate against the docs.</strong> Check your connection rates, LAG constraints, and device capacities against the AWS documentation pages in the Sources section, and correct any number you assumed rather than looked up.</li>
+          </ol>
+          <p>The deliverable is a one-page plan containing the five inputs, the computed transfer times for both the network-only and split cases, the throttle number, the three checkpoints, and the fallback. If you can defend that page against a skeptical application owner, you can answer the exam questions in this area.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="quiz">
         <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
-        
+
       <div class="scenario-card">
-        <p class="scenario-question"><strong>Q1.</strong> A migration needs to move 300TB of historical data plus ongoing daily deltas of ~50GB, with a network link capped at 500 Mbps.</p>
-        <div class="scenario-options" id="opts-d52q0">
+        <p class="scenario-question"><strong>Q1.</strong> A migration needs to move 300 TB of historical data plus ongoing daily deltas of ~50 GB, with a network link capped at 500 Mbps and a fixed 14-day window.</p>
+        <div class="scenario-options" id="opts-d52q1">
             <div class="scenario-option">A. Transfer everything, including historical data, over the 500 Mbps link</div>
-            <div class="scenario-option">B. Use Snowball Edge for the 300TB bulk historical transfer, then DMS CDC (or DataSync) over the network link for ongoing deltas</div>
+            <div class="scenario-option">B. Use Snowball Edge for the 300 TB bulk historical transfer, then DMS CDC (or DataSync) over the network link for ongoing deltas</div>
             <div class="scenario-option">C. Wait for the network link to be upgraded before starting</div>
             <div class="scenario-option">D. Use Snowmobile for the entire migration</div>
         </div>
-        <button class="scenario-reveal-btn" onclick="revealAnswer('d52q0', 1)">Reveal Answer</button>
-        <div class="scenario-explanation" id="exp-d52q0"><strong>Correct answer: B.</strong> This hybrid pattern — offline bulk transfer for the large historical dataset, then network-based CDC/incremental sync for the small ongoing delta — is a standard, exam-tested approach to large migrations over constrained links.</div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d52q1', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d52q1"><strong>Correct answer: B.</strong> This hybrid pattern — offline bulk transfer for the large historical dataset, then network-based CDC/incremental sync for the small ongoing delta — is a standard, exam-tested approach to large migrations over constrained links.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q2.</strong> A team bundles four 10 Gbps dedicated connections into a LAG and expects a single large file transfer to run at 40 Gbps. What will they actually observe?</p>
+        <div class="scenario-options" id="opts-d52q2">
+            <div class="scenario-option">A. 40 Gbps, because the LAG aggregates the members into one logical link</div>
+            <div class="scenario-option">B. Roughly 10 Gbps, because ECMP hashing distributes flows across members rather than splitting a single flow</div>
+            <div class="scenario-option">C. 80 Gbps, because LAG doubles the effective rate</div>
+            <div class="scenario-option">D. The transfer will fail because LAGs do not support TCP</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d52q2', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d52q2"><strong>Correct answer: B.</strong> A LAG aggregates bandwidth across flows, not within a flow. A single-threaded transfer is limited to one member's capacity, which is why migration tooling parallelism matters as much as link size.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q3.</strong> A migration is planned to start in three weeks and requires more Direct Connect bandwidth than the current circuit provides. What is the correct approach?</p>
+        <div class="scenario-options" id="opts-d52q3">
+            <div class="scenario-option">A. Order a larger dedicated connection and start the migration when it is provisioned</div>
+            <div class="scenario-option">B. Use the existing link for the delta and ship the bulk physically, because Direct Connect provisioning has a lead time measured in weeks</div>
+            <div class="scenario-option">C. Add a transit VIF to increase the connection's bandwidth</div>
+            <div class="scenario-option">D. Enable burst capacity on the existing connection</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d52q3', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d52q3"><strong>Correct answer: B.</strong> Direct Connect capacity is not elastic and has a provisioning lead time. When the window is shorter than the lead time, the physical-shipment fallback for the bulk is the viable plan.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q4.</strong> A migration saturates the shared Direct Connect circuit and latency-sensitive hybrid workloads begin reporting elevated response times. What is the first corrective action?</p>
+        <div class="scenario-options" id="opts-d52q4">
+            <div class="scenario-option">A. Provision a second Direct Connect connection immediately</div>
+            <div class="scenario-option">B. Apply a bandwidth throttle to the migration so production traffic retains its share of the link</div>
+            <div class="scenario-option">C. Move the production workloads to the public internet</div>
+            <div class="scenario-option">D. Increase the migration's parallelism to finish sooner</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d52q4', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d52q4"><strong>Correct answer: B.</strong> The migration is consuming capacity that production depends on. Throttling the migration is the immediate fix; provisioning more capacity is a longer-term action with a lead time.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q5.</strong> A database migration's replication lag plateaus at several hours and never trends toward zero as the cutover approaches. What does this indicate?</p>
+        <div class="scenario-options" id="opts-d52q5">
+            <div class="scenario-option">A. The target database is undersized for reads</div>
+            <div class="scenario-option">B. The source change rate exceeds the replication throughput, so the delta will never converge without intervention</div>
+            <div class="scenario-option">C. The Direct Connect connection has failed</div>
+            <div class="scenario-option">D. CDC is not supported for this engine</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d52q5', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d52q5"><strong>Correct answer: B.</strong> A plateau rather than a downward trend means the change rate outruns replication. The fixes are to raise replication throughput, reduce the change rate, or accept a longer outage for a final reconciliation.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q6.</strong> A team plans to bundle two hosted Direct Connect connections into a LAG to double their bandwidth. Why will this not work?</p>
+        <div class="scenario-options" id="opts-d52q6">
+            <div class="scenario-option">A. LAGs require connections at different Direct Connect locations</div>
+            <div class="scenario-option">B. Hosted connections cannot be members of a LAG; only dedicated connections can be bundled</div>
+            <div class="scenario-option">C. LAGs support a maximum of one member</div>
+            <div class="scenario-option">D. Hosted connections already aggregate automatically</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d52q6', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d52q6"><strong>Correct answer: B.</strong> LAG members must be dedicated connections of the same speed at the same Direct Connect location. Hosted connections cannot be bundled.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q7.</strong> A migration must move a 3 PB dataset from a facility with no viable bulk network path. What is the appropriate approach?</p>
+        <div class="scenario-options" id="opts-d52q7">
+            <div class="scenario-option">A. DataSync over the public internet</div>
+            <div class="scenario-option">B. Multiple Snowball Edge Storage Optimized devices, or a Snowmobile engagement for the full volume</div>
+            <div class="scenario-option">C. A single 100 Gbps Direct Connect connection</div>
+            <div class="scenario-option">D. Storage Gateway in cached mode</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d52q7', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d52q7"><strong>Correct answer: B.</strong> At petabyte scale with no adequate network path, physical offline transfer is the standard solution — Snowball Edge devices in bulk, or Snowmobile for an exabyte-scale single engagement.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q8.</strong> A migration team adds a transit VIF to their existing Direct Connect connection so more VPCs can be reached, and expects the migration to run faster. What is wrong with this expectation?</p>
+        <div class="scenario-options" id="opts-d52q8">
+            <div class="scenario-option">A. Transit VIFs are slower than private VIFs by design</div>
+            <div class="scenario-option">B. Virtual interfaces share the underlying connection's bandwidth, so adding a VIF adds reachability, not capacity</div>
+            <div class="scenario-option">C. Transit VIFs require a LAG to function</div>
+            <div class="scenario-option">D. Transit VIFs only support public AWS endpoints</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d52q8', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d52q8"><strong>Correct answer: B.</strong> All virtual interfaces on a connection share its bandwidth. A transit VIF changes where traffic can go, not how much of it can flow.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q9.</strong> A migration plan assumes a 10 Gbps link will deliver 10 Gbps of payload throughput. What planning correction should be applied?</p>
+        <div class="scenario-options" id="opts-d52q9">
+            <div class="scenario-option">A. None — nominal link rate equals achievable payload rate</div>
+            <div class="scenario-option">B. Assume roughly half the nominal rate for a well-tuned parallel transfer, since protocol overhead, latency, and endpoint storage rates all reduce achievable throughput</div>
+            <div class="scenario-option">C. Assume double the nominal rate because of compression</div>
+            <div class="scenario-option">D. Assume the rate is irrelevant because DMS compresses everything</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d52q9', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d52q9"><strong>Correct answer: B.</strong> Effective throughput is always below the nominal link rate. Planning at roughly half the nominal rate for a tuned parallel transfer is a defensible assumption; anything above that is a bonus.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q10.</strong> A migration involves a small dataset (2 TB) but an extremely high change rate on the source database. Which aspect of the plan is most at risk?</p>
+        <div class="scenario-options" id="opts-d52q10">
+            <div class="scenario-option">A. The bulk transfer time, because 2 TB is large</div>
+            <div class="scenario-option">B. The delta convergence, because the change rate can exceed replication throughput regardless of how small the bulk is</div>
+            <div class="scenario-option">C. The Snowball device count</div>
+            <div class="scenario-option">D. Nothing — small datasets are always easy to migrate</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d52q10', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d52q10"><strong>Correct answer: B.</strong> Delta sizing is a function of the change rate, not the bulk volume. A small dataset with a very high change rate can be harder to migrate than a large dataset with a low one.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q11.</strong> A company must ship Snowball Edge devices containing regulated data. What is the primary security control for the shipment?</p>
+        <div class="scenario-options" id="opts-d52q11">
+            <div class="scenario-option">A. Insuring the shipment against loss</div>
+            <div class="scenario-option">B. Encrypting the data at rest on the device with keys held in AWS, so a lost device is a logistics problem rather than a breach</div>
+            <div class="scenario-option">C. Shipping only during business hours</div>
+            <div class="scenario-option">D. Using a dedicated courier</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d52q11', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d52q11"><strong>Correct answer: B.</strong> Encryption at rest with keys retained in AWS is the control that makes physical shipment safe. Logistics measures reduce the probability of loss; encryption removes the consequence.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q12.</strong> A migration team wants to validate their tooling configuration and achievable throughput before the real cutover window. What should they do?</p>
+        <div class="scenario-options" id="opts-d52q12">
+            <div class="scenario-option">A. Skip validation to save time in the window</div>
+            <div class="scenario-option">B. Run a rehearsal of the final synchronization against a non-production target to measure actual throughput and validate the configuration</div>
+            <div class="scenario-option">C. Increase the link capacity instead</div>
+            <div class="scenario-option">D. Rely on the vendor's published throughput figures</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d52q12', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d52q12"><strong>Correct answer: B.</strong> A rehearsal converts the plan's assumptions into measured facts and is the cheapest way to discover an infeasible plan before the window opens.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q13.</strong> A scenario describes a large static dataset plus a small continuous change stream and a link that cannot carry the bulk in time. Which pattern is the exam looking for?</p>
+        <div class="scenario-options" id="opts-d52q13">
+            <div class="scenario-option">A. Pure network transfer with maximum parallelism</div>
+            <div class="scenario-option">B. Physical shipment for the bulk plus network-based change replication for the delta</div>
+            <div class="scenario-option">C. Storage Gateway in stored mode</div>
+            <div class="scenario-option">D. A larger Direct Connect connection ordered for the window</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d52q13', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d52q13"><strong>Correct answer: B.</strong> The split pattern uses each mechanism where it is strong: physical shipment for the volume the wire cannot carry, network replication for the small continuous change stream.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q14.</strong> A migration is moving a live database that cannot be taken offline. Which transfer configuration is required?</p>
+        <div class="scenario-options" id="opts-d52q14">
+            <div class="scenario-option">A. Full load only, during a maintenance window</div>
+            <div class="scenario-option">B. Full load plus change data capture, so changes during the load are cached and applied before streaming continues</div>
+            <div class="scenario-option">C. DataSync incremental transfer against the database data files</div>
+            <div class="scenario-option">D. Storage Gateway in cached mode</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d52q14', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d52q14"><strong>Correct answer: B.</strong> Full load plus CDC is the configuration for minimal-downtime database migration: the snapshot runs while changes are cached, then CDC streams continuously from that point.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q15.</strong> A migration job reports low throughput, but the Direct Connect link is measured at only 30 percent utilization. Where is the bottleneck?</p>
+        <div class="scenario-options" id="opts-d52q15">
+            <div class="scenario-option">A. The Direct Connect connection is undersized</div>
+            <div class="scenario-option">B. Upstream of the network — the tooling's parallelism or the source system's read rate is the constraint, not the link</div>
+            <div class="scenario-option">C. The LAG has failed over to a single member</div>
+            <div class="scenario-option">D. The target storage is throttling writes</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d52q15', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d52q15"><strong>Correct answer: B.</strong> An unsaturated link with low tool throughput means the network is not the constraint. The first diagnostic move is to check tooling parallelism and source read rates before provisioning more bandwidth.</div>
       </div>
       </section>
+
+      <section class="doc-section" id="preview">
+        <h2 class="section-heading">Peek into Tomorrow</h2>
+        <div class="card card-purple">
+          <p>Everything in this day assumed the migration is a one-time project with a fixed window and a fixed budget for the transfer itself. That assumption holds for the cutover, but it does not hold for the steady state that follows. Once the workloads are running in AWS, the cost model changes from capital expenditure on hardware and circuits to a continuous stream of on-demand charges, and the question shifts from "can we move this in time" to "what is the cheapest commitment that still meets the workload's availability and performance requirements."</p>
+          <p>The open question is how to match a commitment to a workload's actual shape. A steady-state production fleet that will run unchanged for three years is a very different commitment decision from a fault-tolerant batch workload that can tolerate interruption, and the two are not interchangeable even though both reduce cost. Tomorrow's material works through the commitment spectrum — Compute Savings Plans for maximum flexibility, EC2 Instance Savings Plans locked to a family and region, Reserved Instances when capacity reservation matters, and Spot at up to roughly 90 percent off with a two-minute interruption notice for work that can absorb it. The unresolved question today leaves is which of those commitments a given workload actually qualifies for, and how to combine them in a mixed-instance fleet without creating an availability risk.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="sources">
+        <h2 class="section-heading">Sources</h2>
+        <div class="card">
+          <ul class="source-list">
+            <li><a href="https://docs.aws.amazon.com/directconnect/latest/UserGuide/Welcome.html" target="_blank" rel="noopener">AWS Direct Connect User Guide</a></li>
+            <li><a href="https://docs.aws.amazon.com/directconnect/latest/UserGuide/lags.html" target="_blank" rel="noopener">Link Aggregation Groups (LAGs) — AWS Direct Connect</a></li>
+            <li><a href="https://docs.aws.amazon.com/directconnect/latest/UserGuide/direct-connect-gateways.html" target="_blank" rel="noopener">Direct Connect Gateways and Transit VIFs</a></li>
+            <li><a href="https://docs.aws.amazon.com/datasync/latest/userguide/what-is-datasync.html" target="_blank" rel="noopener">What Is AWS DataSync?</a></li>
+            <li><a href="https://docs.aws.amazon.com/dms/latest/userguide/Welcome.html" target="_blank" rel="noopener">AWS Database Migration Service User Guide</a></li>
+            <li><a href="https://docs.aws.amazon.com/snowball/latest/developer-guide/what-is-snowball.html" target="_blank" rel="noopener">AWS Snowball Developer Guide</a></li>
+            <li><a href="https://docs.aws.amazon.com/whitepapers/latest/how-aws-pricing-works/aws-migration-service.html" target="_blank" rel="noopener">AWS Whitepaper: Migrating Workloads to AWS</a></li>
+            <li><a href="https://docs.aws.amazon.com/prescriptive-guidance/latest/migration-large-datasets/welcome.html" target="_blank" rel="noopener">Prescriptive Guidance: Migrating Large Datasets to AWS</a></li>
+          </ul>
+        </div>
+      </section>
+
       <div class="day-nav">
         <a href="day-051.html">&larr; Day 51: VMware Cloud on AWS — Relocate Strategy</a>
         <button class="btn btn-green" onclick="markComplete(52, 'day-053.html')">Mark Day 52 Complete &rarr;</button>

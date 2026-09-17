@@ -23,6 +23,23 @@
   <aside class="sidebar" id="sidebar">
     <div class="search-box"><input type="text" id="navSearch" class="search-input" placeholder="Search days..." onkeyup="filterNav()"></div>
     <div class="nav-section">
+      <div class="nav-section-title">On This Page</div>
+      <a href="#recap" class="nav-link">Recap: From Permission Ceilings to Shared Plumbing</a>
+      <a href="#why-on-exam" class="nav-link">1. Why This Is on the Exam</a>
+      <a href="#mechanism" class="nav-link">2. How RAM Actually Works</a>
+      <a href="#decision-boundary" class="nav-link">3. The Core Decision Boundary</a>
+      <a href="#config-tradeoffs" class="nav-link">4. Configuration Modes and Their Tradeoffs</a>
+      <a href="#sizing-limits" class="nav-link">5. Sizing, Limits and Quotas</a>
+      <a href="#failure-modes" class="nav-link">6. Failure Modes in Production</a>
+      <a href="#sre-angle" class="nav-link">7. The Operational and SRE Angle</a>
+      <a href="#gotchas" class="nav-link">8. Edge Cases and Exam Gotchas</a>
+      <a href="#vs-comparison" class="nav-link">9. RAM vs. the Services It Gets Confused With</a>
+      <a href="#lab" class="nav-link">Hands-on Lab</a>
+      <a href="#quiz" class="nav-link">Scenario Question Drills</a>
+      <a href="#preview" class="nav-link">Peek into Tomorrow</a>
+      <a href="#sources" class="nav-link">Sources</a>
+    </div>
+    <div class="nav-section">
       <div class="nav-section-title">All Days</div>
       <a href="day-001.html" class="nav-link" data-day="1">Day 1: Multi-Account Architecture &amp; AWS Organizations</a>
       <a href="day-002.html" class="nav-link" data-day="2">Day 2: Service Control Policy (SCP) Mechanics</a>
@@ -104,36 +121,341 @@
         <span class="pill pill-green">Phase 1: Multi-Account Governance &amp; Networking</span>
       </div>
       <h1 class="hero-title">Resource Access Manager (RAM) &amp; VPC Sharing</h1>
-      <div class="reading-meta">&#128337; ~3 min read &middot; 2 services covered</div>
+      <div class="reading-meta">&#128337; ~58 min read &middot; 2 services covered</div>
       <div class="services-grid">
         <span class="service-tag">AWS RAM</span>
         <span class="service-tag">Shared VPC Subnets</span>
       </div>
       <div id="tracker"></div>
-      <section class="doc-section">
-        <h2 class="section-heading">Today's Concept</h2>
+      <section class="doc-section" id="recap">
+        <h2 class="section-heading">Recap: From Permission Ceilings to Shared Plumbing</h2>
         <div class="card card-accent">
-          <p>AWS RAM lets a central network account share resources — most commonly VPC subnets, Transit Gateways, and Route 53 Resolver rules — with other accounts in the Organization, so application accounts launch resources into a centrally managed network without owning the VPC themselves.</p>
-        </div>
-        <h3 class="sub-heading">Hands-on Lab / Practical Action (45 min)</h3>
-        <div class="card">
-          <p>Share a centralized VPC's private subnets across three application accounts via RAM and verify each account can launch EC2 instances into the shared subnet.</p>
+          <p>Day 5 was about the ceiling on what an identity can do. A permission boundary caps the maximum permissions an IAM entity can ever hold, even when the policies attached to it are broader, and the delegated-admin escalation prevention pattern depends on that cap being mandatory rather than advisory. STS sits underneath the same story: AssumeRole, AssumeRoleWithSAML, and AssumeRoleWithWebIdentity (the mechanism behind EKS IRSA) are how short-lived credentials get minted so that nobody has to hold a long-lived key.</p>
+          <p>Today contrasts with that material in an important way. Permission boundaries and STS answer the question "who is allowed to call this API, and with what credentials." RAM answers a different question entirely: "which account owns this resource, and who else is allowed to attach to it." No amount of IAM policy in an application account will let it launch an instance into a subnet it does not own — the subnet has to be shared with it first, and the sharing is a resource-level grant, not an identity-level one. The two layers compose: RAM decides whether the resource is reachable at all, and IAM decides what the caller may do once it is.</p>
         </div>
       </section>
-      <section class="doc-section">
+      <section class="doc-section" id="why-on-exam">
+        <h2 class="section-heading">1. Why This Is on the Exam</h2>
+        <p>SAP-C02 scenarios are written by people who have watched real enterprises fail at multi-account networking, and the failure they care about most is the one that starts innocently. A company creates a handful of accounts, gives each one its own VPC, and connects them with peering. That works at three accounts. At thirty it does not, because peering is a full mesh by nature: every new VPC has to be peered with every existing VPC, and each peering relationship consumes a route table entry, a connection object, and a CIDR range that must not overlap with anything else in the mesh. The operational cost grows quadratically while the value grows linearly, and the CIDR planning problem becomes unsolvable once two business units independently pick 10.0.0.0/16.</p>
+        <p>RAM is the AWS answer to the ownership half of that problem. It is not a connectivity service — it does not move packets — but it changes who is allowed to place resources into a network, which in turn changes how many networks you need. The exam tests this because the correct answer to a surprising number of networking scenarios is "you do not need a second VPC at all." A question that describes three application teams needing to reach a shared database, or a central team wanting to control all CIDR allocation, or a security team wanting every workload to sit behind one inspection point, is often probing whether you reach for peering and Transit Gateway by reflex or whether you recognize that subnet sharing removes the requirement for separate networks in the first place.</p>
+        <p>This maps most directly to Domain 1 (Design Solutions for Organizational Complexity) and to the networking portions of Domain 2 (Design for New Solutions). The organizational-complexity framing is the one to internalize: RAM is a governance tool that happens to have networking consequences. It lets a central network account remain the single owner of the VPC, its CIDRs, its route tables, and its gateways, while application accounts get exactly the slice of that network they need and nothing more. The exam will frequently pair it with AWS Organizations, because sharing within an organization is the low-friction path, and with SCPs, because the central account can constrain what participants are allowed to do with the subnets they have been given.</p>
+      </section>
+      <section class="doc-section" id="mechanism">
+        <h2 class="section-heading">2. How RAM Actually Works</h2>
+        <p>RAM is built around three objects: a resource share, the resources placed into it, and the principals it is shared with. The owner account creates a resource share, adds one or more shareable resources to it, and specifies principals — either individual account IDs, an organizational unit, or the entire organization. When the share is created with an organization as the principal, participants do not receive an invitation to accept; the share is simply active for them. When the principal is a bare account ID outside the organization, that account receives an invitation and must accept it before the resource becomes usable. This distinction matters in exam scenarios because it determines whether a step exists in the deployment sequence at all.</p>
+        <p>For VPC subnet sharing specifically, the mechanism is worth tracing carefully because it is where most misconceptions live. The VPC owner creates a subnet and then shares that subnet through RAM. A participant account sees the subnet appear in its own console and API as a subnet it can launch into, but the subnet is still owned by the VPC owner. The participant can create ENIs, instances, RDS instances, Lambda functions with VPC configuration, and load balancer nodes inside that subnet. The participant cannot modify the subnet, cannot change its route table association, cannot delete it, and cannot see or edit the VPC's other subnets unless those were shared too. Route tables, network ACLs, internet gateways, NAT gateways, and the VPC itself all remain under the owner's control.</p>
+        <p>The consequence is a clean separation of duties that the exam likes to test. The network account owns addressing, routing, and egress. The application accounts own their compute and their security groups. A participant's security group can reference another participant's security group by ID within the same shared VPC, which is how cross-account application tiers are wired without any peering at all. That reference works because the VPC is genuinely one VPC — the accounts are tenants in it, not peers of it. This is the single most important mental model to carry into the exam: subnet sharing is not connectivity between networks, it is co-tenancy inside one network.</p>
+        <p>RAM also shares other resource types, and the same three-object model applies. Transit Gateways can be shared so that participant accounts create their own attachments to a centrally owned TGW. Route 53 Resolver rules can be shared so that every account in the organization resolves the same on-premises domains without duplicating forwarding rules. License configurations, Aurora DB clusters, and CodeBuild projects are shareable as well. The pattern is consistent: the owner keeps control of the resource's lifecycle and configuration, and participants get the ability to consume it.</p>
+      </section>
+      <section class="doc-section" id="decision-boundary">
+        <h2 class="section-heading">3. The Core Decision Boundary: Share the Network or Connect to It</h2>
+        <p>Almost every RAM scenario reduces to one fork. Either the application accounts need to be inside a network that someone else owns, or they need their own network that can reach someone else's. The first is subnet sharing. The second is peering, Transit Gateway, or PrivateLink. Getting this fork right determines the rest of the answer, because the two paths have different failure modes, different cost profiles, and different blast radii.</p>
+        <p>The tell in a scenario is usually about ownership and control. If the question says the central team must control CIDR allocation, or that application teams should not be able to create their own VPCs, or that all egress must traverse a single inspected path, the answer is subnet sharing. If the question says two teams have already built their own VPCs and now need to talk, or that the networks must remain administratively separate for compliance, the answer is a connectivity service. If the question says the two networks have overlapping CIDRs, the answer is PrivateLink, because neither sharing nor peering can reconcile overlapping address space.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Requirement</th><th>Shared subnets (RAM)</th><th>VPC peering</th><th>Transit Gateway</th><th>PrivateLink</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Central control of CIDR and routing</td><td>Yes — owner controls all of it</td><td>No — each VPC routes independently</td><td>Partial — TGW route tables segment, VPCs still own CIDRs</td><td>No — consumer keeps its own network</td></tr>
+              <tr><td>Overlapping CIDRs tolerated</td><td>No — one VPC, one address space</td><td>No</td><td>No</td><td>Yes</td></tr>
+              <tr><td>Scales to dozens of accounts</td><td>Yes — one VPC, many participants</td><td>No — mesh grows quadratically</td><td>Yes — hub and spoke</td><td>Yes — per-service endpoints</td></tr>
+              <tr><td>Participant can modify routing</td><td>No</td><td>Yes, within its own VPC</td><td>Yes, within its own VPC</td><td>N/A</td></tr>
+              <tr><td>Cross-account security group references</td><td>Yes, within the shared VPC</td><td>No</td><td>No</td><td>No</td></tr>
+              <tr><td>Charged for data transfer between accounts</td><td>Yes, cross-account traffic is billed</td><td>Yes</td><td>Yes, plus attachment hours</td><td>Yes, plus endpoint hours</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>One row deserves emphasis because it is the most commonly missed. Cross-account security group referencing works inside a shared VPC and does not work across peering or Transit Gateway. If a scenario describes a three-tier application where the database tier must accept traffic only from the application tier's security group, and the tiers live in different accounts, subnet sharing is the only option that gives you that control natively. Peering would force you to reference CIDR ranges instead, which is both less precise and harder to maintain.</p>
+      </section>
+      <section class="doc-section" id="config-tradeoffs">
+        <h2 class="section-heading">4. Configuration Modes and Their Tradeoffs</h2>
+        <p>The first knob is who the principal is. Sharing with an organizational unit or the whole organization is the low-friction mode: no invitations, no acceptance step, and new accounts added to the OU automatically gain access to the share. Sharing with a bare account ID outside the organization requires the participant to accept an invitation, which introduces a manual step and a pending state that can silently block a deployment. For exam purposes, "share with the organization" is almost always the intended answer when the accounts are in the same organization, because it removes an operational failure mode rather than adding one.</p>
+        <p>The second knob is which subnets you share, and this is where the real design work happens. A common pattern is to share only private application subnets and keep the public subnets, NAT gateways, and the VPC's internet gateway entirely within the network account. Participants then have no path to the internet except through the owner's NAT gateway, which is exactly the centralized-egress property the network team wanted. The alternative — sharing public subnets too — gives participants the ability to attach public IPs and elastic IPs, which is usually the opposite of what a governance-focused design intends. The tradeoff is that participants lose the ability to run anything that genuinely needs a public address, so the decision has to be made deliberately rather than by default.</p>
+        <p>The third knob is whether the share is created with automatic association to the organization. When you share with an organization or OU, you can enable automatic sharing so that resources added to the share later are immediately visible to all principals. Without it, each new resource requires an explicit association. The tradeoff is between convenience and surprise: automatic sharing means a subnet added to the share is instantly usable by every participant, which is convenient but means a mistake in the network account propagates immediately. Manual association adds a step but gives the network team a checkpoint.</p>
+        <p>The fourth knob is tagging and tag-based access control. RAM supports sharing based on tags, and the owner can require that participants only launch resources carrying specific tags. Combined with SCPs in the participant accounts, this is how a central team enforces that everything launched into a shared subnet is attributable to a cost center. The tradeoff is enforcement overhead: tag policies and SCP conditions have to be maintained, and a missing tag becomes a hard failure at launch time rather than a soft warning. Teams that skip this step usually discover the gap during their first chargeback cycle.</p>
+      </section>
+      <section class="doc-section" id="sizing-limits">
+        <h2 class="section-heading">5. Sizing, Limits and Quotas</h2>
+        <p>Subnet sharing changes the arithmetic of IP address planning in a way that catches people out. In a per-account VPC model, each account gets its own address space and the only constraint is that the spaces do not overlap. In a shared VPC model, every participant draws from the same address space, so the VPC's CIDR has to be sized for the aggregate of all participants plus growth. A /16 gives 65,536 addresses, which sounds generous until you remember that AWS reserves five addresses per subnet, that a subnet cannot span Availability Zones, and that a large EKS cluster can consume thousands of addresses on its own through pod networking.</p>
+        <p>The practical guidance is to size the shared VPC for the whole organization's foreseeable footprint rather than for today's workloads, and to use secondary CIDR blocks on the VPC when the primary block runs short. A VPC can have multiple CIDR associations, and additional blocks can be added later without recreating the VPC, which is the escape hatch when the original sizing was optimistic. Subnets themselves cannot be resized after creation, so the subnet-level split is the decision that is genuinely hard to reverse.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Item</th><th>Value</th><th>Notes</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Addresses reserved per subnet</td><td>5</td><td>Network, VPC router, DNS, future use, broadcast</td></tr>
+              <tr><td>Minimum subnet size</td><td>/28</td><td>16 addresses, 11 usable</td></tr>
+              <tr><td>Maximum subnet size</td><td>/16</td><td>Matches the largest single VPC CIDR</td></tr>
+              <tr><td>CIDR blocks per VPC</td><td>Multiple, via association</td><td>Secondary blocks can be added after creation</td></tr>
+              <tr><td>Subnet resizing</td><td>Not supported</td><td>Recreate the subnet to change its size</td></tr>
+              <tr><td>Subnets per VPC</td><td>200 by default</td><td>Adjustable via service quota increase</td></tr>
+              <tr><td>Resource shares per account</td><td>Quota-limited</td><td>Check current Service Quotas for the region</td></tr>
+              <tr><td>Principals per resource share</td><td>Quota-limited</td><td>Organization and OU principals count as one</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>Two quota behaviors are worth internalizing. First, sharing with an OU or an organization counts as a single principal regardless of how many accounts are inside it, which is why organization-level sharing scales so much better than enumerating account IDs. Second, the number of subnets a participant can launch into is bounded by the owner's VPC subnet count, not by anything in the participant account, so a participant hitting a limit is often a signal that the network account needs a quota increase rather than the application account. Always check which account owns the resource before filing the increase.</p>
+      </section>
+      <section class="doc-section" id="failure-modes">
+        <h2 class="section-heading">6. Failure Modes and What They Look Like in Production</h2>
+        <p>The most common failure is a launch that fails with an authorization error the participant cannot explain, because the participant's IAM policy looks correct. The cause is almost always that the subnet was never shared, or was shared with a different principal than the one being used, or the invitation is still pending. The first diagnostic move is to check the resource share from the owner account and confirm the participant appears as an active principal rather than a pending one. The second is to confirm the participant is launching into the shared subnet and not into a subnet in its own VPC that happens to have a similar name.</p>
+        <p>The second failure mode is a connectivity problem that looks like a routing bug but is actually a security group or NACL issue. Because the network ACL belongs to the owner and the security group belongs to the participant, a change in either place can break traffic, and the two teams will each believe the other is at fault. The symptom is typically asymmetric: outbound works, return traffic is dropped, or vice versa. The first diagnostic move is to check the NACL on the subnet in the owner account and the security group on the ENI in the participant account, in that order, because NACLs are stateless and are the more common culprit for one-directional failures.</p>
+        <p>The third failure mode is address exhaustion, and it presents as intermittent launch failures that correlate with load rather than with any configuration change. Because all participants draw from one pool, a single participant with a runaway autoscaling group can consume the shared subnet's free addresses and cause unrelated teams to fail. This is the shared-VPC equivalent of a noisy neighbor, and it is the strongest argument for per-participant subnet segmentation rather than one large shared subnet for everyone. Monitoring free IP count per subnet is the control that catches it before it becomes an incident.</p>
+        <p>The fourth failure mode is the accidental dependency. A participant builds a workload that assumes the shared subnet will always exist, and the network team later deletes or re-CIDRs it. Because the participant cannot see the owner's change management, the breakage arrives without warning. The mitigation is organizational rather than technical: the network account's change process has to treat shared subnets as a public interface with consumers, and participants should be told about planned changes through the same channel they would use for any other dependency.</p>
+      </section>
+      <section class="doc-section" id="sre-angle">
+        <h2 class="section-heading">7. The Operational and SRE Angle</h2>
+        <p>From an SRE perspective, a shared VPC introduces a dependency that is invisible in the participant's own dashboards. The participant's service health depends on a subnet, a route table, and a NAT gateway that live in another account and are monitored by another team. If the network account's NAT gateway saturates, every participant sees elevated latency and connection failures simultaneously, and each participant's on-call will independently conclude that their own service is broken. The runbook has to start with a cross-account check: is the shared network healthy, and is anyone else affected at the same time.</p>
+        <p>The metrics worth alarming on are the ones that describe the shared resource rather than the participant's workload. Free IP addresses per shared subnet, NAT gateway bytes and connection counts, and the age of the oldest pending resource share invitation are the three that catch the most incidents. For the participant side, the useful signal is a synthetic check that exercises the actual path through the shared subnet to a dependency, because that is the only thing that proves the cross-account path is intact end to end. Internal service metrics will look healthy right up until the moment the network path breaks.</p>
+        <p>The SLO implication is that a participant's availability target is capped by the network account's availability target, whether or not anyone wrote that down. If the shared NAT gateway is designed for 99.9% and the participant promises 99.95%, the participant's promise is unachievable and the gap will only surface during a post-incident review. The honest approach is to make the dependency explicit in the service's error budget calculation and to agree on the network account's target as an input to the participant's own target. This is the same reasoning that applies to any shared platform, and it is worth stating plainly in the design document rather than leaving implicit.</p>
+        <p>The runbook shape follows from that. First, confirm scope: is this one participant or all of them. Second, check the shared network's health metrics in the owner account. Third, check the participant's security group and the subnet's NACL for recent changes. Fourth, check free IP capacity. Only after those four steps does it make sense to look at the participant's application logs, because the first three steps are where the majority of shared-VPC incidents actually live.</p>
+      </section>
+      <section class="doc-section" id="gotchas">
+        <h2 class="section-heading">8. Edge Cases and Exam Gotchas</h2>
+        <p>The single most-tested gotcha is that a participant cannot delete or modify a shared subnet, and cannot see the VPC's other subnets. Scenarios sometimes describe a participant team that wants to "manage its own networking" while using a shared VPC, and the correct answer is that this is not possible — the participant gets consumption rights, not ownership. If the requirement genuinely includes independent routing control, the answer is a separate VPC with a connectivity service, not subnet sharing.</p>
+        <p>The second gotcha is the invitation state. Shares to accounts outside the organization require acceptance, and a scenario that describes a deployment failing with an authorization error after a share was created is usually testing whether you check for the pending invitation. Shares to an OU or the organization do not require acceptance, so the same scenario with an in-organization participant has a different answer. Read the principal type carefully before choosing.</p>
+        <p>The third gotcha is that cross-account traffic inside a shared VPC is still billed as cross-account data transfer. Sharing does not make traffic free, and a scenario that emphasizes cost reduction should not be answered with subnet sharing on that basis alone. The cost argument for sharing is about operational overhead and IP efficiency, not about data transfer pricing.</p>
+        <p>The fourth gotcha is that RAM shares resources, not permissions. Sharing a subnet does not grant a participant the ability to launch instances — the participant's IAM identity still needs the relevant EC2 permissions, and any SCP in the participant's OU still applies. This is the same ceiling-versus-grant distinction from the permission-boundary material, applied at the resource layer instead of the identity layer. A scenario that says a participant was granted a subnet share but still cannot launch is testing whether you check IAM and SCPs before assuming the share failed.</p>
+        <p>The fifth gotcha is the difference between sharing a subnet and sharing a Transit Gateway. Sharing a TGW gives participants the ability to create their own attachments to a central hub, which is a connectivity grant. Sharing a subnet gives participants the ability to place resources inside a network they do not own, which is a co-tenancy grant. Both are RAM shares, and scenarios will sometimes offer both as options to see whether you distinguish them.</p>
+      </section>
+      <section class="doc-section" id="vs-comparison">
+        <h2 class="section-heading">9. RAM vs. the Services It Gets Confused With</h2>
+        <p>The confusion set is small but the distinctions are sharp. RAM is not a connectivity service, so it never appears as an alternative to peering or Transit Gateway when the requirement is genuinely "connect two existing networks." It appears instead when the requirement is "let these accounts use a network that already exists." The exam will sometimes phrase a question so that both readings are plausible, and the tiebreaker is whether the accounts already have their own VPCs that must remain in place.</p>
+        <p>Against VPC peering, the distinction is scale and control. Peering is a one-to-one relationship between two VPCs, each side retains full control of its own routing, and the number of relationships grows quadratically with the number of VPCs. Subnet sharing is a one-to-many relationship where the owner retains all routing control and the participant count is bounded only by quotas. Peering is right when the two networks are genuinely independent administrative domains. Sharing is right when one team is the network authority and the others are consumers.</p>
+        <p>Against Transit Gateway, the distinction is whether you need a network at all. TGW connects networks that already exist and gives you centralized routing between them, which is the right answer when participants must keep their own VPCs for compliance or isolation reasons. Subnet sharing removes the need for those VPCs in the first place. A scenario that says each business unit must have its own VPC for regulatory reasons is pointing at TGW; a scenario that says the central team wants to own all addressing is pointing at sharing.</p>
+        <p>Against PrivateLink, the distinction is granularity and address overlap. PrivateLink exposes a single service to consumers without any network-level integration, which makes it the only option when CIDRs overlap. Subnet sharing requires a single non-overlapping address space and gives participants a whole subnet rather than a single endpoint. If the requirement is "consume one API," PrivateLink is the smaller, safer answer. If the requirement is "run your workloads in our network," sharing is the answer.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Pick this</th><th>When the requirement is…</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>RAM subnet sharing</td><td>Central ownership of CIDR, routing, and egress; participants consume subnets; cross-account security group references needed</td></tr>
+              <tr><td>VPC peering</td><td>Two independent VPCs, small number of connections, each side keeps its own routing</td></tr>
+              <tr><td>Transit Gateway</td><td>Many VPCs and on-premises networks, centralized routing and segmentation, participants keep their own VPCs</td></tr>
+              <tr><td>PrivateLink</td><td>Expose one service to many consumers, overlapping CIDRs, no network-level integration wanted</td></tr>
+              <tr><td>RAM Transit Gateway sharing</td><td>Central TGW ownership, participants create their own attachments</td></tr>
+              <tr><td>RAM Resolver rule sharing</td><td>One set of hybrid DNS forwarding rules consumed by every account</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+      <section class="doc-section" id="lab">
+        <h2 class="section-heading">Hands-on Lab: Sharing a Central VPC Across Three Application Accounts (45 min)</h2>
+        <div class="card card-green">
+          <p>This lab builds the pattern the exam keeps describing: one network account owns the VPC, three application accounts consume its private subnets, and none of the application accounts can see or change the routing. You will need four accounts in a single AWS Organization — one designated as the network account and three as application accounts — plus permission to create VPCs, subnets, RAM shares, and EC2 instances in each. Work through the steps in order; the verification steps are where the learning actually happens.</p>
+          <ol>
+            <li>In the network account, create a VPC with a CIDR large enough for all three participants plus growth. A /16 is the realistic choice; note the CIDR because you will need it when reasoning about address exhaustion later.</li>
+            <li>Create three private subnets in the VPC, one per Availability Zone, each sized /20. Do not create public subnets, an internet gateway, or a NAT gateway yet — the point of the first pass is to see what participants can and cannot do without egress.</li>
+            <li>Create a route table for the private subnets and associate all three subnets with it. Confirm the route table contains only the local route. This is the state participants will inherit.</li>
+            <li>In the RAM console of the network account, create a resource share. Add the three private subnets as resources. Set the principal to the organization (or to an OU containing the three application accounts) rather than enumerating account IDs, and note that no invitation step appears.</li>
+            <li>Switch to application account A. Confirm the three subnets are visible in the VPC console under a shared-subnets view, and confirm the VPC itself is not editable. Try to modify a subnet's route table association and record the exact error — this is the ownership boundary in action.</li>
+            <li>In application account A, launch a t3.micro instance into one of the shared subnets. Create a security group in account A first and attach it. Confirm the instance launches and receives a private IP from the shared subnet's range.</li>
+            <li>Repeat step 6 in application accounts B and C, each with its own security group. Then, in account A's security group, add an inbound rule referencing account B's security group ID. Confirm the reference resolves — this is the cross-account security group referencing that peering cannot provide.</li>
+            <li>Test connectivity between the instances using private IPs. It should work without any peering, any route table change, and any Transit Gateway, because all three instances are in the same VPC.</li>
+            <li>Now add egress. In the network account, create a NAT gateway in one subnet and add a 0.0.0.0/0 route to the shared route table pointing at it. Confirm all three application instances can now reach the internet through the single centrally owned NAT gateway.</li>
+            <li>Check the NAT gateway's CloudWatch metrics and confirm traffic from all three accounts is visible in one place. This is the centralized-egress observability property that per-account NAT gateways cannot give you.</li>
+            <li>Deliberately break it: in the network account, remove the 0.0.0.0/0 route. Confirm all three application accounts lose internet access simultaneously, and note that none of them can fix it from their own account. This is the dependency you are accepting.</li>
+            <li>Restore the route. Then, in the network account, check the free IP count on each shared subnet and record it. Set a mental alarm threshold at roughly 20% free — that is the point at which a runaway autoscaling group in one participant starts affecting the others.</li>
+            <li>Finally, create a second resource share for a Route 53 Resolver rule (or a Transit Gateway, if you have one) and observe that the same three-object model — share, resource, principal — applies unchanged. The consistency is the point.</li>
+          </ol>
+          <p>Clean up by deleting the instances in all three application accounts, then the resource shares, then the NAT gateway, and finally the VPC in the network account. If you skip the ordering, the VPC deletion will fail because the shared subnets still have participant-owned ENIs attached, which is itself a useful demonstration of the ownership boundary.</p>
+        </div>
+      </section>
+      <section class="doc-section" id="quiz">
         <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
         
       <div class="scenario-card">
         <p class="scenario-question"><strong>Q1.</strong> A company wants every application account to use a common, centrally managed VPC without each account owning its own VPC. What is the mechanism?</p>
-        <div class="scenario-options" id="opts-d6q0">
+        <div class="scenario-options" id="opts-d6q1">
             <div class="scenario-option">A. VPC Peering between every pair of accounts</div>
             <div class="scenario-option">B. Share subnets from a central VPC using AWS RAM</div>
             <div class="scenario-option">C. Transit Gateway alone, with each account keeping its own VPC</div>
             <div class="scenario-option">D. Copy the VPC configuration manually into every account</div>
         </div>
-        <button class="scenario-reveal-btn" onclick="revealAnswer('d6q0', 1)">Reveal Answer</button>
-        <div class="scenario-explanation" id="exp-d6q0"><strong>Correct answer: B.</strong> RAM subnet sharing lets many accounts launch resources into subnets owned by a single central VPC — reducing IP management and networking overhead versus peering or per-account VPCs.</div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d6q1', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d6q1"><strong>Correct answer: B.</strong> RAM subnet sharing lets many accounts launch resources into subnets owned by a single central VPC, reducing IP management and networking overhead versus peering or per-account VPCs.</div>
       </div>
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q2.</strong> An application account has been granted a subnet share but its instances still fail to launch with an authorization error. What should you check first?</p>
+        <div class="scenario-options" id="opts-d6q2">
+            <div class="scenario-option">A. Whether the VPC's CIDR block is exhausted</div>
+            <div class="scenario-option">B. Whether the participant's IAM identity has the required EC2 permissions and whether any SCP applies</div>
+            <div class="scenario-option">C. Whether the subnet's network ACL allows outbound traffic</div>
+            <div class="scenario-option">D. Whether the resource share was created in the same region</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d6q2', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d6q2"><strong>Correct answer: B.</strong> RAM shares resources, not permissions. The participant still needs IAM permissions to launch, and SCPs in its OU still apply. Check identity-layer authorization before assuming the share failed.</div>
+      </div>
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q3.</strong> Two business units each built their own VPC and both used 10.0.0.0/16. One needs to consume a specific API hosted in the other. Which option works?</p>
+        <div class="scenario-options" id="opts-d6q3">
+            <div class="scenario-option">A. Share the subnets via AWS RAM</div>
+            <div class="scenario-option">B. VPC peering between the two VPCs</div>
+            <div class="scenario-option">C. AWS PrivateLink with an interface endpoint</div>
+            <div class="scenario-option">D. A Transit Gateway attachment between the two VPCs</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d6q3', 2)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d6q3"><strong>Correct answer: C.</strong> Overlapping CIDRs rule out sharing, peering, and Transit Gateway, all of which require reconcilable address space. PrivateLink operates at the ENI level and never merges route tables, so it works despite the overlap.</div>
+      </div>
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q4.</strong> A network team wants all application accounts to reach the internet only through a single inspected egress path that the network team controls. Which design achieves this?</p>
+        <div class="scenario-options" id="opts-d6q4">
+            <div class="scenario-option">A. Give each application account its own NAT gateway and rely on SCPs to restrict egress</div>
+            <div class="scenario-option">B. Share only private subnets from a central VPC and route 0.0.0.0/0 through the network account's NAT gateway</div>
+            <div class="scenario-option">C. Peer every application VPC to the network VPC</div>
+            <div class="scenario-option">D. Use VPC endpoints in each application account</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d6q4', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d6q4"><strong>Correct answer: B.</strong> Sharing only private subnets means participants have no internet gateway of their own, so all egress must traverse the owner's NAT gateway. This is the centralized-egress pattern.</div>
+      </div>
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q5.</strong> A three-tier application spans three accounts. The database tier must accept traffic only from the application tier's security group. Which connectivity model supports this natively?</p>
+        <div class="scenario-options" id="opts-d6q5">
+            <div class="scenario-option">A. VPC peering with CIDR-based security group rules</div>
+            <div class="scenario-option">B. Transit Gateway with a shared route table</div>
+            <div class="scenario-option">C. Shared subnets in a single VPC, with cross-account security group references</div>
+            <div class="scenario-option">D. PrivateLink endpoints between each tier</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d6q5', 2)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d6q5"><strong>Correct answer: C.</strong> Cross-account security group referencing only works inside a shared VPC. Peering and Transit Gateway force you to reference CIDR ranges instead, which is less precise.</div>
+      </div>
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q6.</strong> A participant account reports that it cannot modify a shared subnet's route table association. Is this a misconfiguration?</p>
+        <div class="scenario-options" id="opts-d6q6">
+            <div class="scenario-option">A. Yes — the share was created with insufficient permissions</div>
+            <div class="scenario-option">B. No — participants get consumption rights only; the owner retains all routing control</div>
+            <div class="scenario-option">C. Yes — the participant needs an SCP exemption</div>
+            <div class="scenario-option">D. No — but only because the subnet is in a different Availability Zone</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d6q6', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d6q6"><strong>Correct answer: B.</strong> Subnet sharing grants the ability to place resources in the subnet, not to manage it. Route tables, NACLs, gateways, and the VPC itself remain under the owner's control.</div>
+      </div>
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q7.</strong> A company shares subnets with an OU containing 40 accounts. How many principals does this count as against the resource share quota?</p>
+        <div class="scenario-options" id="opts-d6q7">
+            <div class="scenario-option">A. 40 — one per account</div>
+            <div class="scenario-option">B. 1 — the OU counts as a single principal</div>
+            <div class="scenario-option">C. 41 — the OU plus each account</div>
+            <div class="scenario-option">D. It depends on the number of subnets shared</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d6q7', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d6q7"><strong>Correct answer: B.</strong> Organization and OU principals count as a single principal regardless of how many accounts they contain, which is why organization-level sharing scales far better than enumerating account IDs.</div>
+      </div>
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q8.</strong> A resource share was created for an account outside the organization, but the participant reports the subnets are not visible. What is the most likely cause?</p>
+        <div class="scenario-options" id="opts-d6q8">
+            <div class="scenario-option">A. The subnets are in a different region</div>
+            <div class="scenario-option">B. The invitation is still pending and has not been accepted</div>
+            <div class="scenario-option">C. The participant's IAM policy is missing ram:AcceptResourceShareInvitation</div>
+            <div class="scenario-option">D. Subnets cannot be shared outside an organization</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d6q8', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d6q8"><strong>Correct answer: B.</strong> Shares to bare account IDs outside the organization require the participant to accept an invitation. Shares to an OU or the organization do not, which is why the principal type changes the deployment sequence.</div>
+      </div>
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q9.</strong> Several application accounts share one VPC. One team's autoscaling group grows rapidly and unrelated teams begin failing to launch instances. What is the cause?</p>
+        <div class="scenario-options" id="opts-d6q9">
+            <div class="scenario-option">A. A security group rule conflict between participants</div>
+            <div class="scenario-option">B. Address exhaustion in the shared subnets, since all participants draw from one pool</div>
+            <div class="scenario-option">C. The NAT gateway has hit its connection limit</div>
+            <div class="scenario-option">D. The resource share quota has been exceeded</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d6q9', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d6q9"><strong>Correct answer: B.</strong> In a shared VPC every participant draws from the same address space, so one runaway consumer can exhaust free IPs and cause unrelated launch failures. Monitor free IP count per subnet.</div>
+      </div>
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q10.</strong> A participant's instances can reach the internet but return traffic is dropped. The participant's security group allows all outbound. Where should you look next?</p>
+        <div class="scenario-options" id="opts-d6q10">
+            <div class="scenario-option">A. The participant's IAM role permissions</div>
+            <div class="scenario-option">B. The network ACL on the shared subnet, which is owned by the network account and is stateless</div>
+            <div class="scenario-option">C. The resource share's principal list</div>
+            <div class="scenario-option">D. The VPC's DNS settings</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d6q10', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d6q10"><strong>Correct answer: B.</strong> NACLs belong to the owner and are stateless, making them the usual cause of one-directional failures. Check the subnet's NACL in the network account before the participant's security group.</div>
+      </div>
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q11.</strong> A central team wants to own a Transit Gateway and let application accounts create their own attachments to it. Which RAM capability applies?</p>
+        <div class="scenario-options" id="opts-d6q11">
+            <div class="scenario-option">A. Subnet sharing</div>
+            <div class="scenario-option">B. Transit Gateway sharing, which grants participants the ability to create attachments</div>
+            <div class="scenario-option">C. Route 53 Resolver rule sharing</div>
+            <div class="scenario-option">D. VPC peering with a shared route table</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d6q11', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d6q11"><strong>Correct answer: B.</strong> Sharing a Transit Gateway is a connectivity grant — participants attach their own VPCs to a centrally owned hub. Sharing a subnet is a co-tenancy grant. Both use RAM but mean different things.</div>
+      </div>
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q12.</strong> A company wants every account in the organization to resolve the same on-premises domains without duplicating forwarding rules. What should the network account do?</p>
+        <div class="scenario-options" id="opts-d6q12">
+            <div class="scenario-option">A. Create a Resolver rule in every account</div>
+            <div class="scenario-option">B. Share a Route 53 Resolver rule through AWS RAM with the organization</div>
+            <div class="scenario-option">C. Share the VPC's subnets and rely on the default resolver</div>
+            <div class="scenario-option">D. Use a public hosted zone instead</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d6q12', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d6q12"><strong>Correct answer: B.</strong> Resolver rules are shareable through RAM, so one centrally maintained forwarding rule can be consumed by every account in the organization instead of being duplicated per account.</div>
+      </div>
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q13.</strong> A participant's service promises 99.95% availability but depends on a shared NAT gateway in the network account designed for 99.9%. What is the correct assessment?</p>
+        <div class="scenario-options" id="opts-d6q13">
+            <div class="scenario-option">A. The participant's target is achievable because NAT gateways are highly available by default</div>
+            <div class="scenario-option">B. The participant's target is capped by the shared dependency and the gap should be made explicit in the error budget</div>
+            <div class="scenario-option">C. The participant should add a second NAT gateway in its own account</div>
+            <div class="scenario-option">D. Availability targets are independent of shared infrastructure</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d6q13', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d6q13"><strong>Correct answer: B.</strong> A participant's availability cannot exceed that of the shared network it depends on. The dependency belongs in the error budget calculation and the network account's target should be an agreed input.</div>
+      </div>
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q14.</strong> A scenario says each business unit must retain its own VPC for regulatory isolation, but the company wants centralized routing between them. Which approach fits?</p>
+        <div class="scenario-options" id="opts-d6q14">
+            <div class="scenario-option">A. Share subnets from a central VPC via RAM</div>
+            <div class="scenario-option">B. Transit Gateway with each business unit keeping its own VPC</div>
+            <div class="scenario-option">C. Full-mesh VPC peering between all business units</div>
+            <div class="scenario-option">D. PrivateLink endpoints between every pair of VPCs</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d6q14', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d6q14"><strong>Correct answer: B.</strong> When participants must keep their own VPCs, subnet sharing is off the table. Transit Gateway provides centralized routing and segmentation while preserving per-unit VPC ownership.</div>
+      </div>
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q15.</strong> A network team wants to prevent application accounts from attaching public IPs to instances in shared subnets. What is the most direct control?</p>
+        <div class="scenario-options" id="opts-d6q15">
+            <div class="scenario-option">A. Share only private subnets and keep public subnets, the internet gateway, and NAT gateways in the network account</div>
+            <div class="scenario-option">B. Apply a security group that blocks inbound traffic</div>
+            <div class="scenario-option">C. Enable VPC flow logs on the shared subnets</div>
+            <div class="scenario-option">D. Use a network ACL that denies port 22</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d6q15', 0)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d6q15"><strong>Correct answer: A.</strong> If public subnets are never shared, participants have no subnet in which a public IP is meaningful and no internet gateway of their own. This is the structural control rather than a detective one.</div>
+      </div>
+      </section>
+      <section class="doc-section" id="preview">
+        <h2 class="section-heading">Peek into Tomorrow</h2>
+        <div class="card card-purple">
+          <p>Today's material leaves a real question open. Subnet sharing solves the ownership problem for the network layer, but it says nothing about how the pieces fit together as a whole. If a company adopts Control Tower automation for account provisioning, SCP guardrails for policy ceilings, IAM Identity Center for centralized SSO, and RAM-shared networking for the data plane, what actually holds those four things together? Each one is defensible on its own, and each one can be deployed without the others. The open question is whether they compose into a single coherent governance model or whether they are four independent mechanisms that happen to coexist and occasionally contradict each other.</p>
+          <p>There is a concrete version of that question worth sitting with. When a new account is provisioned through Control Tower's account factory, which of today's decisions has to be made at provisioning time rather than afterward? A subnet share can be granted later, but the account's OU placement determines which SCPs apply from its first API call, and the OU is also what makes an organization-level RAM share take effect without an invitation. The ordering matters, and getting it wrong means an account that is technically provisioned but not actually governed. Tomorrow's synthesis is where those seams get examined.</p>
+        </div>
+      </section>
+      <section class="doc-section" id="sources">
+        <h2 class="section-heading">Sources</h2>
+        <div class="card">
+          <ul class="source-list">
+            <li><a href="https://docs.aws.amazon.com/ram/latest/userguide/what-is-ram.html" target="_blank" rel="noopener">AWS Resource Access Manager User Guide — What Is AWS RAM?</a></li>
+            <li><a href="https://docs.aws.amazon.com/vpc/latest/userguide/vpc-sharing.html" target="_blank" rel="noopener">Amazon VPC User Guide — Share Your VPC with Other Accounts</a></li>
+            <li><a href="https://docs.aws.amazon.com/ram/latest/userguide/shareable.html" target="_blank" rel="noopener">AWS RAM User Guide — Shareable AWS Resources</a></li>
+            <li><a href="https://docs.aws.amazon.com/ram/latest/userguide/getting-started-sharing.html" target="_blank" rel="noopener">AWS RAM User Guide — Creating a Resource Share</a></li>
+            <li><a href="https://docs.aws.amazon.com/vpc/latest/userguide/vpc-cidr-blocks.html" target="_blank" rel="noopener">Amazon VPC User Guide — VPC CIDR Blocks</a></li>
+            <li><a href="https://docs.aws.amazon.com/vpc/latest/userguide/configure-subnets.html" target="_blank" rel="noopener">Amazon VPC User Guide — Subnet Sizing and Reserved Addresses</a></li>
+            <li><a href="https://docs.aws.amazon.com/vpc/latest/userguide/security-group-rules.html" target="_blank" rel="noopener">Amazon VPC User Guide — Security Group Rules and Referencing</a></li>
+            <li><a href="https://docs.aws.amazon.com/whitepapers/latest/building-scalable-secure-multi-vpc-network-infrastructure/welcome.html" target="_blank" rel="noopener">AWS Whitepaper — Building a Scalable and Secure Multi-VPC AWS Network Infrastructure</a></li>
+            <li><a href="https://docs.aws.amazon.com/wellarchitected/latest/reliability-pillar/welcome.html" target="_blank" rel="noopener">AWS Well-Architected Framework — Reliability Pillar</a></li>
+            <li><a href="https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/resolver.html" target="_blank" rel="noopener">Amazon Route 53 Developer Guide — Resolver and Forwarding Rules</a></li>
+          </ul>
+        </div>
       </section>
       <div class="day-nav">
         <a href="day-005.html">&larr; Day 5: IAM Permission Boundaries &amp; STS</a>

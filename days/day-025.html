@@ -104,36 +104,369 @@
         <span class="pill pill-green">Phase 2: Compute, Containers &amp; Global Databases</span>
       </div>
       <h1 class="hero-title">DynamoDB Global Tables &amp; DAX Caching</h1>
-      <div class="reading-meta">&#128337; ~3 min read &middot; 2 services covered</div>
+      <div class="reading-meta">&#128337; ~58 min read &middot; 2 services covered</div>
       <div class="services-grid">
         <span class="service-tag">DynamoDB Global Tables</span>
         <span class="service-tag">DAX</span>
       </div>
       <div id="tracker"></div>
-      <section class="doc-section">
-        <h2 class="section-heading">Today's Concept</h2>
+
+      <section class="doc-section" id="recap">
+        <h2 class="section-heading">Recap: Where We Left Off</h2>
         <div class="card card-accent">
-          <p>Global Tables provide multi-region, multi-active replication with last-writer-wins conflict resolution — ideal for low-latency global reads/writes without a single-region bottleneck. DAX is an in-memory read-through/write-through cache in front of DynamoDB, cutting read latency from milliseconds to microseconds for read-heavy workloads.</p>
-        </div>
-        <h3 class="sub-heading">Hands-on Lab / Practical Action (45 min)</h3>
-        <div class="card">
-          <p>Enable DynamoDB Global Tables across two regions and reason through last-writer-wins conflict behavior for a concurrent update scenario.</p>
+          <p>Day 24 established that DynamoDB's performance story is really a partitioning story. The table's advertised read and write capacity units are an aggregate budget, but the physical unit that enforces throughput is the partition, and each partition has its own ceiling. A partition key with low cardinality — a status field with five possible values, a date string, a tenant ID that dominates traffic — concentrates writes onto a handful of partitions and throttles them even when the table as a whole is nowhere near its provisioned capacity. That is the hot-key failure mode, and it is invisible in table-level CloudWatch metrics until you look at the per-partition dimensions or the throttled-request counters.</p>
+          <p>Today extends that model outward in two directions at once. Global Tables take the single-region table you partitioned carefully and replicate it into multiple regions as a multi-active, multi-writer system, which means the partition-key design now has to survive conflict resolution as well as throughput. DAX takes the same table and puts an in-memory cache in front of it, which changes the read path but not the write path — and therefore does not rescue a badly designed key. Both features are extensions of the partitioning and capacity-mode decisions from Day 24, and both are commonly tested as distractors against each other.</p>
         </div>
       </section>
-      <section class="doc-section">
+
+      <section class="doc-section" id="why-on-exam">
+        <h2 class="section-heading">1. Why This Is on the Exam</h2>
+        <p>SAP-C02's resilient architectures domain is built around a small number of recurring scenario shapes, and "global application, users in multiple continents, needs low-latency reads and writes, must survive a regional outage" is one of the most common. The exam wants to know whether you can distinguish between the tools that solve latency, the tools that solve availability, and the tools that solve both — and whether you understand that a single service can be the right answer for one of those and the wrong answer for the other. DynamoDB Global Tables and DAX sit on opposite sides of that line, which is precisely why they appear together in so many practice questions.</p>
+        <p>The architectural problem Global Tables solves is that a single-region DynamoDB table forces every write from every continent through one region. You can put CloudFront or a read replica in front of reads, but writes still cross an ocean, and a regional failure takes the whole system down. Global Tables removes both constraints by making every participating region a first-class writer against a locally hosted replica, with asynchronous replication between them. The problem DAX solves is narrower and cheaper: a read-heavy workload where the same items are requested over and over, and the single-digit-millisecond latency of a DynamoDB GetItem is still too slow or too expensive at the request volume involved.</p>
+        <p>Both features map to Domain 2 (Design Resilient Architectures) and Domain 3 (Design High-Performing Architectures), with Global Tables leaning harder on the resilience side and DAX leaning harder on performance. The exam rarely asks "what is DAX" — it asks you to choose between DAX, ElastiCache, DynamoDB Accelerator, and application-level caching for a described workload, and the discriminator is almost always whether the workload needs the DynamoDB API surface, whether the data is hot and read-heavy, and whether the cache must be strongly consistent with the table. Getting those three questions right is most of the battle.</p>
+      </section>
+
+      <section class="doc-section" id="mechanism">
+        <h2 class="section-heading">2. How Global Tables and DAX Actually Work</h2>
+        <p>Global Tables is built on DynamoDB Streams. When you add a replica region to a table, DynamoDB creates a replica table in that region and establishes a bidirectional replication relationship between the two. Every write to any replica is captured by that replica's stream and applied to the other replicas asynchronously, typically within about a second. The replication is multi-active: there is no primary region and no failover step. A client in Frankfurt writes to the Frankfurt replica and reads from the Frankfurt replica, and the same is true for a client in Oregon. This is the property that makes Global Tables different from Aurora Global Database, where one region is the writer and the others are read-only until a promotion event.</p>
+        <p>Because writes can happen in two places at once, Global Tables needs a conflict resolution rule, and it uses last-writer-wins at the item level. Each write carries a timestamp, and when two replicas have divergent versions of the same item, the one with the later timestamp wins and is replicated to the other. The important detail is that the comparison is per item, not per attribute — a write that updates only the <code>status</code> attribute of an item will overwrite a concurrent write that updated only the <code>lastSeen</code> attribute of the same item, because the whole item is the unit of conflict resolution. This is why the standard guidance is to design for non-overlapping write sets, or to use a composite key that gives each writer its own item.</p>
+        <p>DAX works differently and much more simply. It is a cluster of cache nodes that speaks the DynamoDB API. Your application points its DynamoDB client at the DAX cluster endpoint instead of the regional DynamoDB endpoint, and DAX transparently handles the caching. On a read, DAX checks its in-memory cache; on a hit it returns the item without touching DynamoDB, and on a miss it reads from DynamoDB, populates the cache, and returns the item. On a write, DAX writes through to DynamoDB and updates or invalidates the cached copy. The application code does not change beyond the endpoint, which is the main reason DAX is attractive compared to bolting on ElastiCache — there is no cache-key design, no serialization layer, and no separate invalidation logic to write.</p>
+        <p>The consistency model is where DAX gets subtle. DAX supports eventually consistent reads by default, and it can also serve strongly consistent reads, but a strongly consistent read bypasses the cache entirely and goes to DynamoDB. That means the cache only ever holds eventually consistent data, and any read that requires strong consistency pays full DynamoDB latency. If your workload is dominated by strongly consistent reads, DAX will not help you, and that is a fact the exam likes to test.</p>
+      </section>
+
+      <section class="doc-section" id="decision-boundary">
+        <h2 class="section-heading">3. The Core Decision Boundary</h2>
+        <p>The fork that most scenario questions hinge on is whether the problem is about where the data lives or how fast it is read. Global Tables changes the topology of the data — it puts a writable copy in each region so that latency is local and a regional failure does not take the system down. DAX changes the read path — it puts a cache in front of a single table so that repeated reads of the same items are cheaper and faster. These are orthogonal concerns, and a workload can legitimately need both, neither, or exactly one. The exam's job is to make you pick the one that matches the stated constraint.</p>
+        <p>The second fork, which is easy to miss, is whether the workload can tolerate eventual consistency. Global Tables is inherently eventually consistent across regions — a write in Frankfurt is not visible in Oregon until replication completes, typically within a second but not guaranteed. DAX is eventually consistent by default and cannot cache strongly consistent reads. If the scenario says "the application must read its own writes immediately from any region," neither feature alone satisfies it, and the correct answer is usually to route that specific read to the region that performed the write, or to use a strongly consistent read that bypasses DAX.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Constraint in the scenario</th><th>Global Tables</th><th>DAX</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Users on multiple continents need low-latency writes</td><td>Yes — local write to the nearest replica</td><td>No — writes still go to the single table's region</td></tr>
+              <tr><td>Same items read thousands of times per second</td><td>No — replication does not reduce read cost</td><td>Yes — cache hit avoids the DynamoDB read entirely</td></tr>
+              <tr><td>Survive a full regional outage with no failover step</td><td>Yes — every region is already active</td><td>No — DAX is regional and does not replicate</td></tr>
+              <tr><td>Strongly consistent reads required</td><td>No — cross-region replication is async</td><td>No — strongly consistent reads bypass the cache</td></tr>
+              <tr><td>Application cannot be modified beyond the client endpoint</td><td>No — requires replica configuration and key review</td><td>Yes — DAX is API-compatible with DynamoDB</td></tr>
+              <tr><td>Cost is the primary constraint</td><td>No — you pay for storage and replicated write capacity in every region</td><td>Sometimes — DAX nodes cost money but can reduce read RCU spend</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The practical rule that falls out of this table is: if the scenario mentions geography, disaster recovery, or write latency across regions, think Global Tables. If it mentions hot items, read amplification, or microsecond latency on repeated reads, think DAX. If it mentions both, the answer is usually Global Tables plus DAX in each region, and the exam will expect you to say so without hesitation.</p>
+      </section>
+
+      <section class="doc-section" id="config-tradeoffs">
+        <h2 class="section-heading">4. Configuration Modes and Their Tradeoffs</h2>
+        <p>Global Tables has a small number of configuration decisions, but each one has a real cost. The first is which regions participate. Every replica region stores a full copy of the table's data and consumes write capacity units for replicated writes, so adding a region roughly multiplies your storage cost and adds to your write bill. The second is the capacity mode of each replica. A replica can be on-demand or provisioned, and the mode is set per replica, which means you can run the primary region provisioned with auto scaling and a low-traffic replica on-demand. The third is whether the table uses a version of Global Tables that requires you to enable DynamoDB Streams explicitly — the current version manages streams for you, but older tables and older exam questions sometimes assume you configure them by hand.</p>
+        <p>The most consequential configuration decision is not a setting at all; it is the partition key design. Because conflict resolution is last-writer-wins at the item level, a key that causes two regions to write the same item concurrently will silently lose one of those writes. The standard mitigation is to make the key region-scoped or writer-scoped — for example, a composite key of <code>userId</code> plus <code>region</code>, or an item-per-event model where each write creates a new item rather than updating an existing one. This is the same partitioning discipline from Day 24, now with a correctness consequence rather than just a throughput one.</p>
+        <p>DAX's configuration decisions are about cluster shape and consistency. A DAX cluster has one primary node and zero or more read replicas, and the primary handles both reads and writes while replicas handle reads. The cluster is placed in a VPC and accessed through a cluster endpoint, so the application must run inside the VPC or have connectivity to it. Node type determines memory and therefore how much of the working set fits in cache; if the hot set exceeds the cluster's memory, hit rate collapses and DAX becomes a latency tax rather than a benefit. TTL settings on the table interact with DAX as well — expired items are not served from cache, but the cache does not proactively evict them, so a read after expiry will miss and repopulate.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Knob</th><th>Option A</th><th>Option B</th><th>What it costs you</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Global Tables replica count</td><td>Two regions</td><td>Three or more regions</td><td>Storage and replicated write capacity scale with each added region</td></tr>
+              <tr><td>Replica capacity mode</td><td>On-demand</td><td>Provisioned with auto scaling</td><td>On-demand is simpler but more expensive at steady load</td></tr>
+              <tr><td>Conflict exposure</td><td>Region-scoped keys</td><td>Shared keys across regions</td><td>Shared keys risk silent last-writer-wins data loss</td></tr>
+              <tr><td>DAX cluster size</td><td>Single node</td><td>Primary plus replicas</td><td>Replicas add cost and read throughput but not write throughput</td></tr>
+              <tr><td>DAX read consistency</td><td>Eventually consistent (cached)</td><td>Strongly consistent (bypasses cache)</td><td>Strong reads get no latency benefit from DAX</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="doc-section" id="sizing-limits">
+        <h2 class="section-heading">5. Sizing, Limits and Quotas</h2>
+        <p>The numbers that matter for Global Tables are mostly about replication behavior rather than hard caps. Replication between regions is asynchronous and typically completes within about a second under normal conditions, but AWS does not offer a latency SLA on it, and the exam will not ask you to promise one. Each replica region must have enough write capacity to absorb the replicated writes in addition to its own local writes, which is why a table that is provisioned tightly in one region can throttle after you add a replica. The practical sizing move is to provision each replica for local writes plus replicated writes, or to use on-demand mode and let the table absorb the burst.</p>
+        <p>Global Tables requires that the table have a DynamoDB Streams-enabled configuration and that all replicas share the same key schema and the same set of global secondary indexes. You cannot add a GSI in one region and not another; the schema is replicated. Item size limits are unchanged from single-region DynamoDB — 400 KB per item — and the same applies to the replicated copy. There is no separate quota for the number of regions, but each region you add is a full copy of the data, so the storage cost is linear in the number of replicas.</p>
+        <p>DAX's sizing is dominated by memory. The cluster's total cache memory is the sum of the node memory across the cluster, and the working set that matters is the set of items that are read frequently enough to stay hot. If the hot set fits comfortably, hit rates in the high nineties are achievable; if it does not, the cache thrashes and you get the worst of both worlds — DAX latency plus DynamoDB latency on every miss. Node types range from small (a few gigabytes) to large (hundreds of gigabytes), and the cluster can be scaled by adding nodes, but the cache is not persistent across node replacement, so a node failure means a cold cache until it warms again. DAX also has a per-item size limit for cached items — items larger than the limit are not cached and always go to DynamoDB.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Dimension</th><th>Global Tables</th><th>DAX</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Replication latency</td><td>Typically under a second, no SLA</td><td>Not applicable — DAX is regional</td></tr>
+              <tr><td>Item size limit</td><td>400 KB (unchanged from DynamoDB)</td><td>Items above the cache limit are not cached</td></tr>
+              <tr><td>Schema constraints</td><td>Identical key schema and GSIs in every replica</td><td>None beyond DynamoDB's own</td></tr>
+              <tr><td>Capacity impact</td><td>Each replica consumes write capacity for replicated writes</td><td>Reduces read capacity consumption on cache hits</td></tr>
+              <tr><td>Scaling unit</td><td>Regions (each a full data copy)</td><td>Nodes (each adds memory and read throughput)</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="doc-section" id="failure-modes">
+        <h2 class="section-heading">6. Failure Modes and What They Look Like in Production</h2>
+        <p>The signature Global Tables failure is silent data loss from concurrent writes to the same item in different regions. There is no error, no exception, and no alarm — one write simply wins and the other is overwritten during replication. The symptom is a user reporting that an update they made "didn't save," usually in a pattern that correlates with two regions being active at the same time. The first diagnostic move is to look at the write pattern: are two regions writing the same item within the replication window? If so, the fix is a key redesign, not a configuration change. This is the failure mode that makes Global Tables dangerous for counters, balances, and any item that multiple regions update in place.</p>
+        <p>The second failure mode is replication lag under load. When a region is absorbing a large write burst, replication to other regions can fall behind, and reads in the remote region return stale data for longer than the usual sub-second window. The symptom is a read-after-write inconsistency that appears only during traffic spikes. CloudWatch exposes replication latency metrics per replica, and the first diagnostic move is to compare those metrics against the application's tolerance for staleness. If the application cannot tolerate the lag, the answer is usually to route the read to the region that performed the write rather than to try to tune replication.</p>
+        <p>DAX's signature failure is a cold cache after a node replacement or cluster restart. Because the cache is in memory and not persisted, a node failure means every subsequent read misses until the hot set is repopulated, and during that window the application sees DynamoDB latency plus the DAX hop. The symptom is a latency spike that correlates with a DAX node event rather than with DynamoDB throttling. The second DAX failure is a working set that exceeds cluster memory, which produces a persistently low hit rate and a latency profile that is worse than going straight to DynamoDB. The diagnostic is the cache hit rate metric; if it is not high, the cluster is undersized for the workload.</p>
+        <p>A third failure mode, shared by both features, is the assumption that they solve a problem they do not. Global Tables does not make a hot partition go away — it replicates the hot partition into every region. DAX does not make a write-heavy workload faster — writes still go to DynamoDB and still consume write capacity. Scenarios that describe a write-heavy workload with a hot key and expect either feature to fix it are testing whether you understand the boundary.</p>
+      </section>
+
+      <section class="doc-section" id="sre-angle">
+        <h2 class="section-heading">7. Operational and SRE Angle</h2>
+        <p>For Global Tables, the metrics that matter are replication latency per replica, the throttled-write counters in each region, and the consumed write capacity in each region relative to its provisioned capacity. The alarm shape is straightforward: alert when replication latency exceeds the application's staleness tolerance, and alert when any replica's write throttling is non-zero. The runbook for a replication lag alarm is to check whether the lagging region is under a write burst, whether its provisioned capacity is adequate for local plus replicated writes, and whether the application can be temporarily routed away from the lagging region for reads that require freshness.</p>
+        <p>For DAX, the metrics that matter are cache hit rate, cache evictions, and the latency of the DAX cluster itself. A hit rate that drops below the expected baseline is the leading indicator of a working-set problem, and it usually precedes a user-visible latency regression by enough time to react. The runbook for a hit-rate drop is to check whether the hot set has grown (a new feature reading a wider key range, a traffic shift), whether the cluster has lost a node, and whether the node type is still appropriate. Because DAX is regional, there is no cross-region failover story — the operational question is whether the cluster is healthy in its region, not whether it can survive losing one.</p>
+        <p>The SLO implication of Global Tables is that you cannot promise strong read-after-write consistency across regions, so any SLO that depends on it must be scoped to a single region. The SLO implication of DAX is that read latency SLOs are only achievable for the cached portion of the workload, so the SLO should be expressed against the hit-rate-adjusted latency rather than a flat number. Both features change what you can promise, and the operational discipline is to write the SLO against what the architecture actually delivers rather than what the marketing page implies.</p>
+      </section>
+
+      <section class="doc-section" id="gotchas">
+        <h2 class="section-heading">8. Edge Cases and Exam Gotchas</h2>
+        <p>The single most-tested gotcha is that Global Tables conflict resolution is last-writer-wins at the item level, not the attribute level. A question that describes two regions updating different attributes of the same item and asks what happens is testing exactly this. The answer is that one of the two writes is lost entirely, and the fix is a key design that prevents concurrent writes to the same item. A related gotcha is that the timestamp used for conflict resolution is generated by DynamoDB, not by the client, so clock skew on the application side does not affect the outcome — but it also means you cannot influence which write wins by adjusting client clocks.</p>
+        <p>The second gotcha is that DAX does not cache strongly consistent reads. A scenario that says "the application requires strongly consistent reads and low latency" is a trap: DAX cannot deliver both, because the strongly consistent read path bypasses the cache. The correct answer is usually to use DAX for the eventually consistent reads and accept DynamoDB latency for the strongly consistent ones, or to redesign the access pattern so that strong consistency is not required.</p>
+        <p>The third gotcha is that Global Tables is not a backup. Replication is bidirectional and near-real-time, so a bad write in one region propagates to every other region within about a second. If the scenario asks for protection against accidental deletion or corruption, the answer is point-in-time recovery or AWS Backup, not Global Tables. The fourth gotcha is that DAX is not a multi-region service — it is a regional cache in front of a regional table, and if the table is a Global Table, you need a DAX cluster in each region to get the latency benefit locally. The fifth is that DAX does not reduce write capacity consumption; writes still go to DynamoDB and still cost WCUs.</p>
+      </section>
+
+      <section class="doc-section" id="vs-comparison">
+        <h2 class="section-heading">9. This vs. the Services It Gets Confused With</h2>
+        <p>Global Tables is most often confused with Aurora Global Database and with DynamoDB backups. Aurora Global Database also provides cross-region replication, but it is single-writer — one region accepts writes and the others are read-only until a promotion, which takes on the order of a minute. Global Tables is multi-active, with every region accepting writes continuously and no promotion step. If the scenario says "writes must be accepted in every region simultaneously," the answer is Global Tables; if it says "a relational database with a standby region that can be promoted," the answer is Aurora Global Database. The confusion with backups is simpler: Global Tables replicates changes, including bad ones, so it is not a recovery mechanism.</p>
+        <p>DAX is most often confused with ElastiCache and with application-level caching. ElastiCache gives you a general-purpose cache that can hold anything, but it requires you to design cache keys, handle serialization, and write invalidation logic — and it does not speak the DynamoDB API. DAX is DynamoDB-specific and API-compatible, which means the application change is a single endpoint swap. The tradeoff is that DAX only caches DynamoDB items and only in the shape DynamoDB returns them, so it cannot cache computed results or joined data. If the scenario describes caching a DynamoDB item read, DAX is the lower-effort answer; if it describes caching a computed response or a cross-service aggregate, ElastiCache is the right tool.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Service</th><th>What it does</th><th>Pick it when…</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>DynamoDB Global Tables</td><td>Multi-active cross-region replication of a DynamoDB table</td><td>Writes must be accepted in multiple regions and the app must survive a regional outage</td></tr>
+              <tr><td>Aurora Global Database</td><td>Cross-region replication with a single writer region</td><td>The workload is relational and a promoted standby region is acceptable</td></tr>
+              <tr><td>DAX</td><td>In-memory, DynamoDB-API-compatible read cache</td><td>Hot items are read repeatedly and the app can tolerate eventual consistency</td></tr>
+              <tr><td>ElastiCache</td><td>General-purpose in-memory cache</td><td>You need to cache computed results, sessions, or non-DynamoDB data</td></tr>
+              <tr><td>DynamoDB point-in-time recovery</td><td>Continuous backup with restore to any point in the last 35 days</td><td>You need protection against bad writes or accidental deletion</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="doc-section" id="lab">
+        <h2 class="section-heading">Hands-on Lab: Two-Region Global Table with a DAX Read Cache (60 min)</h2>
+        <div class="card card-green">
+          <p>This lab builds a two-region Global Table, exercises the last-writer-wins conflict behavior deliberately, then adds a DAX cluster in one region and measures the read-latency difference. You will need two AWS regions, an IAM role with DynamoDB and DAX permissions, and a way to run a small script (CloudShell or a local machine with the AWS CLI and Python).</p>
+          <ol>
+            <li>In region A, create a DynamoDB table named <code>leaderboard</code> with a partition key <code>playerId</code> (string) and no sort key. Use on-demand capacity mode so you do not have to reason about capacity during the lab. Wait for the table to become active.</li>
+            <li>Enable DynamoDB Streams on the table with <code>NEW_AND_OLD_IMAGES</code>. Global Tables manages streams for you in the current version, but enabling them explicitly makes the replication mechanism visible and is a useful habit when reading older documentation.</li>
+            <li>Add a replica in region B. In the console this is the Global Tables tab; via the CLI it is <code>update-table --replication-group</code>. Wait until the replica status is active in both regions. Note that the table now exists in both regions with the same key schema.</li>
+            <li>Write a script that inserts a single item with <code>playerId = "p1"</code> and a <code>score</code> attribute, writing to region A. Then read the same item from region B and confirm it appears within a second or two. This is the replication path working as designed.</li>
+            <li>Now deliberately create a conflict. From two terminals, write to the same item in region A and region B within the same second, setting <code>score</code> to two different values. Wait five seconds, then read the item from both regions. Observe that both regions converge on one value and that the other write is gone. Record which value won and reason about why — the timestamp is generated by DynamoDB, so the outcome is not something you control from the client.</li>
+            <li>Redesign the key to avoid the conflict. Change the table to use a composite key of <code>playerId</code> (partition) and <code>region</code> (sort), or create a new table with that schema. Repeat the concurrent write from step 5, writing to different sort-key values in each region. Confirm that both writes survive and that each region can read both items. This is the key-design fix that the exam expects you to propose.</li>
+            <li>Create a DAX cluster in region A. Use a small node type, place it in the default VPC, and wait for it to become available. Note the cluster endpoint.</li>
+            <li>Modify your script to point the DynamoDB client at the DAX endpoint instead of the regional endpoint. Run a loop that reads the same item 1,000 times and record the average latency. Then run the same loop against the regional DynamoDB endpoint and compare. The DAX path should be measurably faster once the cache is warm.</li>
+            <li>Inspect the DAX cache hit rate metric in CloudWatch after the loop. Then run a loop that reads 10,000 distinct items once each and observe the hit rate collapse. This demonstrates the working-set sizing problem: DAX only helps when the same items are read repeatedly.</li>
+            <li>Finally, run a strongly consistent read through the DAX client and confirm that it returns the correct value but does not benefit from the cache. This is the consistency boundary from section 3, made concrete.</li>
+          </ol>
+          <p>Clean up by deleting the DAX cluster, then the replica, then the table. Leaving a Global Table running in two regions is a small but real ongoing cost, and the habit of tearing down lab resources is worth building now.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="quiz">
         <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
-        
-      <div class="scenario-card">
-        <p class="scenario-question"><strong>Q1.</strong> A gaming leaderboard needs microsecond read latency for the same items requested extremely frequently. What should sit in front of DynamoDB?</p>
-        <div class="scenario-options" id="opts-d25q0">
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q1.</strong> A gaming leaderboard needs microsecond read latency for the same items requested extremely frequently. What should sit in front of DynamoDB?</p>
+          <div class="scenario-options" id="opts-d25q1">
             <div class="scenario-option">A. ElastiCache for Redis, self-managed</div>
             <div class="scenario-option">B. Amazon DAX</div>
             <div class="scenario-option">C. CloudFront caching of API responses only</div>
             <div class="scenario-option">D. DynamoDB Accelerator is not a real service — use RDS instead</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d25q1', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d25q1"><strong>Correct answer: B.</strong> DAX is a managed, DynamoDB-API-compatible in-memory cache purpose-built to shave read latency for hot items without application-level cache logic.</div>
         </div>
-        <button class="scenario-reveal-btn" onclick="revealAnswer('d25q0', 1)">Reveal Answer</button>
-        <div class="scenario-explanation" id="exp-d25q0"><strong>Correct answer: B.</strong> DAX is a managed, DynamoDB-API-compatible in-memory cache purpose-built to shave read latency for hot items without application-level cache logic.</div>
-      </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q2.</strong> An application writes to a DynamoDB table in us-east-1 and us-west-2 simultaneously. Two regions update the same item within the same second, one changing <code>status</code> and the other changing <code>lastSeen</code>. What happens?</p>
+          <div class="scenario-options" id="opts-d25q2">
+            <div class="scenario-option">A. Both attribute changes are merged into the item</div>
+            <div class="scenario-option">B. One write wins and the other is lost, because conflict resolution is last-writer-wins at the item level</div>
+            <div class="scenario-option">C. DynamoDB raises a ConditionalCheckFailedException</div>
+            <div class="scenario-option">D. The item is duplicated in both regions</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d25q2', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d25q2"><strong>Correct answer: B.</strong> Global Tables resolves conflicts per item, not per attribute, so a concurrent write to a different attribute of the same item is still overwritten. The fix is a key design that prevents concurrent writes to the same item.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q3.</strong> A team wants a DynamoDB table that accepts writes in three regions with no failover step and survives the loss of any one region. Which feature provides this?</p>
+          <div class="scenario-options" id="opts-d25q3">
+            <div class="scenario-option">A. DynamoDB point-in-time recovery</div>
+            <div class="scenario-option">B. DynamoDB Global Tables</div>
+            <div class="scenario-option">C. DAX with a multi-region cluster</div>
+            <div class="scenario-option">D. DynamoDB Accelerator with cross-region replication</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d25q3', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d25q3"><strong>Correct answer: B.</strong> Global Tables is multi-active: every replica accepts writes and there is no promotion step. DAX is regional and does not replicate, and PITR is a backup feature, not a topology feature.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q4.</strong> A read-heavy application requires strongly consistent reads and low latency. The team proposes DAX. What is the problem?</p>
+          <div class="scenario-options" id="opts-d25q4">
+            <div class="scenario-option">A. DAX does not support strongly consistent reads at all and will return an error</div>
+            <div class="scenario-option">B. DAX supports strongly consistent reads, but they bypass the cache and go to DynamoDB, so there is no latency benefit</div>
+            <div class="scenario-option">C. DAX only works with provisioned capacity mode</div>
+            <div class="scenario-option">D. DAX requires a Global Table to function</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d25q4', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d25q4"><strong>Correct answer: B.</strong> DAX can serve strongly consistent reads, but it does so by bypassing the cache entirely, so the read pays full DynamoDB latency. DAX only accelerates eventually consistent reads.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q5.</strong> A Global Table is provisioned tightly in its primary region. After adding a second region, the primary region starts throttling writes even though local write volume has not changed. Why?</p>
+          <div class="scenario-options" id="opts-d25q5">
+            <div class="scenario-option">A. Global Tables disables auto scaling on the primary</div>
+            <div class="scenario-option">B. Replicated writes from the second region consume write capacity in the primary region</div>
+            <div class="scenario-option">C. The second region steals capacity from the first</div>
+            <div class="scenario-option">D. Global Tables requires on-demand mode</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d25q5', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d25q5"><strong>Correct answer: B.</strong> Each replica consumes write capacity for the writes replicated into it, so a tightly provisioned region can throttle once replication traffic is added. Provision each replica for local plus replicated writes, or use on-demand mode.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q6.</strong> A DAX cluster's cache hit rate has dropped from the high nineties to under 40% over the past week, and read latency has increased. What is the most likely cause?</p>
+          <div class="scenario-options" id="opts-d25q6">
+            <div class="scenario-option">A. The DynamoDB table was switched to on-demand mode</div>
+            <div class="scenario-option">B. The working set has grown beyond the cluster's memory, so the cache is thrashing</div>
+            <div class="scenario-option">C. DAX has been deprecated in favor of ElastiCache</div>
+            <div class="scenario-option">D. The table's partition key was changed</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d25q6', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d25q6"><strong>Correct answer: B.</strong> A collapsing hit rate with rising latency is the signature of a working set that no longer fits in cache memory. The fix is a larger node type or more nodes, or a redesign of the access pattern.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q7.</strong> A team needs protection against an application bug that deletes items from a DynamoDB table. They propose enabling Global Tables so a second region has a copy. Why is this wrong?</p>
+          <div class="scenario-options" id="opts-d25q7">
+            <div class="scenario-option">A. Global Tables does not replicate deletes</div>
+            <div class="scenario-option">B. Global Tables replicates changes bidirectionally and near-real-time, so the deletion propagates to the other region within about a second</div>
+            <div class="scenario-option">C. Global Tables only replicates writes, not deletes, so the second region is safe</div>
+            <div class="scenario-option">D. Global Tables requires a backup vault to be configured first</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d25q7', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d25q7"><strong>Correct answer: B.</strong> Global Tables is a replication topology, not a backup. Bad writes and deletes propagate. The correct answer for protection against accidental deletion is point-in-time recovery or AWS Backup.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q8.</strong> An application runs in three regions against a Global Table and needs local read latency in each. The team has deployed a DAX cluster in one region only. What is the gap?</p>
+          <div class="scenario-options" id="opts-d25q8">
+            <div class="scenario-option">A. DAX clusters replicate automatically across regions, so no gap exists</div>
+            <div class="scenario-option">B. DAX is regional, so each region needs its own DAX cluster to get the local cache benefit</div>
+            <div class="scenario-option">C. DAX cannot be used with Global Tables at all</div>
+            <div class="scenario-option">D. DAX only works in the table's primary region</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d25q8', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d25q8"><strong>Correct answer: B.</strong> DAX is a regional service with no cross-region replication. To get cached read latency in each region, you deploy a DAX cluster in each region in front of that region's replica.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q9.</strong> A workload writes 5,000 items per second and reads each item once. The team proposes DAX to reduce DynamoDB read cost. What is the flaw in this plan?</p>
+          <div class="scenario-options" id="opts-d25q9">
+            <div class="scenario-option">A. DAX cannot handle 5,000 writes per second</div>
+            <div class="scenario-option">B. DAX only helps when items are read repeatedly; a read-once workload gets no cache hits and pays the DAX hop on every read</div>
+            <div class="scenario-option">C. DAX does not support write operations</div>
+            <div class="scenario-option">D. DAX requires a Global Table to be enabled first</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d25q9', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d25q9"><strong>Correct answer: B.</strong> DAX is a cache, and a cache only pays off when the same items are requested more than once. A read-once workload produces no hits and adds latency without reducing DynamoDB reads.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q10.</strong> A Global Table's replication latency metric spikes to several seconds during a traffic burst in one region. Reads in the other region return stale data. What is the first diagnostic move?</p>
+          <div class="scenario-options" id="opts-d25q10">
+            <div class="scenario-option">A. Delete and recreate the replica</div>
+            <div class="scenario-option">B. Check whether the lagging region is under a write burst and whether its provisioned capacity is adequate for local plus replicated writes</div>
+            <div class="scenario-option">C. Switch the table to on-demand mode immediately</div>
+            <div class="scenario-option">D. Disable Global Tables and use a single region</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d25q10', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d25q10"><strong>Correct answer: B.</strong> Replication lag under load usually means the receiving region cannot absorb the replicated writes fast enough. Check its capacity and write throttling before changing topology.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q11.</strong> Which statement about Global Tables and DynamoDB Streams is correct?</p>
+          <div class="scenario-options" id="opts-d25q11">
+            <div class="scenario-option">A. Global Tables does not use streams; it uses a proprietary replication protocol</div>
+            <div class="scenario-option">B. Global Tables is built on DynamoDB Streams, which capture writes in each replica and apply them to the others</div>
+            <div class="scenario-option">C. Streams must be disabled before enabling Global Tables</div>
+            <div class="scenario-option">D. Streams only work in the primary region</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d25q11', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d25q11"><strong>Correct answer: B.</strong> Global Tables uses DynamoDB Streams as the replication mechanism. The current version manages stream configuration for you, but the underlying mechanism is streams.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q12.</strong> A team wants to cache computed API responses that aggregate data from DynamoDB and two other services. They propose DAX. What is the correct recommendation?</p>
+          <div class="scenario-options" id="opts-d25q12">
+            <div class="scenario-option">A. DAX is the right choice because it is DynamoDB-native</div>
+            <div class="scenario-option">B. DAX only caches DynamoDB items in the shape DynamoDB returns them; use ElastiCache for computed or cross-service aggregates</div>
+            <div class="scenario-option">C. DAX can cache any JSON payload if you configure a custom serializer</div>
+            <div class="scenario-option">D. DAX and ElastiCache are interchangeable for this use case</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d25q12', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d25q12"><strong>Correct answer: B.</strong> DAX is DynamoDB-specific and caches items, not arbitrary payloads. Computed responses and cross-service aggregates belong in a general-purpose cache like ElastiCache.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q13.</strong> A Global Table has a global secondary index in the primary region. What must be true of the replica regions?</p>
+          <div class="scenario-options" id="opts-d25q13">
+            <div class="scenario-option">A. They can have a different set of GSIs to save cost</div>
+            <div class="scenario-option">B. They must have the same key schema and the same set of GSIs as the primary</div>
+            <div class="scenario-option">C. GSIs are not replicated and must be created manually in each region</div>
+            <div class="scenario-option">D. GSIs are only supported in on-demand mode</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d25q13', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d25q13"><strong>Correct answer: B.</strong> Global Tables requires identical key schema and GSI definitions across all replicas. The schema is part of what is replicated.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q14.</strong> A DAX cluster loses a node and is replaced. Users report a latency spike for several minutes afterward. What explains this?</p>
+          <div class="scenario-options" id="opts-d25q14">
+            <div class="scenario-option">A. DAX persists its cache to disk, so the spike is unrelated</div>
+            <div class="scenario-option">B. The cache is in memory and not persisted, so the replacement node starts cold and every read misses until the hot set is repopulated</div>
+            <div class="scenario-option">C. DAX requires a manual cache warm-up after any node event</div>
+            <div class="scenario-option">D. The spike is caused by DynamoDB throttling, not DAX</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d25q14', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d25q14"><strong>Correct answer: B.</strong> DAX caches in memory only. A replaced node starts empty, so reads miss until the working set is read again and repopulated.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q15.</strong> A scenario describes a write-heavy workload with a hot partition key and asks whether Global Tables or DAX will fix the throttling. What is the correct answer?</p>
+          <div class="scenario-options" id="opts-d25q15">
+            <div class="scenario-option">A. Global Tables fixes it by spreading writes across regions</div>
+            <div class="scenario-option">B. DAX fixes it by caching the hot items</div>
+            <div class="scenario-option">C. Neither fixes it — Global Tables replicates the hot partition into every region and DAX does not accelerate writes; the fix is a partition key redesign</div>
+            <div class="scenario-option">D. Both together fix it</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d25q15', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d25q15"><strong>Correct answer: C.</strong> Hot-partition throttling is a key-design problem. Global Tables replicates the hot partition rather than spreading it, and DAX does not touch the write path. The fix is a higher-cardinality or composite partition key.</div>
+        </div>
+      </section>
+
+      <section class="doc-section" id="preview">
+        <h2 class="section-heading">Peek into Tomorrow</h2>
+        <div class="card card-purple">
+          <p>Everything covered here assumed that the data itself is the thing being replicated and cached — items in a table, moved between regions, held in memory. But a large fraction of the data an AWS application actually stores is not in a database at all. It is in S3: logs, backups, media, model artifacts, data-lake files, and the long tail of objects that are written once and read rarely or never. That data has the same cost-versus-latency tension we have been working with all week, but S3 exposes it as a much wider set of explicit choices rather than a single capacity mode.</p>
+          <p>The open question today leaves unresolved is what happens when the access pattern of an object is not known in advance. DynamoDB's on-demand mode is a single toggle that absorbs unpredictability, but S3 has no equivalent single answer — it has a ladder of storage classes from Standard down to Glacier Deep Archive, each with its own retrieval latency and availability characteristics, and a lifecycle rule engine that moves objects between them on a schedule. The interesting design problem is whether you can express an unknown access pattern as a lifecycle policy, or whether you need Intelligent-Tiering to make the decision per object. Tomorrow's material on lifecycle transition rules and CRR versus SRR is where that question gets answered.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="sources">
+        <h2 class="section-heading">Sources</h2>
+        <div class="card">
+          <ul class="source-list">
+            <li><a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/GlobalTables.html" target="_blank" rel="noopener">Amazon DynamoDB Developer Guide — Global Tables</a></li>
+            <li><a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/V2globaltables_HowItWorks.html" target="_blank" rel="noopener">DynamoDB Developer Guide — How Global Tables Works (conflict resolution)</a></li>
+            <li><a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/DAX.html" target="_blank" rel="noopener">DynamoDB Developer Guide — DynamoDB Accelerator (DAX)</a></li>
+            <li><a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/DAX.concepts.html" target="_blank" rel="noopener">DynamoDB Developer Guide — DAX Concepts and Cluster Architecture</a></li>
+            <li><a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/DAX.consistency.html" target="_blank" rel="noopener">DynamoDB Developer Guide — DAX and Read Consistency</a></li>
+            <li><a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/ServiceQuotas.html" target="_blank" rel="noopener">DynamoDB Developer Guide — Service Quotas</a></li>
+            <li><a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/PointInTimeRecovery.html" target="_blank" rel="noopener">DynamoDB Developer Guide — Point-in-Time Recovery</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/aws-services-cloudwatch-metrics.html" target="_blank" rel="noopener">Amazon CloudWatch — Metrics Reference for DynamoDB and DAX</a></li>
+            <li><a href="https://aws.amazon.com/blogs/database/how-to-use-amazon-dynamodb-global-tables-for-multi-region-active-active-applications/" target="_blank" rel="noopener">AWS Database Blog — Multi-Region Active-Active Applications with Global Tables</a></li>
+          </ul>
+        </div>
       </section>
       <div class="day-nav">
         <a href="day-024.html">&larr; Day 24: Amazon DynamoDB Deep Dive — Partitioning &amp; Capacity Modes</a>

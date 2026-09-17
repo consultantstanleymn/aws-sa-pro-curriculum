@@ -104,7 +104,7 @@
         <span class="pill pill-green">Phase 1: Multi-Account Governance &amp; Networking</span>
       </div>
       <h1 class="hero-title">Direct Connect (DX) &amp; DX Gateway</h1>
-      <div class="reading-meta">&#128337; ~3 min read &middot; 4 services covered</div>
+      <div class="reading-meta">&#128337; ~58 min read &middot; 4 services covered</div>
       <div class="services-grid">
         <span class="service-tag">Direct Connect</span>
         <span class="service-tag">Private VIF</span>
@@ -112,30 +112,348 @@
         <span class="service-tag">BGP</span>
       </div>
       <div id="tracker"></div>
-      <section class="doc-section">
-        <h2 class="section-heading">Today's Concept</h2>
+
+      <section class="doc-section" id="recap">
+        <h2 class="section-heading">Recap: From Inspection VPC to Private Wire</h2>
         <div class="card card-accent">
-          <p>Direct Connect provides a dedicated private network connection into AWS, using Private VIFs for single-VPC access, Transit VIFs for connecting to a Transit Gateway (and many VPCs), and Public VIFs for public AWS service endpoints. Resilience requires redundant connections/locations with BGP failover, not a single link.</p>
-        </div>
-        <h3 class="sub-heading">Hands-on Lab / Practical Action (45 min)</h3>
-        <div class="card">
-          <p>Design a redundant Direct Connect architecture using two connections at different DX locations with active/passive BGP path preference (AS PATH prepending or local preference).</p>
+          <p>Day 10 put a centralized inspection VPC in the middle of the network, with AWS Network Firewall applying Suricata-compatible rules to traffic that the Transit Gateway steered into it. That design assumed the traffic was already inside AWS, or arriving over the public internet through a VPN. The appliance VPC pattern and its egress routing via TGW solved the question of <em>where</em> inspection happens, but it left the question of <em>how packets get into AWS in the first place</em> largely untouched.</p>
+          <p>Today extends that architecture one layer outward. Direct Connect replaces the internet path with a dedicated private circuit from a customer router into an AWS Direct Connect location, and the VIF types determine whether that circuit lands on a single VPC, on a Transit Gateway, or on AWS public service endpoints. The inspection VPC from yesterday does not go away — it becomes the enforcement point for traffic that arrives over the new private path. The same TGW route tables that steered traffic into the firewall now also carry the DX attachment, which means the segmentation decisions from Day 8 and the inspection decisions from Day 10 both apply to the circuit we are about to design.</p>
         </div>
       </section>
-      <section class="doc-section">
+
+      <section class="doc-section" id="why-on-exam">
+        <h2 class="section-heading">1. Why Direct Connect Is on the Exam</h2>
+        <p>Direct Connect shows up on SAP-C02 for one reason: it is the only AWS connectivity option that removes the public internet from the path entirely, and almost every hybrid scenario in the exam is really a question about whether the public internet is acceptable. When a scenario says "regulatory requirement that traffic never traverse the public internet," or "consistent latency and jitter for a latency-sensitive trading system," or "predictable bandwidth for nightly bulk transfers that saturate a VPN," the answer is Direct Connect. When a scenario says "fastest to deploy," "lowest cost for occasional use," or "we need connectivity this week," the answer is a Site-to-Site VPN, and the exam is testing whether you can tell those two apart.</p>
+        <p>The service maps most directly to Domain 1 (Design Solutions for Organizational Complexity) in the SAP-C02 blueprint, specifically the hybrid connectivity and multi-account networking objectives. It also bleeds into Domain 2 (Design for New Solutions) whenever a scenario asks you to design a network that spans on-premises and multiple AWS accounts, and into Domain 4 (Accelerate Workload Migration and Modernization) because large migrations frequently depend on DX capacity to move data. The exam rarely asks "what is a VIF" in isolation. It asks you to choose between Private VIF, Transit VIF, and Public VIF given a described topology, and it asks you to evaluate whether a proposed DX design is actually resilient or merely redundant-looking.</p>
+        <p>The trap that catches most candidates is treating Direct Connect as a single product with a single behavior. It is really three products sharing a physical circuit: a layer-2 private connection to a VPC, a layer-3 connection to a Transit Gateway, and a path to AWS public endpoints. Each has different routing behavior, different limits, and different failure modes. A design that is correct for a Private VIF can be wrong for a Transit VIF, and the exam knows it.</p>
+      </section>
+
+      <section class="doc-section" id="mechanism">
+        <h2 class="section-heading">2. How Direct Connect Actually Works</h2>
+        <p>A Direct Connect connection is a physical cross-connect between a customer-owned router in a colocation facility and an AWS-owned router in the same facility. That physical layer is the part people forget: DX is not a service you configure in the console and forget. You either provision a dedicated connection (a port you lease from AWS, available in 1 Gbps, 10 Gbps, and 100 Gbps capacities) or you buy a hosted connection through an AWS Direct Connect Partner, who resells capacity on their own port in sub-1 Gbps increments. In both cases, the customer is responsible for the router on their side of the cross-connect, and AWS is responsible for the router on theirs.</p>
+        <p>Once the physical link is up, the two routers establish a BGP session. This is the control plane that makes DX interesting. AWS advertises the prefixes it wants you to reach — the VPC CIDRs attached to your Private VIF, the TGW-attached routes for a Transit VIF, or the AWS public service prefixes for a Public VIF — and you advertise the on-premises prefixes you want AWS to reach. The BGP session is where path selection happens, which is why every resilience question about DX eventually becomes a BGP question. If you have two circuits and both advertise the same prefixes with the same AS path length, you get equal-cost multipath and traffic splits across both. If you want active/passive, you manipulate the BGP attributes so one path is preferred.</p>
+        <p>The VIF is the logical interface that sits on top of the physical connection and the BGP session. A single dedicated connection can host multiple VIFs, and each VIF is a separate VLAN with its own BGP session and its own set of advertised prefixes. This is the mechanism that lets one physical circuit serve a Private VIF to a VPC, a Transit VIF to a TGW, and a Public VIF to S3 simultaneously. The VLAN ID is how AWS demultiplexes the traffic on the shared physical link. From the customer router's perspective, each VIF looks like a separate point-to-point link with its own neighbor IP.</p>
+        <p>The last piece is the Direct Connect Gateway, which is the construct that lets a single VIF reach resources in multiple AWS accounts and multiple regions. Without a DX Gateway, a Private VIF can only attach to a VPC in the same region and the same account as the connection. With a DX Gateway, you associate the gateway with VPCs in other accounts via a VPC association, and you associate the gateway with a Transit Gateway via a Transit Gateway association. The DX Gateway itself is a global resource — it is not regional — which is why it can bridge a us-east-1 connection to a us-west-2 VPC. This is the mechanism that makes DX viable for a multi-account landing zone, and it is the piece most candidates under-specify on the exam.</p>
+      </section>
+
+      <section class="doc-section" id="decision-boundary">
+        <h2 class="section-heading">3. The Core Decision Boundary: Which VIF Type</h2>
+        <p>Every Direct Connect scenario question reduces to a single fork: what does the customer need to reach, and how many things do they need to reach? If the answer is "one VPC in one account," a Private VIF is sufficient and simplest. If the answer is "many VPCs across many accounts, or a Transit Gateway that already aggregates them," a Transit VIF is the right choice. If the answer is "AWS public service endpoints like S3, DynamoDB, or the AWS APIs themselves, without going over the internet," a Public VIF is the answer. The exam will describe a topology and expect you to pick the VIF type that matches, and it will often include a distractor that is technically possible but operationally wrong.</p>
+        <p>The subtlety is that these are not mutually exclusive. A single dedicated connection can carry all three VIF types at once, and a mature enterprise design often does exactly that: a Transit VIF for VPC-to-VPC and VPC-to-on-prem traffic, a Public VIF for S3 and other public endpoints, and occasionally a Private VIF for a legacy VPC that predates the TGW. The exam question is usually not "which one" but "which combination," and the answer depends on whether the customer has already standardized on a Transit Gateway.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>VIF type</th><th>Reaches</th><th>Requires</th><th>Typical use</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Private VIF</td><td>A single VPC (or multiple VPCs via a DX Gateway)</td><td>Virtual private gateway or DX Gateway on the VPC side</td><td>Single-VPC hybrid access, legacy designs</td></tr>
+              <tr><td>Transit VIF</td><td>A Transit Gateway, and through it many VPCs and on-prem networks</td><td>DX Gateway associated with a TGW</td><td>Hub-and-spoke hybrid, multi-account landing zones</td></tr>
+              <tr><td>Public VIF</td><td>AWS public service endpoints (S3, DynamoDB, AWS APIs)</td><td>Public ASN and public IP space on the customer side</td><td>Private access to S3 without internet or NAT</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The decision boundary that matters most on the exam is Private VIF versus Transit VIF. A Private VIF attaches to a virtual private gateway (VGW) on a single VPC, or to a DX Gateway that can associate with up to 20 VPCs. A Transit VIF attaches to a DX Gateway that is associated with a Transit Gateway, and the TGW can then route to any number of VPCs and to other attachments. If the scenario mentions a Transit Gateway anywhere in the existing architecture, the answer is almost always a Transit VIF, because adding a Private VIF alongside an existing TGW creates a parallel routing path that is harder to reason about and harder to segment.</p>
+      </section>
+
+      <section class="doc-section" id="config-tradeoffs">
+        <h2 class="section-heading">4. Configuration Modes and Their Tradeoffs</h2>
+        <p>The first configuration decision is dedicated versus hosted. A dedicated connection gives you a port that only you use, with a fixed capacity of 1, 10, or 100 Gbps, and it takes weeks to provision because it involves a physical cross-connect at the DX location. A hosted connection is provisioned through a partner and can be as small as 50 Mbps, which makes it the right choice for a branch office or a proof of concept. The tradeoff is control: with a hosted connection you are sharing the partner's port, and your ability to troubleshoot at layer 1 is limited because you do not own the router on the far side of the cross-connect.</p>
+        <p>The second decision is the resiliency model, and this is where the exam spends most of its time. AWS publishes a set of resiliency models that range from a single connection (no redundancy, not recommended for production) through dual connections at the same location (redundant hardware but a shared facility, so a location-level failure takes both down) to dual connections at two different locations (the recommended production baseline). The highest tier adds a VPN backup over the internet, so that if both DX paths fail simultaneously — which is rare but has happened — traffic can still reach AWS. The exam will describe a workload's criticality and expect you to match it to the right tier.</p>
+        <p>The third decision is how to make one path preferred over the other when both are up. BGP gives you two standard tools. AS path prepending makes a path look longer by repeating your ASN in the AS path, which causes the remote router to prefer the other path. Local preference is a higher-priority attribute that is exchanged within an AS, so it is the right tool when you control both ends of the decision. In practice, most designs use AS path prepending on the standby path because it is simpler to reason about and does not require coordination with AWS. The exam will sometimes describe a design where both paths are active and traffic is splitting, and ask how to make one preferred — the answer is one of these two attributes.</p>
+        <p>The fourth decision is whether to use a DX Gateway. If the customer has a single VPC and a single account, a VGW is sufficient and a DX Gateway adds unnecessary complexity. If the customer has multiple accounts or multiple regions, the DX Gateway is what makes the design scale, because it decouples the connection from the VPC and lets you associate new VPCs without touching the physical circuit. The exam will often describe a multi-account landing zone and expect you to name the DX Gateway as the mechanism that lets one connection serve all of them.</p>
+      </section>
+
+      <section class="doc-section" id="sizing-limits">
+        <h2 class="section-heading">5. Sizing, Limits, and Quotas</h2>
+        <p>The numbers that matter for DX are the port capacities, the VIF limits, and the DX Gateway association limits. Dedicated connection capacities are 1 Gbps, 10 Gbps, and 100 Gbps. Hosted connection capacities range from 50 Mbps up to 10 Gbps depending on the partner. A single dedicated connection can host up to 50 VIFs, though in practice most designs use far fewer. A DX Gateway can be associated with up to 10 Transit Gateways and up to 20 virtual private gateways, and a Transit Gateway can be associated with up to 20 DX Gateways. These numbers are the ones the exam is most likely to test, because they determine whether a proposed design actually scales.</p>
+        <p>Link Aggregation Groups (LAGs) are the mechanism for bundling multiple connections into a single logical link. A LAG can contain up to four connections, and all connections in a LAG must be the same speed and terminate at the same DX location. The LAG presents a single BGP session to the customer, which simplifies routing but also means that a LAG is not a resiliency mechanism — it is a capacity mechanism. If the DX location fails, every connection in the LAG fails together. This is a common exam trap: a scenario describes a LAG and asks whether it provides redundancy, and the correct answer is no, because all members share a location.</p>
+        <p>The MTU on a Direct Connect connection is 1500 bytes by default, and jumbo frames (9001 bytes) are supported on dedicated connections and on some hosted connections. This matters for workloads that transfer large files or that use protocols sensitive to fragmentation. The exam occasionally includes an MTU detail in a scenario about performance, and the correct answer is usually to enable jumbo frames on both ends rather than to change the instance type.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Limit</th><th>Value</th><th>Why it matters</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Dedicated port speeds</td><td>1, 10, 100 Gbps</td><td>Determines maximum throughput per circuit</td></tr>
+              <tr><td>Hosted port speeds</td><td>50 Mbps – 10 Gbps</td><td>Sub-1 Gbps options for branches and POCs</td></tr>
+              <tr><td>VIFs per connection</td><td>50</td><td>How many logical interfaces one circuit can carry</td></tr>
+              <tr><td>LAG members</td><td>4</td><td>Capacity aggregation, not redundancy</td></tr>
+              <tr><td>DX Gateway → TGW associations</td><td>10</td><td>How many TGWs one gateway can serve</td></tr>
+              <tr><td>DX Gateway → VGW associations</td><td>20</td><td>How many VPCs one gateway can serve directly</td></tr>
+              <tr><td>Default MTU</td><td>1500 bytes</td><td>Jumbo frames (9001) available on dedicated</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="doc-section" id="failure-modes">
+        <h2 class="section-heading">6. Failure Modes and What They Look Like in Production</h2>
+        <p>The most common DX failure is a BGP session flap, and it usually presents as intermittent packet loss rather than a clean outage. The symptom is that some traffic reaches AWS and some does not, because the BGP session is oscillating and the routing table is changing underneath the application. The first diagnostic move is to check the BGP session state on the customer router and on the AWS side via the Direct Connect console, then look at the CloudWatch metrics for the connection. If the session is flapping, the cause is usually a physical layer problem (a failing optic, a dirty fiber connector) or a BGP timer mismatch, not a configuration error.</p>
+        <p>The second failure mode is a single-connection outage, which is what happens when a customer has only one DX circuit and that circuit goes down. The symptom is a total loss of hybrid connectivity, and the recovery time depends entirely on whether a VPN backup exists. Without a backup, the customer is waiting for the physical circuit to be repaired, which can take hours or days. With a backup, the VPN takes over within minutes, but the bandwidth and latency characteristics change dramatically, which can break applications that were tuned for the DX path. This is why the exam emphasizes that a VPN backup is not a substitute for a second DX connection — it is a last-resort fallback.</p>
+        <p>The third failure mode is a DX location outage, which takes down every connection terminating at that location. This is the failure that a LAG does not protect against, and it is the reason the recommended production design uses two connections at two different locations. The symptom is that both circuits go down simultaneously, which is confusing if the operator assumed the two circuits were independent. The first diagnostic move is to check whether both connections share a location, which is visible in the Direct Connect console and in the connection ARNs.</p>
+        <p>The fourth failure mode is a routing misconfiguration, which is the most insidious because the physical layer is healthy and the BGP session is up. The symptom is that traffic reaches AWS but takes the wrong path — for example, on-prem traffic to a VPC goes over the VPN instead of the DX circuit because the BGP attributes are wrong. The first diagnostic move is to look at the effective routes on the customer router and on the AWS side, and to compare the AS path lengths. This is where AS path prepending mistakes show up: a prepend applied to the wrong path makes the backup path preferred, which is the opposite of the intent.</p>
+      </section>
+
+      <section class="doc-section" id="sre-angle">
+        <h2 class="section-heading">7. The Operational and SRE Angle</h2>
+        <p>Direct Connect is one of the few AWS services where the customer owns part of the physical infrastructure, which means the operational model is different from a fully managed service. The customer is responsible for the router, the cross-connect, and the BGP configuration on their side. AWS is responsible for the port on their side and for the DX location. This split means that a DX incident often requires a support case with both AWS and the colocation provider, and the runbook needs to reflect that. The first step in any DX runbook is to determine which side of the cross-connect the problem is on, because that determines who gets paged.</p>
+        <p>The metrics that matter for DX monitoring are the connection state, the BGP session state, the light levels on the optic, and the throughput on each VIF. CloudWatch exposes connection-level metrics, and the customer router exposes the BGP and interface metrics. The SLO implication is that DX availability is a shared responsibility: AWS publishes a service level agreement for the connection itself, but the end-to-end availability of the hybrid path depends on the customer's router and the colocation facility. A realistic SLO for a hybrid path is therefore lower than the SLO for a purely in-AWS path, and the exam sometimes tests whether you understand that distinction.</p>
+        <p>The runbook shape for a DX incident is: confirm the scope (one VIF, one connection, or one location), check the BGP session state on both sides, check the physical layer metrics, and then decide whether to fail over to the backup path. The failover decision is usually automated via BGP, but the runbook should still document the manual steps in case the automation fails. The post-incident review should capture whether the failure was within the expected failure domain — a single connection failing is expected and should be transparent; a location failing is expected and should be covered by the second location; a BGP misconfiguration is not expected and should drive a configuration change.</p>
+      </section>
+
+      <section class="doc-section" id="gotchas">
+        <h2 class="section-heading">8. Edge Cases and Exam Gotchas</h2>
+        <p>The first gotcha is that a LAG is not redundant. The exam will describe a customer with four connections in a LAG and ask whether the design is resilient, and the correct answer is no, because all four connections terminate at the same DX location. The second gotcha is that a VPN backup is not a substitute for a second DX connection. The exam will describe a customer with one DX connection and a VPN backup and ask whether the design meets a high-availability requirement, and the correct answer depends on the stated RTO — a VPN backup is acceptable for a moderate RTO but not for a mission-critical one.</p>
+        <p>The third gotcha is that a Private VIF cannot reach a VPC in another region without a DX Gateway. The exam will describe a customer with a DX connection in us-east-1 and a VPC in us-west-2 and ask how to connect them, and the correct answer is a DX Gateway, not a second connection. The fourth gotcha is that a Public VIF requires public IP space and a public ASN on the customer side, which many customers do not have. The exam will describe a customer that wants private access to S3 and ask what they need, and the correct answer includes the public IP and ASN requirement, not just the VIF.</p>
+        <p>The fifth gotcha is that the DX Gateway is a global resource, not a regional one. The exam will describe a customer with connections in two regions and ask how many DX Gateways they need, and the correct answer is one, because a single DX Gateway can be associated with connections in multiple regions. The sixth gotcha is that a Transit VIF requires a DX Gateway associated with a Transit Gateway, and the TGW must have the appropriate route tables configured. The exam will describe a customer with a Transit VIF and a TGW and ask why traffic is not reaching a specific VPC, and the correct answer is usually a missing TGW route table association or propagation.</p>
+        <p>The seventh gotcha is that the BGP ASN on the customer side must be a public ASN if the customer wants to use a Public VIF, but can be a private ASN for Private and Transit VIFs. The exam will describe a customer with a private ASN and ask whether they can use a Public VIF, and the correct answer is no. The eighth gotcha is that the DX connection itself does not encrypt traffic. The exam will describe a customer with a regulatory requirement for encryption in transit and ask whether DX satisfies it, and the correct answer is no — DX is private but not encrypted, and the customer must add MACsec or a VPN on top of DX if encryption is required.</p>
+      </section>
+
+      <section class="doc-section" id="vs-comparison">
+        <h2 class="section-heading">9. Direct Connect vs. the Alternatives</h2>
+        <p>The comparison the exam cares about most is Direct Connect versus Site-to-Site VPN. Both provide hybrid connectivity, but they differ on every axis that matters: DX is private, consistent, and expensive with a long lead time; VPN is public, variable, cheap, and fast to deploy. The exam will describe a scenario and expect you to pick the one that matches the constraints, and the most common correct answer is a combination — DX for the primary path and VPN for the backup. The second comparison is DX versus Transit Gateway, which is not really a comparison because they solve different problems: DX is the physical path into AWS, and TGW is the routing fabric inside AWS. A mature design uses both, with a Transit VIF connecting the DX circuit to the TGW.</p>
+        <p>The third comparison is DX versus PrivateLink, which is also not a direct comparison but shows up in exam scenarios about cross-account access. DX connects a customer network to AWS; PrivateLink exposes a specific service to a specific consumer. If the scenario is about a customer's data center reaching AWS, the answer is DX. If the scenario is about one AWS account consuming a service in another AWS account, the answer is PrivateLink. The fourth comparison is DX versus AWS VPN CloudHub, which is a hub-and-spoke VPN topology for connecting multiple branch offices. CloudHub is the right answer when the customer has many small sites and no dedicated circuits; DX is the right answer when the customer has a small number of large sites and needs consistent performance.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Option</th><th>Path</th><th>Lead time</th><th>Pick it when…</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Direct Connect</td><td>Private, dedicated</td><td>Weeks</td><td>Consistent latency, high bandwidth, regulatory privacy</td></tr>
+              <tr><td>Site-to-Site VPN</td><td>Public internet, encrypted</td><td>Minutes</td><td>Fast deployment, low cost, backup path</td></tr>
+              <tr><td>Transit Gateway</td><td>Inside AWS</td><td>Minutes</td><td>Routing between many VPCs and on-prem</td></tr>
+              <tr><td>PrivateLink</td><td>Inside AWS, service-level</td><td>Minutes</td><td>Exposing one service to one consumer, CIDR overlap</td></tr>
+              <tr><td>VPN CloudHub</td><td>Public internet, hub-and-spoke</td><td>Minutes</td><td>Many small branch sites, no dedicated circuits</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The rule of thumb to carry into the exam: if the scenario mentions a physical data center, a regulatory requirement, or a latency-sensitive workload, start with Direct Connect. If it mentions a deadline measured in days, a small branch office, or a proof of concept, start with VPN. If it mentions many VPCs or many accounts, add a Transit Gateway and use a Transit VIF. If it mentions a single service being consumed across accounts, use PrivateLink instead. The exam rarely asks for a single service in isolation; it asks for the combination that satisfies all the stated constraints, and the combination is usually DX plus TGW plus a VPN backup.</p>
+      </section>
+
+      <section class="doc-section" id="lab">
+        <h2 class="section-heading">Hands-on Lab: Designing a Redundant DX Architecture (45 min)</h2>
+        <div class="card card-green">
+          <p>This lab walks through the design of a redundant Direct Connect architecture for a fictional enterprise, using two connections at two different DX locations with active/passive BGP path preference. The goal is not to provision real hardware — that would take weeks — but to produce the design artifacts that a real DX deployment requires: the topology diagram, the BGP configuration, the failover test plan, and the runbook. Work through the steps in order and document each decision.</p>
+          <p><strong>Step 1 — Define the requirements.</strong> Assume the enterprise has a primary data center in Ashburn, Virginia, and a secondary data center in Columbus, Ohio. The workload is a financial trading application that requires consistent sub-10ms latency to us-east-1 and cannot tolerate more than 5 minutes of downtime. The compliance team requires that traffic never traverse the public internet. Write down the RTO (5 minutes), the RPO (near-zero, since the application is stateless), and the compliance constraint. These three numbers drive every subsequent decision.</p>
+          <p><strong>Step 2 — Choose the DX locations.</strong> AWS publishes a list of Direct Connect locations, and the two connections must terminate at different locations to survive a location-level failure. For this design, choose two DX locations in the us-east-1 region that are geographically separate — for example, one in Ashburn and one in a different metro area within the region's DX footprint. Document why the two locations are independent: they have separate power, separate cooling, and separate network paths to the AWS backbone. If the two locations share a single fiber conduit, the design is not actually redundant, and the exam will test whether you noticed.</p>
+          <p><strong>Step 3 — Choose the port speeds.</strong> The trading application needs consistent bandwidth, so choose dedicated 10 Gbps connections rather than hosted connections. Document the capacity calculation: peak throughput, headroom for burst, and the cost difference between 1 Gbps and 10 Gbps. If the application's peak is 2 Gbps, a 10 Gbps port provides 5x headroom, which is reasonable for a latency-sensitive workload. A 1 Gbps port would be cheaper but would leave no room for growth.</p>
+          <p><strong>Step 4 — Design the VIF topology.</strong> The enterprise has a Transit Gateway that already aggregates its VPCs, so the correct choice is a Transit VIF on each connection, both associated with a single DX Gateway. Document the DX Gateway associations: one DX Gateway, associated with the Transit Gateway, which is associated with the VPCs. If the enterprise also needs private access to S3, add a Public VIF on one of the connections and document the public IP and ASN requirements.</p>
+          <p><strong>Step 5 — Configure BGP for active/passive.</strong> Both connections will advertise the same on-premises prefixes, so without intervention BGP will treat them as equal-cost and split traffic. To make one path preferred, apply AS path prepending on the standby connection: prepend the customer ASN three times so the AS path looks longer and the primary path is preferred. Document the exact BGP configuration on the customer router, including the neighbor IPs, the ASNs, and the prepend policy. Explain why AS path prepending was chosen over local preference: it is simpler and does not require coordination with AWS.</p>
+          <p><strong>Step 6 — Add a VPN backup.</strong> Even with two DX connections, a simultaneous failure of both locations is possible, so add a Site-to-Site VPN over the internet as a last-resort backup. Document the VPN's BGP configuration and the failover behavior: the VPN should only be preferred when both DX paths are down, which means its AS path must be longer than the DX paths even after prepending. This is a subtle configuration detail that the exam sometimes tests.</p>
+          <p><strong>Step 7 — Write the failover test plan.</strong> A redundant design is only as good as its tested failover. Write a test plan that covers three scenarios: a single connection failure (shut down one BGP session and verify traffic shifts to the other connection within the RTO), a single location failure (simulate a location outage and verify the same), and a simultaneous failure (shut down both DX paths and verify the VPN takes over). For each scenario, document the expected behavior, the actual behavior, and the time to recover.</p>
+          <p><strong>Step 8 — Write the runbook.</strong> The runbook should cover the first three diagnostic steps for a DX incident: confirm the scope, check the BGP session state on both sides, and check the physical layer metrics. It should also document the escalation path: which issues go to AWS Support, which go to the colocation provider, and which are internal. Finally, it should document the manual failover procedure in case the BGP automation fails.</p>
+          <p><strong>Step 9 — Review against the exam.</strong> Go back through the design and identify every decision that maps to an exam concept: the VIF type, the DX Gateway, the BGP attributes, the resiliency tier, and the VPN backup. For each, write one sentence explaining why the alternative would be wrong. This is the step that turns a lab exercise into exam preparation.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="quiz">
         <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
-        
+
       <div class="scenario-card">
         <p class="scenario-question"><strong>Q1.</strong> A company needs the highest resiliency Direct Connect design for a mission-critical workload. What should they provision?</p>
-        <div class="scenario-options" id="opts-d11q0">
+        <div class="scenario-options" id="opts-d11q1">
             <div class="scenario-option">A. A single 10 Gbps DX connection</div>
             <div class="scenario-option">B. Two DX connections at two different DX locations, each terminating on separate devices, with BGP failover and a VPN backup</div>
             <div class="scenario-option">C. One DX connection plus a second identical connection at the same location</div>
             <div class="scenario-option">D. Public VIF only, since it's cheaper</div>
         </div>
-        <button class="scenario-reveal-btn" onclick="revealAnswer('d11q0', 1)">Reveal Answer</button>
-        <div class="scenario-explanation" id="exp-d11q0"><strong>Correct answer: B.</strong> AWS's resiliency model for DX requires diversity across DX locations and devices, plus BGP-based failover; a VPN backup adds an additional layer for the rare case both DX paths fail.</div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d11q1', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d11q1"><strong>Correct answer: B.</strong> AWS's resiliency model for DX requires diversity across DX locations and devices, plus BGP-based failover; a VPN backup adds an additional layer for the rare case both DX paths fail.</div>
       </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q2.</strong> A company has a single VPC in a single AWS account and wants private connectivity from its data center. Which VIF type is the simplest correct choice?</p>
+        <div class="scenario-options" id="opts-d11q2">
+            <div class="scenario-option">A. Transit VIF</div>
+            <div class="scenario-option">B. Private VIF attached to a virtual private gateway</div>
+            <div class="scenario-option">C. Public VIF</div>
+            <div class="scenario-option">D. A DX Gateway is always required</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d11q2', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d11q2"><strong>Correct answer: B.</strong> A Private VIF attached to a VGW is the simplest design for a single VPC in a single account. A DX Gateway is only needed when the connection must reach multiple VPCs, accounts, or regions.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q3.</strong> A company has four DX connections bundled into a Link Aggregation Group at a single DX location. Is this design resilient to a location-level failure?</p>
+        <div class="scenario-options" id="opts-d11q3">
+            <div class="scenario-option">A. Yes, because four connections provide 4x redundancy</div>
+            <div class="scenario-option">B. No, because all four connections terminate at the same DX location and fail together</div>
+            <div class="scenario-option">C. Yes, because a LAG automatically spans multiple locations</div>
+            <div class="scenario-option">D. Only if the LAG uses BGP</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d11q3', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d11q3"><strong>Correct answer: B.</strong> A LAG is a capacity mechanism, not a resiliency mechanism. All members must terminate at the same DX location, so a location-level failure takes down the entire LAG.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q4.</strong> A company has a DX connection in us-east-1 and needs to reach a VPC in us-west-2 over the same connection. What is required?</p>
+        <div class="scenario-options" id="opts-d11q4">
+            <div class="scenario-option">A. A second DX connection in us-west-2</div>
+            <div class="scenario-option">B. A Direct Connect Gateway associated with the us-west-2 VPC</div>
+            <div class="scenario-option">C. A VPC peering connection between the two regions</div>
+            <div class="scenario-option">D. Nothing — a Private VIF can reach any region</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d11q4', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d11q4"><strong>Correct answer: B.</strong> A DX Gateway is a global resource that can associate with VPCs in other regions, letting a single connection reach them. A Private VIF alone is limited to the connection's region.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q5.</strong> A company wants private access to Amazon S3 from its data center without traversing the public internet. Which VIF type is required?</p>
+        <div class="scenario-options" id="opts-d11q5">
+            <div class="scenario-option">A. Private VIF</div>
+            <div class="scenario-option">B. Transit VIF</div>
+            <div class="scenario-option">C. Public VIF</div>
+            <div class="scenario-option">D. A VPC endpoint is the only option</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d11q5', 2)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d11q5"><strong>Correct answer: C.</strong> A Public VIF provides private connectivity to AWS public service endpoints such as S3 and DynamoDB. It requires public IP space and a public ASN on the customer side.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q6.</strong> A company has two DX connections at two different locations, both advertising the same prefixes. Traffic is splitting across both paths, but the company wants one path preferred. What should they configure?</p>
+        <div class="scenario-options" id="opts-d11q6">
+            <div class="scenario-option">A. Increase the MTU on the preferred path</div>
+            <div class="scenario-option">B. Apply AS path prepending on the standby path</div>
+            <div class="scenario-option">C. Disable BGP on the standby path</div>
+            <div class="scenario-option">D. Use a LAG to combine the two connections</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d11q6', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d11q6"><strong>Correct answer: B.</strong> AS path prepending makes the standby path look longer, so BGP prefers the primary path. Local preference is an alternative but requires coordination within the AS.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q7.</strong> A company has a DX connection and a Site-to-Site VPN backup. The DX connection fails. What is the most likely operational impact?</p>
+        <div class="scenario-options" id="opts-d11q7">
+            <div class="scenario-option">A. No impact — the VPN is a full substitute</div>
+            <div class="scenario-option">B. Traffic fails over to the VPN, but bandwidth and latency characteristics change and may break applications tuned for DX</div>
+            <div class="scenario-option">C. The VPN cannot be used as a backup for DX</div>
+            <div class="scenario-option">D. Traffic fails over only if the VPN uses a Public VIF</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d11q7', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d11q7"><strong>Correct answer: B.</strong> A VPN backup restores connectivity but with different bandwidth and latency, which can break applications that were tuned for the DX path. It is a last-resort fallback, not a substitute for a second DX connection.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q8.</strong> A company has a Transit Gateway aggregating its VPCs and wants to connect its data center over Direct Connect. Which VIF type should they use?</p>
+        <div class="scenario-options" id="opts-d11q8">
+            <div class="scenario-option">A. Private VIF attached to a VGW</div>
+            <div class="scenario-option">B. Transit VIF associated with a DX Gateway that is associated with the TGW</div>
+            <div class="scenario-option">C. Public VIF</div>
+            <div class="scenario-option">D. Two Private VIFs, one per VPC</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d11q8', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d11q8"><strong>Correct answer: B.</strong> A Transit VIF connects the DX circuit to a Transit Gateway via a DX Gateway, letting the TGW route to all attached VPCs. Adding Private VIFs alongside an existing TGW creates a parallel path that is harder to segment.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q9.</strong> A company has a private ASN and wants to use a Public VIF to reach S3. What is the problem?</p>
+        <div class="scenario-options" id="opts-d11q9">
+            <div class="scenario-option">A. Public VIFs do not support S3</div>
+            <div class="scenario-option">B. A Public VIF requires a public ASN and public IP space on the customer side</div>
+            <div class="scenario-option">C. Public VIFs require a DX Gateway</div>
+            <div class="scenario-option">D. There is no problem — private ASNs work with Public VIFs</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d11q9', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d11q9"><strong>Correct answer: B.</strong> A Public VIF requires the customer to use a public ASN and public IP space, because it peers with AWS's public routing domain. Private ASNs are only valid for Private and Transit VIFs.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q10.</strong> A company has a regulatory requirement that all traffic in transit must be encrypted. Does a Direct Connect connection satisfy this requirement on its own?</p>
+        <div class="scenario-options" id="opts-d11q10">
+            <div class="scenario-option">A. Yes, because DX is a private connection</div>
+            <div class="scenario-option">B. No, because DX is private but not encrypted; the customer must add MACsec or a VPN on top</div>
+            <div class="scenario-option">C. Yes, because DX uses TLS by default</div>
+            <div class="scenario-option">D. Only if the connection uses a Public VIF</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d11q10', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d11q10"><strong>Correct answer: B.</strong> Direct Connect provides a private path but does not encrypt traffic. Customers with encryption requirements must add MACsec (on supported connections) or run a VPN over the DX circuit.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q11.</strong> A company has DX connections in two different AWS regions and wants to reach VPCs in both. How many DX Gateways do they need?</p>
+        <div class="scenario-options" id="opts-d11q11">
+            <div class="scenario-option">A. One per region</div>
+            <div class="scenario-option">B. One per connection</div>
+            <div class="scenario-option">C. One, because a DX Gateway is a global resource</div>
+            <div class="scenario-option">D. DX Gateways cannot span regions</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d11q11', 2)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d11q11"><strong>Correct answer: C.</strong> A DX Gateway is a global resource that can be associated with connections in multiple regions, so a single gateway can serve both.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q12.</strong> A company's DX connection is up and the BGP session is established, but on-prem traffic to a VPC is going over the VPN instead of the DX circuit. What is the most likely cause?</p>
+        <div class="scenario-options" id="opts-d11q12">
+            <div class="scenario-option">A. The DX connection is down</div>
+            <div class="scenario-option">B. A BGP attribute misconfiguration, such as AS path prepending applied to the wrong path</div>
+            <div class="scenario-option">C. The VPC has no route table</div>
+            <div class="scenario-option">D. The VPN is always preferred over DX</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d11q12', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d11q12"><strong>Correct answer: B.</strong> If the physical layer is healthy and BGP is up, the problem is routing. AS path prepending applied to the wrong path makes the backup path preferred, which is the opposite of the intent.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q13.</strong> A company needs to move 300 TB of historical data to AWS and has a 500 Mbps DX connection. What is the recommended approach?</p>
+        <div class="scenario-options" id="opts-d11q13">
+            <div class="scenario-option">A. Transfer everything over the DX connection</div>
+            <div class="scenario-option">B. Use Snowball Edge for the bulk historical transfer, then use the DX connection for ongoing deltas</div>
+            <div class="scenario-option">C. Upgrade the DX connection to 10 Gbps first</div>
+            <div class="scenario-option">D. Use a VPN instead of DX</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d11q13', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d11q13"><strong>Correct answer: B.</strong> The hybrid pattern of offline bulk transfer for the large historical dataset plus network-based incremental sync for the small ongoing delta is the standard approach when the network link is the bottleneck.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q14.</strong> A company wants to connect 40 small branch offices to AWS with minimal cost and no dedicated circuits. What is the best fit?</p>
+        <div class="scenario-options" id="opts-d11q14">
+            <div class="scenario-option">A. A Direct Connect connection per branch</div>
+            <div class="scenario-option">B. AWS VPN CloudHub</div>
+            <div class="scenario-option">C. A single Transit VIF shared by all branches</div>
+            <div class="scenario-option">D. PrivateLink to each branch</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d11q14', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d11q14"><strong>Correct answer: B.</strong> VPN CloudHub is a hub-and-spoke VPN topology designed for many small sites without dedicated circuits. DX per branch would be prohibitively expensive and slow to deploy.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q15.</strong> A company has a Transit VIF and a Transit Gateway, but traffic from on-prem is not reaching a specific VPC. What is the most likely cause?</p>
+        <div class="scenario-options" id="opts-d11q15">
+            <div class="scenario-option">A. The DX connection is down</div>
+            <div class="scenario-option">B. A missing TGW route table association or propagation for that VPC</div>
+            <div class="scenario-option">C. The VIF type is wrong</div>
+            <div class="scenario-option">D. The VPC needs a Public VIF</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d11q15', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d11q15"><strong>Correct answer: B.</strong> A Transit VIF depends on the TGW's route tables to reach VPCs. If the VPC's attachment is not associated with the correct route table or its routes are not propagated, traffic will not reach it.</div>
+      </div>
+      </section>
+
+      <section class="doc-section" id="preview">
+        <h2 class="section-heading">Peek into Tomorrow: Hybrid DNS</h2>
+        <div class="card card-purple">
+          <p>Today's design gets packets from the data center to AWS over a private circuit, but it leaves a question unanswered: once the packets arrive, how do the two sides resolve each other's names? A server in the data center that needs to reach a database in a private Route 53 hosted zone has to resolve that name somehow, and the default behavior — querying the public DNS — will not work, because the hosted zone is private. Conversely, an EC2 instance in a VPC that needs to reach an on-premises service by its internal hostname has to resolve a name that AWS's default resolver has never heard of. The DX circuit carries the packets, but it does not carry the DNS answers.</p>
+          <p>Tomorrow's topic, Route 53 Resolver, is the piece that closes this gap. It introduces Inbound endpoints, which let on-premises resolvers query AWS private hosted zones, and Outbound endpoints with forwarding rules, which let AWS resources resolve on-premises names over the same DX or VPN path we designed today. The open question is how to configure the forwarding rules so that only the queries that need to go on-prem actually go on-prem, and how to make the resolver endpoints resilient across Availability Zones. The answers depend on the same redundancy thinking we applied to the DX connections, but at the DNS layer instead of the packet layer.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="sources">
+        <h2 class="section-heading">Sources</h2>
+        <div class="card">
+          <ul class="source-list">
+            <li><a href="https://docs.aws.amazon.com/directconnect/latest/UserGuide/Welcome.html" target="_blank" rel="noopener">AWS Direct Connect User Guide — What Is AWS Direct Connect?</a></li>
+            <li><a href="https://docs.aws.amazon.com/directconnect/latest/UserGuide/create-vif.html" target="_blank" rel="noopener">AWS Direct Connect User Guide — Creating a Virtual Interface</a></li>
+            <li><a href="https://docs.aws.amazon.com/directconnect/latest/UserGuide/direct-connect-gateways.html" target="_blank" rel="noopener">AWS Direct Connect User Guide — Direct Connect Gateways</a></li>
+            <li><a href="https://docs.aws.amazon.com/directconnect/latest/UserGuide/resiliency_toolkit.html" target="_blank" rel="noopener">AWS Direct Connect User Guide — Resiliency Toolkit</a></li>
+            <li><a href="https://docs.aws.amazon.com/directconnect/latest/UserGuide/lags.html" target="_blank" rel="noopener">AWS Direct Connect User Guide — Link Aggregation Groups</a></li>
+            <li><a href="https://docs.aws.amazon.com/directconnect/latest/UserGuide/routing-and-bgp.html" target="_blank" rel="noopener">AWS Direct Connect User Guide — Routing Policies and BGP Communities</a></li>
+            <li><a href="https://docs.aws.amazon.com/whitepapers/latest/aws-vpc-connectivity-options/aws-direct-connect.html" target="_blank" rel="noopener">AWS Whitepaper — Amazon Virtual Private Cloud Connectivity Options</a></li>
+            <li><a href="https://docs.aws.amazon.com/whitepapers/latest/building-scalable-secure-multi-vpc-network-infrastructure/welcome.html" target="_blank" rel="noopener">AWS Whitepaper — Building a Scalable and Secure Multi-VPC AWS Network Infrastructure</a></li>
+            <li><a href="https://docs.aws.amazon.com/vpn/latest/s2svpn/VPC_VPN.html" target="_blank" rel="noopener">AWS Site-to-Site VPN User Guide</a></li>
+            <li><a href="https://docs.aws.amazon.com/whitepapers/latest/aws-fault-isolation-boundaries/control-planes-and-data-planes.html" target="_blank" rel="noopener">AWS Whitepaper — Control Planes and Data Planes</a></li>
+          </ul>
+        </div>
       </section>
       <div class="day-nav">
         <a href="day-010.html">&larr; Day 10: AWS Network Firewall &amp; Centralized Egress</a>

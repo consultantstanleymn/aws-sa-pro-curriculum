@@ -104,37 +104,363 @@
         <span class="pill pill-green">Phase 1: Multi-Account Governance &amp; Networking</span>
       </div>
       <h1 class="hero-title">IAM Identity Center (AWS SSO) &amp; Federation</h1>
-      <div class="reading-meta">&#128337; ~3 min read &middot; 2 services covered</div>
+      <div class="reading-meta">&#128337; ~58 min read &middot; 2 services covered</div>
       <div class="services-grid">
         <span class="service-tag">IAM Identity Center</span>
         <span class="service-tag">SAML 2.0</span>
       </div>
       <div id="tracker"></div>
-      <section class="doc-section">
-        <h2 class="section-heading">Today's Concept</h2>
-        <div class="card card-accent">
-          <p>IAM Identity Center centralizes human access across all accounts in an Organization via permission sets mapped to SAML federation from an external IdP (Entra ID, Okta) or its own built-in directory. Permission sets translate to an IAM role provisioned automatically into each assigned account, avoiding long-lived per-account IAM users.</p>
-        </div>
-        <h3 class="sub-heading">Hands-on Lab / Practical Action (45 min)</h3>
-        <div class="card">
-          <p>Configure a permission set granting ReadOnlyAccess in Production and PowerUserAccess in Dev, then assign it to a federated group.</p>
+
+      <section class="doc-section" id="recap-section">
+        <h2 class="section-heading">Recap: Where We Left Off</h2>
+        <div class="card card-accent" id="recap">
+          <p>Control Tower gave us the automated landing zone: a management account that holds no workloads, a log-archive account that aggregates CloudTrail from everywhere, an audit account that owns the security tooling, and guardrails implemented as SCPs and Config rules. Account Factory for Terraform extended that baseline into pipeline-driven account provisioning, so a new account arrives already inside the governance envelope rather than being retrofitted into it later.</p>
+          <p>That is a story about accounts and policy. It says nothing about the humans who need to log into those accounts. Control Tower will happily provision forty accounts with impeccable guardrails and still leave you with the question of how an engineer authenticates to any of them. Today sits at the same lifecycle stage as yesterday's material — the account exists, the guardrail is attached — but the concern is entirely different: identity, not infrastructure. The distinction matters because the two concerns fail in different ways. A missing guardrail is a policy gap you can audit for. A missing identity strategy is a sprawl of long-lived IAM users that nobody can enumerate, rotate, or revoke cleanly.</p>
         </div>
       </section>
-      <section class="doc-section">
-        <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
-        
-      <div class="scenario-card">
-        <p class="scenario-question"><strong>Q1.</strong> An enterprise wants engineers to log in once via their corporate Okta and assume the correct role in any of 40 AWS accounts without individual IAM users. What is the best-practice solution?</p>
-        <div class="scenario-options" id="opts-d4q0">
+
+      <section class="doc-section" id="why-on-exam">
+        <h2 class="section-heading">1. Why This Is on the Exam</h2>
+        <p>Every SAP-C02 scenario that involves more than a handful of accounts eventually has to answer the question of how people get in. The exam's design-domain questions are built around organizations that have already solved account structure and are now confronting the operational consequences of that structure: forty accounts means forty places a departing employee might still have credentials, forty places a password policy has to be enforced, and forty places an auditor will ask you to produce an access review for. The architectural problem IAM Identity Center solves is not authentication in the abstract — it is the elimination of per-account human identity as a category.</p>
+        <p>The reason this shows up repeatedly rather than once is that it intersects with almost every other governance topic. It is the delivery mechanism for the least-privilege story that SCPs and permission boundaries describe. It is the reason a multi-account landing zone is operationally survivable rather than merely well-structured. And it is the piece that most commonly gets answered wrong on practice exams, because candidates reach for the mechanism they already know — IAM users, cross-account roles, a shared credential — when the scenario is explicitly describing a centralized workforce identity problem.</p>
+        <p>Map it to the exam domains and the weight becomes clearer. It sits primarily in the organizational-complexity design domain, where the questions are about designing for governance at scale across many accounts. It also appears in the security-controls domain, where the question is how you enforce consistent authentication and authorization without duplicating configuration. And it appears in the cost and operational-excellence domains indirectly, because the alternative — per-account IAM users — carries a real operational tax that shows up as headcount and toil rather than as a line item on the bill.</p>
+        <p>The exam pattern to internalize is this: whenever a scenario mentions a corporate identity provider by name (Okta, Entra ID, Ping, or a generic "existing SAML 2.0 identity provider"), mentions a large number of accounts, and mentions a requirement that users not have separate credentials per account, the answer is IAM Identity Center. The distractors will be plausible — cross-account roles with a trust policy, a shared bastion with local users, IAM users provisioned by a script — and each of them solves a narrower version of the problem while leaving the central one intact.</p>
+      </section>
+
+      <section class="doc-section" id="mechanism">
+        <h2 class="section-heading">2. How It Actually Works</h2>
+        <p>IAM Identity Center is a service that lives in one specific account — conventionally the management account of the organization, though AWS now supports a delegated administrator account for it — and from that home it reaches into every other account in the organization. The core abstraction is the permission set. A permission set is not an IAM policy and not an IAM role; it is a template that describes a set of policies, a session duration, and optionally a permissions boundary and relay state. When you assign a permission set to a principal for a given account, Identity Center materializes it in that account as an actual IAM role, with a trust policy that allows the Identity Center service to assume it on behalf of a federated user.</p>
+        <p>The identity side of the service has two possible sources. The first is the built-in Identity Center directory, which is a lightweight user store suitable for small organizations or for a pilot. The second, and the one that matters for enterprise scenarios, is an external SAML 2.0 identity provider. In that configuration, Identity Center acts as a SAML service provider: the user authenticates against the corporate IdP, the IdP issues a signed SAML assertion, and Identity Center consumes that assertion to establish who the user is. Group membership can be synchronized from the IdP via SCIM, which is what makes group-based assignment practical at scale rather than requiring per-user assignment records.</p>
+        <p>The authorization flow after authentication is worth walking through because exam questions probe it. The user authenticates to the IdP and receives a SAML assertion. Identity Center validates the assertion and determines which accounts and permission sets that user is entitled to, based on assignments made to the user directly or to a group the user belongs to. It presents the user with a portal listing those accounts and roles. When the user selects one, Identity Center calls STS to assume the corresponding IAM role in the target account, and the user receives temporary credentials scoped to that role. The role in the target account is a normal IAM role — it appears in the account's IAM console, it can be referenced in policies, and it can be audited like any other role.</p>
+        <p>Two consequences follow from this design and both are exam-relevant. First, there are no long-lived credentials anywhere in the human access path. The user's only credential is their corporate identity, and the AWS-side credential is a temporary STS session. Second, the target account does not need to know anything about the identity provider. It only needs to trust the Identity Center service principal. That decoupling is what allows a single IdP integration to serve an arbitrary number of accounts without per-account federation configuration.</p>
+      </section>
+
+      <section class="doc-section" id="decision-boundary">
+        <h2 class="section-heading">3. The Core Decision Boundary</h2>
+        <p>The fork that most scenario questions hinge on is whether the human access problem is being solved centrally or per-account. Centralized means one identity source, one assignment model, one place to revoke. Per-account means each account owns its own users and roles, and the organization's access posture is the sum of forty independent decisions. The exam almost always frames the correct answer as the centralized option, but the interesting part is recognizing which distractors are actually per-account solutions wearing a centralized costume.</p>
+        <p>A cross-account role with a trust policy is the most common of these. It is a legitimate pattern and it does centralize the authorization decision in a sense — the trusting account decides who may assume the role. But it does not centralize identity. The user still needs an identity somewhere to assume the role from, and if that identity is an IAM user in a hub account, you have simply moved the long-lived credential problem rather than eliminated it. The distinction the exam is drawing is between centralizing the role and centralizing the human.</p>
+        <p>The second fork, once you have decided on centralization, is the identity source: built-in directory versus external IdP. This is less about correctness and more about fit. An organization with an existing corporate directory and a compliance requirement that all access flow through it will use federation. An organization standing up a greenfield environment with no existing IdP may reasonably start with the built-in directory and migrate later. The exam rarely tests the built-in directory as a correct answer for an enterprise scenario, but it does test whether you understand that the two are alternatives rather than layers.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Approach</th><th>Identity source</th><th>Credential lifetime</th><th>Revocation</th><th>Scales to N accounts</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>IAM users per account</td><td>Per-account, duplicated</td><td>Long-lived access keys</td><td>Manual, per account</td><td>Poorly — N&times; the work</td></tr>
+              <tr><td>Cross-account role from a hub IAM user</td><td>Hub account IAM user</td><td>Long-lived at the hub</td><td>Manual at the hub</td><td>Partially — one credential, many roles</td></tr>
+              <tr><td>IAM Identity Center, built-in directory</td><td>Identity Center</td><td>Temporary STS session</td><td>Central, immediate</td><td>Yes</td></tr>
+              <tr><td>IAM Identity Center + external SAML IdP</td><td>Corporate IdP</td><td>Temporary STS session</td><td>Central, follows IdP lifecycle</td><td>Yes, and reuses existing joiner/mover/leaver</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The row that matters most for exam purposes is the last one, because it is the only row where the AWS access lifecycle is a consequence of a process the organization already runs. When an employee leaves, disabling them in the corporate IdP removes their AWS access across every account, with no AWS-side action required. That property — access that follows employment rather than being maintained in parallel with it — is what the exam is usually testing when it describes a large enterprise with an existing identity provider.</p>
+      </section>
+
+      <section class="doc-section" id="config-tradeoffs">
+        <h2 class="section-heading">4. Permission Sets, Assignments and Their Tradeoffs</h2>
+        <p>A permission set is defined once and assigned many times, and the design decisions inside it determine how much flexibility you retain later. The policies attached to a permission set can be AWS managed policies, customer managed policies that you author in the Identity Center account, or inline policies. The choice between them is a lifecycle question: an AWS managed policy like ReadOnlyAccess is maintained by AWS and updates as services are added, which is convenient but means the permission set's effective permissions can change without your involvement. A customer managed policy gives you a stable, reviewable definition at the cost of having to maintain it yourself.</p>
+        <p>Session duration is the second knob and it is a genuine security-versus-friction tradeoff. A shorter session means credentials expire sooner and a compromised session has a smaller window, but it also means users re-authenticate more often, which in practice pushes people toward keeping a browser tab open indefinitely. The default is one hour and the maximum is twelve hours, and the exam-relevant point is that the session duration is a property of the permission set, not of the user or the account. If you need different durations for different roles, you need different permission sets.</p>
+        <p>Assignments are the third dimension and the one that determines your operational load. An assignment binds a principal — a user or a group — to a permission set in a specific account. Assigning to groups rather than users is the practice that makes the model maintainable, because group membership is managed in the IdP and flows in via SCIM synchronization. An organization that assigns permission sets to individual users has recreated the per-account user management problem in a new console; an organization that assigns to groups has a model where onboarding is a group membership change and offboarding is its removal.</p>
+        <p>The relay state and permissions boundary options are less commonly tested but worth knowing. Relay state lets you send a user to a specific console URL after they assume a role, which is useful for deep-linking into a particular service. A permissions boundary attached to a permission set caps what the resulting role can do even if the attached policies are broader — the same mechanism that will occupy tomorrow's material, applied here as a guardrail on the roles Identity Center creates. Both are set at the permission set level and inherited by every assignment of that set.</p>
+      </section>
+
+      <section class="doc-section" id="sizing-limits">
+        <h2 class="section-heading">5. Sizing, Limits and Quotas</h2>
+        <p>The quotas that matter for Identity Center are mostly about how many of each object you can create and how quickly the service can provision roles into accounts. These are soft limits in most cases and can be raised through a support request, but the exam expects you to know the shape of the constraints and, more importantly, to know which ones are hard. The table below collects the numbers that come up in practice; each is documented in the AWS Identity Center quotas reference and the Organizations service quotas page.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Resource</th><th>Default quota</th><th>Adjustable</th><th>Why it matters</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Permission sets per Identity Center instance</td><td>Varies by region; commonly in the low hundreds</td><td>Yes, via support</td><td>Caps how finely you can slice roles</td></tr>
+              <tr><td>Accounts per organization</td><td>Governed by AWS Organizations quotas</td><td>Yes</td><td>Determines the assignment matrix size</td></tr>
+              <tr><td>Maximum session duration per permission set</td><td>12 hours</td><td>No — hard ceiling</td><td>Bounds the blast radius of a stolen session</td></tr>
+              <tr><td>Default session duration</td><td>1 hour</td><td>Yes, per permission set</td><td>Friction versus exposure tradeoff</td></tr>
+              <tr><td>SCIM group and user sync</td><td>Bounded by IdP and Identity Center sync quotas</td><td>Yes</td><td>Determines how fast joiner/mover/leaver propagates</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The provisioning behavior is the part that surprises people operationally. When you create an assignment, Identity Center does not create the role instantly in every case; it queues the work and provisions the role into the target account asynchronously. In a large organization where a single group assignment fans out to dozens of accounts, that fan-out takes measurable time, and a user who tries to use the role before provisioning completes will see it missing from their portal. This is not a failure — it is the normal propagation delay — but it is the reason a runbook for onboarding a new team should include a verification step rather than assuming immediate availability.</p>
+        <p>The other sizing consideration is the assignment matrix itself. If you have A accounts and P permission sets and you assign every permission set in every account, you have A&times;P assignments to maintain. The practical guidance is to keep the permission set count small and meaningful — a read-only set, a power-user set, an admin set, and a handful of workload-specific sets — and to let group membership carry the variation. Organizations that create a permission set per team per environment end up with an assignment matrix that nobody can review, which defeats the purpose of centralizing in the first place.</p>
+      </section>
+
+      <section class="doc-section" id="failure-modes">
+        <h2 class="section-heading">6. Failure Modes and What They Look Like in Production</h2>
+        <p>The most common production failure is a broken SAML trust, and its symptom is that users can reach the IdP, authenticate successfully, and then land on an error page from Identity Center rather than the account portal. The cause is almost always a mismatch in the SAML configuration: a changed certificate on the IdP side that was not updated in Identity Center, an audience URI that does not match, or an attribute mapping that no longer produces the expected NameID. The first diagnostic move is to check the Identity Center sign-in audit events, which record the SAML response outcome and will tell you whether the assertion was rejected and why.</p>
+        <p>The second failure mode is stale group membership, and it is more insidious because it does not produce an error. A user who was removed from a group in the IdP but whose SCIM synchronization has not yet propagated will still see the accounts and roles that group granted. The symptom is an access review that shows someone with permissions they should not have, and the diagnostic is to compare the IdP's group membership against the assignments visible in Identity Center. The fix is usually to force a synchronization, but the underlying lesson is that SCIM propagation is not instantaneous and your offboarding runbook needs to account for the lag.</p>
+        <p>The third failure mode is the orphaned role. When an assignment is deleted, Identity Center removes the corresponding role from the target account, but if the role was modified manually — someone attached an extra policy directly to it in the account — that modification is lost, and if the deletion is interrupted the role can be left in an inconsistent state. The symptom is a role that exists in the account but has no corresponding assignment in Identity Center, which means nobody can assume it through the portal but it still appears in IAM listings and in access reviews. The diagnostic is to reconcile the account's roles against the Identity Center assignment list; the fix is to delete the orphan and treat the role as service-managed rather than hand-editable.</p>
+        <p>There is a fourth failure that is organizational rather than technical: the delegated administrator is not configured, so all Identity Center administration happens in the management account. This is not a failure in the sense of an outage, but it is a governance failure, because it means the account that is supposed to hold no workloads now holds the administrative surface for every human identity in the organization. The symptom is that the security team needs management-account access to do routine identity work, which is exactly the blast-radius problem the landing zone was designed to avoid.</p>
+      </section>
+
+      <section class="doc-section" id="sre-angle">
+        <h2 class="section-heading">7. The Operational and SRE Angle</h2>
+        <p>Identity Center is infrastructure, and it should be monitored like infrastructure even though it has no servers you can see. The signals that matter are authentication success and failure rates, provisioning latency for new assignments, and SCIM synchronization health. CloudTrail records the Identity Center API calls, including the AssumeRole calls that result from portal logins, and those events are the raw material for both security monitoring and availability monitoring. A sudden drop in successful AssumeRole calls during business hours is an availability incident; a sudden rise in failed SAML assertions is either an IdP problem or an attack.</p>
+        <p>The SLO framing is worth thinking through explicitly because it clarifies what you are actually promising. The user-visible service is "I can log in and reach the account I need." That decomposes into the IdP being available, Identity Center being available, the assignment existing, and the role being provisioned in the target account. Each of those has a different owner and a different failure signature, and an SLO that does not decompose the dependency chain will page the wrong team. In practice, the useful alarm is a synthetic check that performs a portal login and role assumption on a schedule, because it exercises the whole chain rather than any single component.</p>
+        <p>The runbook shape follows from the failure modes above. A login failure runbook starts with the sign-in audit events, then checks the SAML certificate expiry, then checks the IdP's own health. An access-review runbook reconciles IdP group membership against Identity Center assignments and flags drift. An onboarding runbook creates the group membership, waits for synchronization, verifies the assignment appears, and confirms the role is provisioned in the target account before telling the user they are ready. An offboarding runbook removes the group membership and then verifies that the user can no longer assume any role — which is a positive test, not an assumption.</p>
+        <p>One operational detail that is easy to miss: the Identity Center instance lives in a specific region, and the portal endpoint is regional. An organization with a global workforce should be aware of which region hosts the instance and whether that creates a latency or data-residency concern. The service is highly available within its region, but it is not a global service in the way IAM is, and treating it as one is a mistake that shows up as a regional dependency nobody documented.</p>
+      </section>
+
+      <section class="doc-section" id="gotchas">
+        <h2 class="section-heading">8. Edge Cases and Exam Gotchas</h2>
+        <p>The single most common exam trap is the scenario that describes a large enterprise with an existing identity provider and then offers "create IAM users in each account" as a distractor. It is never the right answer when the scenario mentions scale, an existing IdP, or a requirement to avoid per-account credentials. The second most common trap is subtler: a scenario that describes cross-account access and offers a cross-account role as the answer. That is correct when the access is machine-to-machine or when the identity already exists in a trusted account, and incorrect when the scenario is about human users who need to authenticate. Read the scenario for whether the principal is a person or a workload.</p>
+        <p>Another gotcha is the assumption that Identity Center replaces IAM entirely. It does not. IAM roles, policies, and trust relationships still exist and still govern what the federated session can do. Identity Center is the delivery mechanism for the session; IAM is the authorization model the session operates under. A question that asks how to restrict what a federated user can do in a specific account is asking about the permission set's policies and any permissions boundary, not about Identity Center's configuration per se.</p>
+        <p>The management-account question is worth memorizing as a rule. Identity Center is enabled in the management account by default, and best practice is to delegate administration to a dedicated account so that routine identity work does not require management-account access. If a scenario asks where Identity Center should be administered in a mature organization, the answer is the delegated administrator account, not the management account. If a scenario asks where it is enabled by default, the answer is the management account. Both facts are testable and they are not contradictory.</p>
+        <p>Finally, be precise about what SCIM does and does not do. SCIM synchronizes users and groups from the IdP into Identity Center. It does not synchronize assignments — those are made in Identity Center, though they can be made to synchronized groups. A scenario that describes group membership changing in the IdP and access changing in AWS is describing SCIM plus group-based assignment, and the two halves are both required. A scenario that describes SCIM alone as the mechanism for granting access is missing the assignment step.</p>
+      </section>
+
+      <section class="doc-section" id="vs-comparison">
+        <h2 class="section-heading">9. This Versus the Services It Gets Confused With</h2>
+        <p>Identity Center is most often confused with three things: IAM users, cross-account roles, and Cognito. The first two are covered above in the decision-boundary section, but the comparison is worth restating as explicit rules because the exam tests the rules rather than the reasoning. Cognito is a different category entirely — it is a customer-facing identity service for applications you build, not a workforce identity service for your own employees. If the scenario is about end users of a mobile app, Cognito is in scope. If it is about employees accessing AWS accounts, it is not.</p>
+        <p>The comparison with Control Tower is also worth making explicit, because the two services are frequently mentioned together and serve different layers. Control Tower governs accounts and their guardrails; Identity Center governs the humans who access those accounts. Control Tower can provision the accounts and attach the SCPs, but it does not solve the identity problem, and Identity Center does not solve the account-structure problem. A mature landing zone uses both, and the exam will sometimes present a scenario where the correct answer requires recognizing that only one of the two is being asked about.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Service</th><th>What it governs</th><th>Pick it when&hellip;</th><th>Do not pick it when&hellip;</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>IAM Identity Center</td><td>Workforce human access across accounts</td><td>Employees need SSO into many AWS accounts via a corporate IdP</td><td>The users are external customers of your application</td></tr>
+              <tr><td>IAM users</td><td>Per-account identities</td><td>A single account needs a break-glass or legacy identity with no IdP</td><td>The scenario mentions scale, an existing IdP, or avoiding long-lived credentials</td></tr>
+              <tr><td>Cross-account IAM roles</td><td>Machine or trusted-account access</td><td>A workload or a trusted account needs to assume a role in another account</td><td>The principal is a human who needs to authenticate</td></tr>
+              <tr><td>Amazon Cognito</td><td>Customer-facing application identity</td><td>You are building an app with sign-up and sign-in for end users</td><td>The users are your own employees accessing AWS</td></tr>
+              <tr><td>AWS Control Tower</td><td>Account structure and guardrails</td><td>You need automated multi-account provisioning and baseline policy</td><td>The question is specifically about how people log in</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The rule of thumb that resolves most of these: ask who the principal is and where their identity already lives. If the principal is an employee and their identity lives in a corporate directory, Identity Center with federation is the answer. If the principal is a workload, a cross-account role is the answer. If the principal is an external customer, Cognito is the answer. Most of the confusion in practice comes from scenarios that describe a human but use language that sounds like a workload, or vice versa, and the discipline of naming the principal explicitly before choosing a service is what makes the question tractable.</p>
+      </section>
+
+      <section class="doc-section" id="lab">
+        <h2 class="section-heading">Hands-On Lab: Permission Sets Across Two Environments</h2>
+        <div class="card card-green">
+          <p>The goal of this lab is to build the smallest configuration that demonstrates the full Identity Center model: a permission set defined once, assigned to a group, materialized as a role in a target account, and exercised through the portal. You will need an AWS Organization with at least two member accounts — one representing Production and one representing Dev — and administrative access to the management account or a delegated administrator. If you do not have an external IdP available, the built-in directory is sufficient for the mechanics; the federation-specific steps are called out separately.</p>
+          <p>Work through the steps in order and verify at each stage rather than at the end. The verification steps are where the learning is, because they show you what the service actually created rather than what the console claims it created.</p>
+          <ol>
+            <li>Enable IAM Identity Center in the organization. Note which account it lands in and confirm whether you are using the management account or a delegated administrator. Record the region, because the portal endpoint is regional and you will need it later.</li>
+            <li>If you have an external IdP, configure it as a SAML 2.0 identity provider: exchange the metadata, set the audience URI to the Identity Center ACS URL, and map the NameID to a stable, unique attribute such as email or an immutable employee identifier. If you are using the built-in directory, create two test users instead and note that the federation steps do not apply.</li>
+            <li>Enable SCIM provisioning from the IdP if you are federating, and create two groups in the IdP: one for engineers who need read-only Production access, and one for engineers who need power-user access in Dev. Confirm the groups appear in Identity Center after synchronization.</li>
+            <li>Create a permission set named <code>ProductionReadOnly</code>. Attach the AWS managed <code>ReadOnlyAccess</code> policy. Set the session duration to one hour. Do not attach a permissions boundary yet — you will add one in a later step to see the effect.</li>
+            <li>Create a second permission set named <code>DevPowerUser</code>. Attach the AWS managed <code>PowerUserAccess</code> policy. Set the session duration to four hours, and note in your lab notes why a longer duration is defensible in Dev but not in Production.</li>
+            <li>Assign <code>ProductionReadOnly</code> to the read-only group in the Production account. Assign <code>DevPowerUser</code> to the power-user group in the Dev account. Watch the provisioning status and record how long it takes for the assignment to move from pending to provisioned.</li>
+            <li>In the Production account, open the IAM console and find the role that Identity Center created. Inspect its trust policy and confirm it trusts the Identity Center service principal. Inspect its attached policies and confirm they match the permission set. This is the step that makes the abstraction concrete.</li>
+            <li>Log in to the Identity Center portal as a user in the read-only group. Confirm you see only the Production account and only the read-only role. Assume it and run a read operation such as listing S3 buckets. Then attempt a write operation and confirm it is denied.</li>
+            <li>Log in as a user in the power-user group and confirm the portal shows only the Dev account. This asymmetry — one user, one account, one role — is the property that makes the model auditable.</li>
+            <li>Add a permissions boundary to <code>DevPowerUser</code> that denies IAM and Organizations actions. Re-assume the role and confirm that the previously permitted IAM actions are now denied even though <code>PowerUserAccess</code> still allows them. This demonstrates the ceiling behavior that tomorrow's material covers in depth.</li>
+            <li>Remove a user from the read-only group in the IdP. Wait for synchronization and confirm the Production account disappears from their portal. Record the elapsed time — this is your organization's effective offboarding latency.</li>
+            <li>Clean up: delete the assignments, delete the permission sets, and confirm the roles are removed from the target accounts. If any role remains, investigate why before deleting it manually.</li>
+          </ol>
+          <p>The deliverable is a short written record of three numbers: the provisioning latency you observed for a new assignment, the SCIM synchronization latency you observed for a group change, and the session duration you chose for each permission set with a one-sentence justification. Those three numbers are the operational characteristics of your identity layer, and knowing them is what separates a configuration that works from one you can defend in an incident review.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="quiz">
+        <h2 class="section-heading">Scenario Question Drills</h2>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q1.</strong> An enterprise wants engineers to log in once via their corporate Okta and assume the correct role in any of 40 AWS accounts without individual IAM users. What is the best-practice solution?</p>
+          <div class="scenario-options" id="opts-d4q1">
             <div class="scenario-option">A. Create an IAM user per engineer per account</div>
             <div class="scenario-option">B. IAM Identity Center with SAML federation from Okta and permission sets</div>
             <div class="scenario-option">C. Share a single root-account access key</div>
             <div class="scenario-option">D. Use AWS Organizations SCPs alone</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d4q1', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d4q1"><strong>Correct answer: B.</strong> IAM Identity Center is purpose-built for centralized SSO across an Organization, provisioning short-lived federated roles instead of long-lived IAM users.</div>
         </div>
-        <button class="scenario-reveal-btn" onclick="revealAnswer('d4q0', 1)">Reveal Answer</button>
-        <div class="scenario-explanation" id="exp-d4q0"><strong>Correct answer: B.</strong> IAM Identity Center is purpose-built for centralized SSO across an Organization, provisioning short-lived federated roles instead of long-lived IAM users.</div>
-      </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q2.</strong> A security team wants to know exactly what Identity Center creates in a target account when a permission set is assigned. What appears in that account?</p>
+          <div class="scenario-options" id="opts-d4q2">
+            <div class="scenario-option">A. An IAM user with a generated password</div>
+            <div class="scenario-option">B. An IAM role with a trust policy allowing the Identity Center service principal to assume it</div>
+            <div class="scenario-option">C. A new AWS account dedicated to the permission set</div>
+            <div class="scenario-option">D. Nothing — Identity Center brokers access without creating any IAM objects</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d4q2', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d4q2"><strong>Correct answer: B.</strong> A permission set materializes as a real IAM role in each assigned account, with a trust policy for the Identity Center service principal. The role is a normal IAM object and can be audited like any other.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q3.</strong> An organization has 200 accounts and wants to grant a new class of access to 30 of them. What is the most maintainable way to do this?</p>
+          <div class="scenario-options" id="opts-d4q3">
+            <div class="scenario-option">A. Create a permission set per account so each can be tuned independently</div>
+            <div class="scenario-option">B. Define one permission set and assign it to a group in the 30 target accounts</div>
+            <div class="scenario-option">C. Create IAM users in each of the 30 accounts</div>
+            <div class="scenario-option">D. Attach an SCP to the 30 accounts granting the access</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d4q3', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d4q3"><strong>Correct answer: B.</strong> One permission set assigned to a group across the target accounts keeps the definition single-sourced and lets group membership carry the variation. Per-account permission sets multiply the review surface; SCPs cannot grant access at all.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q4.</strong> Users report that after authenticating successfully at the corporate IdP they land on an error page instead of the AWS access portal. What is the first diagnostic step?</p>
+          <div class="scenario-options" id="opts-d4q4">
+            <div class="scenario-option">A. Reboot the IdP servers</div>
+            <div class="scenario-option">B. Check the Identity Center sign-in audit events for the SAML response outcome</div>
+            <div class="scenario-option">C. Delete and recreate all permission sets</div>
+            <div class="scenario-option">D. Increase the session duration on every permission set</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d4q4', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d4q4"><strong>Correct answer: B.</strong> The sign-in audit events record whether the SAML assertion was accepted or rejected and why, which distinguishes a certificate mismatch from an attribute-mapping problem from an IdP outage.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q5.</strong> A departing employee was removed from all groups in the corporate IdP an hour ago, but an access review still shows them able to assume a Production role. What is the most likely explanation?</p>
+          <div class="scenario-options" id="opts-d4q5">
+            <div class="scenario-option">A. Identity Center caches credentials for 24 hours by design</div>
+            <div class="scenario-option">B. SCIM synchronization has not yet propagated the group change, so the assignment still exists</div>
+            <div class="scenario-option">C. The permission set has a permissions boundary that prevents revocation</div>
+            <div class="scenario-option">D. The role was created manually and is not managed by Identity Center</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d4q5', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d4q5"><strong>Correct answer: B.</strong> SCIM propagation is not instantaneous. Until the group change synchronizes, the assignment remains and the user retains access — which is why offboarding runbooks must verify revocation rather than assume it.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q6.</strong> A scenario describes a workload running in Account A that needs to read an S3 bucket in Account B. Which mechanism is appropriate?</p>
+          <div class="scenario-options" id="opts-d4q6">
+            <div class="scenario-option">A. IAM Identity Center permission set assigned to the workload</div>
+            <div class="scenario-option">B. A cross-account IAM role that the workload assumes</div>
+            <div class="scenario-option">C. A Cognito identity pool</div>
+            <div class="scenario-option">D. An SCP on Account B allowing the read</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d4q6', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d4q6"><strong>Correct answer: B.</strong> Identity Center is for workforce human access. Machine-to-machine cross-account access is a cross-account role problem, and SCPs cannot grant permissions.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q7.</strong> Where is IAM Identity Center enabled by default, and where should it be administered in a mature organization?</p>
+          <div class="scenario-options" id="opts-d4q7">
+            <div class="scenario-option">A. Enabled in the management account; administered in the management account</div>
+            <div class="scenario-option">B. Enabled in the management account; administered via a delegated administrator account</div>
+            <div class="scenario-option">C. Enabled in the audit account; administered in the log-archive account</div>
+            <div class="scenario-option">D. Enabled in each member account independently</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d4q7', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d4q7"><strong>Correct answer: B.</strong> Identity Center is enabled in the management account by default, but best practice delegates administration to a dedicated account so routine identity work does not require management-account access.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q8.</strong> A team wants a federated user's session to expire after 30 minutes to limit exposure. What must they change?</p>
+          <div class="scenario-options" id="opts-d4q8">
+            <div class="scenario-option">A. The user's IAM password policy</div>
+            <div class="scenario-option">B. The session duration on the permission set</div>
+            <div class="scenario-option">C. The SCP attached to the account</div>
+            <div class="scenario-option">D. The IdP's token lifetime only</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d4q8', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d4q8"><strong>Correct answer: B.</strong> Session duration is a property of the permission set, not of the user or the account. Different durations require different permission sets.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q9.</strong> What is the maximum session duration that can be configured on an Identity Center permission set?</p>
+          <div class="scenario-options" id="opts-d4q9">
+            <div class="scenario-option">A. 1 hour</div>
+            <div class="scenario-option">B. 4 hours</div>
+            <div class="scenario-option">C. 12 hours</div>
+            <div class="scenario-option">D. 24 hours</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d4q9', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d4q9"><strong>Correct answer: C.</strong> The maximum session duration is 12 hours and it is a hard ceiling, not a soft quota. The default is 1 hour.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q10.</strong> An access review finds an IAM role in a member account that has no corresponding assignment in Identity Center, but the role still appears in IAM listings. What is this and what should be done?</p>
+          <div class="scenario-options" id="opts-d4q10">
+            <div class="scenario-option">A. A normal role — Identity Center roles are not tracked</div>
+            <div class="scenario-option">B. An orphaned role left by an interrupted or manually modified assignment; reconcile against the assignment list and remove it</div>
+            <div class="scenario-option">C. A permissions boundary that was applied incorrectly</div>
+            <div class="scenario-option">D. A role created by Control Tower that should be left alone</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d4q10', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d4q10"><strong>Correct answer: B.</strong> Orphaned roles appear when an assignment is deleted but the role is not cleanly removed, often because it was hand-edited. Reconcile the account's roles against the Identity Center assignment list and delete the orphan.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q11.</strong> What does SCIM synchronization actually do in an Identity Center deployment?</p>
+          <div class="scenario-options" id="opts-d4q11">
+            <div class="scenario-option">A. It synchronizes users and groups from the IdP into Identity Center</div>
+            <div class="scenario-option">B. It synchronizes permission set assignments into the IdP</div>
+            <div class="scenario-option">C. It synchronizes IAM roles between accounts</div>
+            <div class="scenario-option">D. It replaces SAML authentication entirely</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d4q11', 0)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d4q11"><strong>Correct answer: A.</strong> SCIM brings users and groups in from the IdP. Assignments are made in Identity Center, though they can target synchronized groups — both halves are required for group-based access to work.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q12.</strong> A company is building a consumer mobile app and needs sign-up, sign-in, and social login for its end users. Which service is appropriate?</p>
+          <div class="scenario-options" id="opts-d4q12">
+            <div class="scenario-option">A. IAM Identity Center</div>
+            <div class="scenario-option">B. Amazon Cognito</div>
+            <div class="scenario-option">C. IAM users with a shared login page</div>
+            <div class="scenario-option">D. AWS Organizations with SCPs</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d4q12', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d4q12"><strong>Correct answer: B.</strong> Cognito is the customer-facing identity service for applications you build. Identity Center is for workforce access to AWS accounts, not for end users of your product.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q13.</strong> A permission set has PowerUserAccess attached, but the organization wants to ensure the resulting role can never modify IAM or Organizations regardless of future policy changes. What should be configured?</p>
+          <div class="scenario-options" id="opts-d4q13">
+            <div class="scenario-option">A. A shorter session duration</div>
+            <div class="scenario-option">B. A permissions boundary on the permission set that denies IAM and Organizations actions</div>
+            <div class="scenario-option">C. An SCP on the management account</div>
+            <div class="scenario-option">D. A second permission set with fewer policies</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d4q13', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d4q13"><strong>Correct answer: B.</strong> A permissions boundary attached to the permission set caps what the resulting role can do even if the attached policies are broader, and it survives future policy changes.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q14.</strong> An organization wants a synthetic check that exercises the entire login path — IdP, Identity Center, assignment, and role assumption — rather than monitoring each component separately. What is the most direct approach?</p>
+          <div class="scenario-options" id="opts-d4q14">
+            <div class="scenario-option">A. Alarm on the IdP's own availability metric only</div>
+            <div class="scenario-option">B. A scheduled synthetic login that authenticates and assumes a role, alarming on failure or latency</div>
+            <div class="scenario-option">C. Monitor CloudTrail for any API call volume drop</div>
+            <div class="scenario-option">D. Rely on user reports during business hours</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d4q14', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d4q14"><strong>Correct answer: B.</strong> The user-visible service is the whole chain, so a synthetic check that performs a portal login and role assumption exercises every dependency and pages the right team when any link breaks.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q15.</strong> A new engineer is added to a group in the IdP, but when they open the access portal the target account is not listed. The assignment was created ten minutes ago. What is the most likely cause?</p>
+          <div class="scenario-options" id="opts-d4q15">
+            <div class="scenario-option">A. The permission set has an invalid session duration</div>
+            <div class="scenario-option">B. Assignment provisioning into the target account is asynchronous and has not completed yet</div>
+            <div class="scenario-option">C. The account is outside the organization</div>
+            <div class="scenario-option">D. SCIM does not support group-based assignment</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d4q15', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d4q15"><strong>Correct answer: B.</strong> Identity Center provisions roles into target accounts asynchronously. In a large organization the fan-out takes measurable time, which is why onboarding runbooks include a verification step before telling the user they are ready.</div>
+        </div>
       </section>
+
+      <section class="doc-section" id="preview-section">
+        <h2 class="section-heading">Peek Into Tomorrow</h2>
+        <div class="card card-purple" id="preview">
+          <p>Today's model has a hole in it that is easy to miss until you try to delegate. Identity Center gives a user a role, and the role's policies determine what they can do — but nothing in that chain stops a sufficiently privileged user from creating a new role for themselves with broader permissions. If a delegated administrator can call <code>iam:CreateRole</code> and <code>iam:AttachRolePolicy</code>, they can escalate past whatever the permission set intended, and the permission set's policies are no defense because the escalation happens through a different role entirely.</p>
+          <p>We touched the edge of this when we attached a permissions boundary to a permission set in the lab, but we did not explain what a boundary actually is or why it is the standard answer to delegated-administration scenarios. Tomorrow's material covers permission boundaries as a ceiling on an IAM entity's maximum permissions, and the condition-based pattern that forces every role a delegate creates to carry one — which is the mechanism that makes delegation safe rather than merely convenient. It also covers STS directly: the <code>AssumeRole</code> call that Identity Center makes on the user's behalf, the <code>AssumeRoleWithSAML</code> variant that federation uses, and <code>AssumeRoleWithWebIdentity</code>, which is how Kubernetes workloads get AWS credentials without any long-lived secret at all. The question to hold onto is this: if the session is temporary and the role is the only durable object, what stops the role from being replaced by a broader one?</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="sources">
+        <h2 class="section-heading">Sources</h2>
+        <div class="card">
+          <ul class="source-list">
+            <li><a href="https://docs.aws.amazon.com/singlesignon/latest/userguide/what-is.html" target="_blank" rel="noopener">AWS IAM Identity Center User Guide — What is IAM Identity Center?</a></li>
+            <li><a href="https://docs.aws.amazon.com/singlesignon/latest/userguide/permissionsetsconcept.html" target="_blank" rel="noopener">Permission sets — concepts and configuration</a></li>
+            <li><a href="https://docs.aws.amazon.com/singlesignon/latest/userguide/limits.html" target="_blank" rel="noopener">IAM Identity Center quotas and limits</a></li>
+            <li><a href="https://docs.aws.amazon.com/singlesignon/latest/userguide/samlfederation.html" target="_blank" rel="noopener">SAML 2.0 federation with IAM Identity Center</a></li>
+            <li><a href="https://docs.aws.amazon.com/singlesignon/latest/userguide/scim-profile.html" target="_blank" rel="noopener">Automatic provisioning (SCIM) with IAM Identity Center</a></li>
+            <li><a href="https://docs.aws.amazon.com/singlesignon/latest/userguide/delegated-admin.html" target="_blank" rel="noopener">Delegated administration for IAM Identity Center</a></li>
+            <li><a href="https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_evaluation-logic.html" target="_blank" rel="noopener">IAM policy evaluation logic</a></li>
+            <li><a href="https://docs.aws.amazon.com/wellarchitected/latest/security-pillar/welcome.html" target="_blank" rel="noopener">AWS Well-Architected Framework — Security Pillar</a></li>
+          </ul>
+        </div>
+      </section>
+
       <div class="day-nav">
         <a href="day-003.html">&larr; Day 3: AWS Control Tower &amp; Account Factory</a>
         <button class="btn btn-green" onclick="markComplete(4, 'day-005.html')">Mark Day 4 Complete &rarr;</button>

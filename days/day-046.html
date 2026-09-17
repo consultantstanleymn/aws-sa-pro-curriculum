@@ -104,37 +104,376 @@
         <span class="pill pill-green">Phase 4: Migration, Hybrid &amp; Cost Optimization</span>
       </div>
       <h1 class="hero-title">AWS Schema Conversion Tool (SCT) — Heterogeneous Schema Conversion</h1>
-      <div class="reading-meta">&#128337; ~3 min read &middot; 2 services covered</div>
+      <div class="reading-meta">&#128337; ~58 min read &middot; 2 services covered</div>
       <div class="services-grid">
         <span class="service-tag">AWS SCT</span>
         <span class="service-tag">Schema/Code Conversion</span>
       </div>
       <div id="tracker"></div>
-      <section class="doc-section">
-        <h2 class="section-heading">Today's Concept</h2>
+
+      <section class="doc-section" id="recap">
+        <h2 class="section-heading">Recap: Where We Left Off</h2>
         <div class="card card-accent">
-          <p>SCT converts database schema, views, stored procedures, and functions when migrating between different engines (e.g. Oracle to Aurora PostgreSQL). It reports a conversion-completeness percentage, but even a high percentage (e.g. 95%) leaves complex procedural code requiring manual remediation. SCT handles schema; AWS DMS handles the data itself.</p>
-        </div>
-        <h3 class="sub-heading">Hands-on Lab / Practical Action (45 min)</h3>
-        <div class="card">
-          <p>Run SCT against a sample Oracle schema with stored procedures, review the generated conversion action report, and identify objects needing manual rework.</p>
+          <p>Day 45 established MGN as the rehost workhorse: continuous block-level replication from source servers into a staging area in AWS, with test and cutover instances launched on demand so the real cutover window stays short. The whole design rests on one assumption — that the thing being moved is a server, and that whatever runs on it will keep running unchanged once it lands on EC2. That assumption is exactly what breaks the moment the workload is a database engine rather than an application.</p>
+          <p>Today sets up the same trap in a different service. MGN's promise is that the source and target are functionally identical, so nothing inside the machine needs to be understood. SCT's promise is narrower and much more conditional: it will translate schema and procedural code between engines, but it will not promise that the translation is complete, and the gap it leaves behind is where heterogeneous migrations actually fail. The same instinct that makes MGN feel safe — "the tool handles it" — is the instinct that gets teams into trouble here, because SCT reports its own incompleteness and the report is easy to skim past.</p>
         </div>
       </section>
-      <section class="doc-section">
+
+      <section class="doc-section" id="why-on-exam">
+        <h2 class="section-heading">1. Why SCT Is on the Exam</h2>
+        <p>SCT exists because of a specific architectural problem: relational database engines are not interchangeable at the schema level, and the parts that differ most are the parts that carry business logic. A table definition is mostly portable — column types map with varying degrees of fidelity, indexes and constraints translate with predictable caveats. Stored procedures, functions, triggers, and views are not portable in the same way, because they are written in a vendor-specific procedural dialect. Oracle's PL/SQL, SQL Server's T-SQL, and PostgreSQL's PL/pgSQL share syntax ancestry but diverge on error handling, cursor semantics, dynamic SQL, package structure, and dozens of built-in functions that have no direct equivalent. A migration that only moves tables and data leaves the application calling procedures that no longer exist.</p>
+        <p>That is the gap SCT fills, and it is why the service shows up in SAP-C02 scenarios that describe a heterogeneous engine change — Oracle to Aurora PostgreSQL, SQL Server to Aurora MySQL, Teradata or Netezza to Redshift. The exam does not test SCT in isolation; it tests whether you recognize that a heterogeneous migration is a two-tool problem. SCT handles schema and code, DMS handles data and ongoing change capture, and neither substitutes for the other. Scenarios that describe "minimize downtime" or "migrate with minimal application changes" while also changing the engine are testing whether you know both tools are required and in what order they run.</p>
+        <p>The domain mapping is Domain 3, Migration and Modernization, which is the smallest of the four domains by weighting but disproportionately represented in scenario questions because migration decisions combine so many other domains — networking for the transfer path, security for credentials and encryption, cost for the target engine choice. SCT specifically tests the boundary between "the tool did it" and "a developer still has to do it," which is the single most common misreading of what a conversion tool delivers.</p>
+        <p>There is also a quieter reason the topic appears: it is a clean test of whether you understand that schema conversion and data migration are separable, independently schedulable activities. You can convert and validate schema weeks before you move a single row. Teams that understand this sequence their migration differently from teams that treat it as one event, and the exam rewards the former.</p>
+      </section>
+
+      <section class="doc-section" id="mechanism">
+        <h2 class="section-heading">2. How SCT Actually Works</h2>
+        <p>SCT is a desktop application, not a managed AWS service. That single fact drives most of its operational characteristics. You install it on a workstation or a Windows EC2 instance, and it connects outward to the source database, the target database, and — optionally — to an S3 bucket that holds the project file and the assessment report. There is no SCT control plane in your account, no IAM role it assumes on your behalf, and no service quota to raise. The tool runs where you run it, and the credentials it uses are the ones you configure in its connection profiles.</p>
+        <p>Internally, SCT works in two distinct phases that are worth separating in your head. The first is assessment: it connects to the source, reads the catalog, and produces an assessment report that classifies every schema object by how much manual effort its conversion will require. The report groups objects into categories — those that convert automatically, those that convert with simple actions, and those that require complex or manual rewriting. The headline number people quote is the percentage of objects that convert automatically, but the more useful output is the list of objects in the manual bucket, because that list is your actual project plan.</p>
+        <p>The second phase is conversion. SCT reads the source DDL and procedural code and emits target-engine DDL and code, applying a translation ruleset that is engine-pair specific. Oracle-to-PostgreSQL and SQL-Server-to-MySQL are different rulesets with different coverage. Where a construct has a clean equivalent, SCT emits it directly. Where it does not, SCT emits a commented-out block with an action item explaining what a developer needs to decide — this is the mechanism behind the "conversion with simple actions" category. Where the construct is structurally incompatible, SCT may emit nothing usable at all and flag the object for manual rewrite.</p>
+        <p>The output is not applied automatically. SCT generates a SQL script that you review, edit, and then run against the target yourself. This is deliberate: the tool's authors assume a human will read the generated code before it touches a database. Teams that treat the generated script as a deployable artifact and pipe it straight into the target are skipping the step the tool was designed around, and the failure mode is subtle — the script runs, the schema exists, and the application breaks weeks later on a code path nobody tested.</p>
+        <p>One more mechanism detail matters for planning: SCT can also convert application-side SQL embedded in code, via its application conversion projects, but that capability is narrower and less reliable than schema conversion. Treat it as a helper for finding embedded SQL, not as an automated application port.</p>
+      </section>
+
+      <section class="doc-section" id="decision-boundary">
+        <h2 class="section-heading">3. The Core Decision Boundary: Homogeneous vs. Heterogeneous</h2>
+        <p>Every SCT scenario question reduces to one fork: is the target engine the same as the source engine, or different? If it is the same, SCT is not in the picture at all — you are doing a homogeneous migration, DMS alone handles it, and the schema moves as-is because there is nothing to translate. If the engine changes, SCT becomes mandatory, because DMS will happily copy data into a target whose schema does not exist yet and fail in ways that are tedious to diagnose.</p>
+        <p>The fork is not just about whether to use SCT. It determines the entire shape of the project: the timeline, the skill mix on the team, the risk profile, and the cutover strategy. A homogeneous migration is largely an infrastructure exercise. A heterogeneous migration is a software project with a database attached, because someone has to own the manual remediation list.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Dimension</th><th>Homogeneous (same engine)</th><th>Heterogeneous (different engine)</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Schema conversion tool</td><td>Not needed</td><td>SCT required</td></tr>
+              <tr><td>Data migration tool</td><td>DMS</td><td>DMS (after schema exists)</td></tr>
+              <tr><td>Procedural code</td><td>Moves unchanged</td><td>Converted, partially, with manual remediation</td></tr>
+              <tr><td>Application changes</td><td>Typically none</td><td>Often required for dialect-specific SQL</td></tr>
+              <tr><td>Primary risk</td><td>Cutover timing and data volume</td><td>Untested code paths and silent semantic drift</td></tr>
+              <tr><td>Typical timeline driver</td><td>Transfer bandwidth</td><td>Developer remediation effort</td></tr>
+              <tr><td>Rollback complexity</td><td>Moderate</td><td>High — two engines, two schemas, two code paths</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The exam pattern here is a scenario that mentions a specific engine change and then asks what additional step is required. The distractor set usually includes "use DMS with the schema conversion option enabled" — which is not a thing — or "use SCT to migrate the data," which inverts the tools' roles. The correct answer names SCT for schema and code, DMS for data, and typically adds that manual remediation of unconverted objects is expected.</p>
+        <p>A second, subtler boundary sits inside the heterogeneous case: whether the target engine choice was driven by licensing cost, by a managed-service preference, or by an existing team skill base. That choice determines how much of the procedural code has a natural home. Moving Oracle PL/SQL to Aurora PostgreSQL means rewriting packages into functions and schemas; moving SQL Server T-SQL to Aurora MySQL means a larger rewrite still, because the procedural dialects are further apart. SCT's assessment report quantifies this before you commit, which is the main reason to run assessment early rather than as a formality.</p>
+      </section>
+
+      <section class="doc-section" id="config-tradeoffs">
+        <h2 class="section-heading">4. Conversion Modes and Their Tradeoffs</h2>
+        <p>SCT's configuration surface is smaller than DMS's, but the choices still change the shape of the work. The first and most consequential is the engine pair you select when creating the project. SCT supports a specific matrix of source and target engines, and the coverage of that matrix is uneven — some pairs convert the large majority of objects automatically, others leave substantially more manual work. Choosing a target engine that is well covered by SCT's ruleset is a legitimate architectural input, not a shortcut, because it directly reduces the remediation backlog.</p>
+        <p>The second choice is scope: schema-only conversion, or schema plus code objects. Converting tables, indexes, and constraints is comparatively mechanical. Converting stored procedures, functions, triggers, and views is where the assessment report's manual bucket fills up. Some teams deliberately split these into two passes — get the schema converted and the data flowing first, then port procedural logic incrementally while the old system is still authoritative for those code paths. That staging is a real strategy, and it is worth recognizing in scenarios that describe a phased cutover.</p>
+        <p>The third choice is how you handle the generated action items. SCT emits three broad categories of output, and each implies a different cost.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Output category</th><th>What SCT emits</th><th>Effort implied</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Automatic conversion</td><td>Working target-engine DDL or code</td><td>Review only</td></tr>
+              <tr><td>Conversion with actions</td><td>Code plus inline action items describing a decision</td><td>Developer edits, usually small</td></tr>
+              <tr><td>Manual rewrite required</td><td>Comment block or nothing usable</td><td>Full reimplementation against target dialect</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The trap in this table is that the middle category is where estimates go wrong. "Conversion with actions" sounds cheap, and for a simple type mapping it is. For a cursor-heavy procedure with vendor-specific error handling, the action items can amount to a rewrite with extra steps. The assessment report's effort estimate is a starting point, not a commitment, and the only reliable way to size the middle bucket is to have a developer read a representative sample of the generated output.</p>
+        <p>Finally, there is the question of where the project file and reports live. SCT can store its project in a local file or in S3, and the assessment report can be exported for sharing. For a team migration, storing the project in S3 is the difference between one person's laptop being the source of truth and the project being a shared artifact. It is a small configuration choice with an outsized effect on whether the remediation list is visible to the people who have to work it.</p>
+      </section>
+
+      <section class="doc-section" id="sizing-limits">
+        <h2 class="section-heading">5. Sizing, Limits, and What Actually Constrains You</h2>
+        <p>SCT has no service quotas in the AWS sense, because it is not a service. What constrains an SCT project is the size and complexity of the source schema, the throughput of the connection between the SCT workstation and the databases, and the number of developer hours available to work the manual bucket. Of those, the last is almost always the binding constraint, and it is the one that does not appear in any AWS documentation table.</p>
+        <p>The connection path matters more than people expect. SCT reads the source catalog and, for assessment, samples data to estimate conversion effort. If the source database is on-premises and SCT runs on a workstation in the same building, that is fine. If SCT runs on an EC2 instance in AWS and the source is on-premises, every catalog read crosses the hybrid link, and a large schema with thousands of objects can make assessment slow enough to be annoying. Running SCT close to the source — or close to the target, if you are converting against a live target — is a practical sizing decision.</p>
+        <p>On the target side, the constraint is that the target database must exist and be reachable before you can validate converted DDL against it. SCT can generate DDL without a live target, but it cannot tell you whether the generated DDL actually applies cleanly. For a large migration, provisioning the target Aurora or RDS instance early — even at a small instance size — turns schema conversion from a paper exercise into a tested one.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Constraint</th><th>Where it bites</th><th>Mitigation</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Source schema object count</td><td>Assessment runtime and report size</td><td>Run SCT near the source; scope assessment to one schema at a time</td></tr>
+              <tr><td>Procedural code volume</td><td>Manual remediation backlog</td><td>Sample the middle bucket early to size real effort</td></tr>
+              <tr><td>Hybrid link throughput</td><td>Catalog reads and data sampling</td><td>Co-locate SCT with the source or use a Direct Connect path</td></tr>
+              <tr><td>Target availability</td><td>Validating generated DDL</td><td>Provision the target early, even at minimum size</td></tr>
+              <tr><td>Developer hours</td><td>Everything downstream of the report</td><td>Treat the manual bucket as the project plan, not a footnote</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>One number worth internalizing without over-trusting: a conversion-completeness figure in the low-to-mid nineties is a normal, healthy result for a well-covered engine pair, and it still means a meaningful number of objects need human attention. The percentage is computed over objects, not over lines of code or over business criticality, so a schema where the 5% that failed to convert happens to be the billing procedures is a much harder migration than the number suggests. Read the list, not the percentage.</p>
+      </section>
+
+      <section class="doc-section" id="failure-modes">
+        <h2 class="section-heading">6. Failure Modes and What They Look Like in Production</h2>
+        <p>The most common failure is not a tool failure at all — it is a planning failure where the conversion percentage is treated as a completion metric. The migration is declared ready because SCT reported a high automatic conversion rate, the schema is applied, DMS copies the data, and the application starts throwing errors on the first code path that touches an unconverted procedure. The symptom is a cluster of runtime errors that all trace back to a small number of database objects, and the first diagnostic move is to diff the assessment report's manual bucket against the objects the application actually calls.</p>
+        <p>The second failure mode is silent semantic drift. SCT converts a construct to something that is syntactically valid in the target dialect but behaves differently at the edges — null handling in a comparison, implicit type coercion in an arithmetic expression, ordering guarantees in a query without an explicit ORDER BY, or date arithmetic across different calendar semantics. Nothing errors. Results are subtly wrong. This is the hardest class of bug to find because there is no exception to trace, and it is why converted procedural code needs test coverage against known-good outputs rather than just a successful compile.</p>
+        <p>The third is a data-type fidelity problem that surfaces late. A source column type maps to a target type that is close but not identical in range or precision, and the problem only appears when a value outside the target's range arrives — months after cutover, from a customer nobody was thinking about. The mitigation is to review the type mapping table SCT produces rather than accepting it, and to check the widest and most extreme values in each converted column against the target type's limits.</p>
+        <p>The fourth is an operational failure specific to the tool's desktop nature: the project file lives on one engineer's machine, that engineer leaves, and the remediation list is gone. There is no service-side record of what was converted or what was flagged. Storing the SCT project in S3 and exporting the assessment report into the migration's shared documentation is the only defense, and it is easy to skip because the tool works fine without it right up until it doesn't.</p>
+      </section>
+
+      <section class="doc-section" id="sre-angle">
+        <h2 class="section-heading">7. The Operational and SRE Angle</h2>
+        <p>SCT itself has no runtime, so there is nothing to monitor in the traditional sense — no CloudWatch metrics, no alarms, no SLO. What it produces, however, has a direct and permanent effect on the operational characteristics of the target database, and that is where the SRE thinking belongs. Converted procedural code is new code running in production for the first time, and it deserves the same treatment as any other new code: staged rollout, comparison against the old system's outputs, and a rollback path that does not require re-converting anything.</p>
+        <p>The practical pattern is a parallel-run period. The old engine stays authoritative while the converted procedures run against a copy of production data and their outputs are compared to the originals. Discrepancies are the semantic drift from the previous section, caught before they reach a customer. This is expensive in infrastructure and cheap in incident cost, and for any procedure that touches money, inventory, or access control it is not optional.</p>
+        <p>Once cut over, the operational surface is the target database's own — connection counts, query latency, lock contention, replication lag if DMS is still streaming. The one SCT-specific artifact worth keeping in the runbook is the mapping from each converted object back to its source object, so that when a query plan regresses or a procedure behaves oddly, the on-call engineer can find the original definition and compare. Without that mapping, debugging converted code means reverse-engineering what it used to be.</p>
+        <p>There is also a change-management angle. After cutover, the source schema is frozen and the target schema becomes the live one. Any change that would have been made to the source must now be made to the target, and the two will diverge immediately. Teams that keep the source database running "just in case" for months without a defined decommission date accumulate a second system to maintain and a growing ambiguity about which one is authoritative. Set the decommission date when you set the cutover date.</p>
+      </section>
+
+      <section class="doc-section" id="gotchas">
+        <h2 class="section-heading">8. Edge Cases and Exam Gotchas</h2>
+        <p>The single most reliable gotcha is the tool-role inversion. SCT converts schema and code; DMS moves data. Any answer that has SCT migrating rows, or DMS converting stored procedures, is wrong regardless of how well the rest of the option reads. The exam leans on this because the two tools are always mentioned together and the division of labor is easy to blur under time pressure.</p>
+        <p>The second gotcha is the assumption that a high conversion percentage means the migration is nearly done. It does not. The percentage counts objects, and the objects that fail are disproportionately the complex ones that carry business logic. A schema with 95% automatic conversion can still have weeks of developer work in the remaining 5%.</p>
+        <p>The third is forgetting that SCT is a client-side tool. Answers that describe "enabling SCT in the AWS console" or "attaching an IAM role to SCT" are describing something that does not exist. SCT runs on a machine you control and connects with credentials you supply.</p>
+        <p>The fourth is the ordering mistake: running DMS before the converted schema has been applied and validated. DMS will attempt to write into a target that does not have the right tables, and the errors it produces are about the target, not about the missing schema step, which sends people down the wrong diagnostic path.</p>
+        <p>The fifth is treating the generated script as deployable without review. SCT's output is a draft. The action items embedded in it are instructions, not comments.</p>
+        <p>The sixth, and the one most likely to appear in a scenario with a twist, is the homogeneous case. If the scenario says the engine is unchanged, SCT is a distractor. The correct answer is DMS alone, and the presence of procedural code in the source does not change that, because same-engine procedural code moves as-is.</p>
+      </section>
+
+      <section class="doc-section" id="vs-comparison">
+        <h2 class="section-heading">9. SCT vs. the Tools It Gets Confused With</h2>
+        <p>SCT sits in a small cluster of migration tools that all sound similar in a scenario description and do genuinely different jobs. The confusion is almost always about which layer of the stack each tool operates on: schema and code, data and change streams, files and objects, or whole servers.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Tool</th><th>Layer</th><th>Use it when…</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>AWS SCT</td><td>Schema and procedural code</td><td>The target engine differs from the source engine</td></tr>
+              <tr><td>AWS DMS</td><td>Data and ongoing changes</td><td>You need to move rows, with or without CDC, into an existing schema</td></tr>
+              <tr><td>AWS DataSync</td><td>Files and objects</td><td>You are moving NFS/SMB/HDFS data to S3, EFS, or FSx — not database-aware</td></tr>
+              <tr><td>AWS MGN</td><td>Whole servers</td><td>You are rehosting a server and keeping its OS and software unchanged</td></tr>
+              <tr><td>AWS Snow Family</td><td>Physical media</td><td>The network is the bottleneck and offline transfer is faster</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The pairing rule to memorize is that SCT and DMS are complements, not alternatives, and they run in that order. SCT first, because the target schema must exist before data can land in it. DMS second, because it needs somewhere to write. If a scenario describes a heterogeneous migration and asks for the complete tool set, the answer names both.</p>
+        <p>The distinction from DataSync is worth holding onto because both tools are described as "migration" tools and both handle data. DataSync is file- and object-oriented and has no concept of a database schema, a table, or a stored procedure. If the source is a database and the target is a database, DataSync is the wrong tool no matter how the scenario is phrased. If the source is a file share and the target is S3 or EFS, DataSync is the right tool and SCT is irrelevant.</p>
+        <p>Against MGN, the boundary is the unit of migration. MGN moves a machine; SCT moves a schema. A scenario that describes rehosting an application server and its database together, with no engine change, is an MGN scenario. A scenario that describes keeping the application where it is but changing the database engine underneath it is an SCT scenario. The two can appear in the same migration program, on different workloads, and the exam will sometimes describe both to see whether you keep them straight.</p>
+      </section>
+
+      <section class="doc-section" id="lab">
+        <h2 class="section-heading">Hands-On Lab: Convert an Oracle Schema to Aurora PostgreSQL (60 min)</h2>
+        <div class="card card-green">
+          <p>This lab walks through a heterogeneous conversion end to end: assess, convert, review, and validate. The goal is not to produce a working application but to see exactly where SCT stops and a developer has to start, because that boundary is the thing the exam tests.</p>
+          <p><strong>1. Provision the target.</strong> Create an Aurora PostgreSQL cluster in a private subnet, at the smallest instance size that supports your testing. Note the endpoint, the database name, and the credentials. You will need a live target to validate generated DDL, and provisioning it first means you are never blocked waiting on it later.</p>
+          <p><strong>2. Prepare a source schema with real procedural content.</strong> If you do not have an Oracle instance available, use a sample schema that includes at least one table with a vendor-specific type, one view with a function call in its definition, and two or three stored procedures — ideally one with a cursor loop, one with exception handling, and one that uses a package-level variable. The point is to have objects that fall into all three output categories, not to have a large schema.</p>
+          <p><strong>3. Install SCT and create the project.</strong> Install the desktop tool on a machine with network reachability to both databases. Create a new project, select Oracle as the source and Amazon Aurora (PostgreSQL-compatible) as the target, and configure both connection profiles. Store the project file in S3 rather than locally, so the artifact survives the lab and is shareable.</p>
+          <p><strong>4. Run the assessment.</strong> Execute the database assessment and open the generated report. Read it in this order: the summary percentage first, then the list of objects requiring manual conversion, then the effort estimate. Write down the count of objects in each of the three categories. This is the number that determines your project timeline, not the headline percentage.</p>
+          <p><strong>5. Convert the schema.</strong> Run the conversion for the schema objects only — tables, indexes, constraints, sequences. Review the generated DDL. Look specifically for type mappings you would not have chosen, and for any column where the target type's range is narrower than the source's. Apply the script to the Aurora cluster and confirm it runs cleanly.</p>
+          <p><strong>6. Convert the code objects.</strong> Now convert the views, functions, and stored procedures. Open the generated output and find the action items. For each one, classify it: is this a mechanical substitution, a semantic decision, or a full rewrite? Count how many fall into each bucket. Compare that count to what the assessment report predicted — the gap between prediction and reality is the lesson.</p>
+          <p><strong>7. Validate against the target.</strong> Apply the converted code objects to Aurora. Where a procedure converted cleanly, call it with representative inputs and compare the output to what the Oracle version returns for the same inputs. Where it did not convert, note the specific construct that defeated the ruleset — this is the list you would hand to a developer.</p>
+          <p><strong>8. Write the remediation plan.</strong> Produce a short document listing every object in the manual bucket, the reason it failed, and a rough effort estimate. This is the artifact a real migration would be planned from, and producing it is the actual deliverable of the lab.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="quiz">
         <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
-        
-      <div class="scenario-card">
-        <p class="scenario-question"><strong>Q1.</strong> SCT reports a 92% automatic conversion rate for an Oracle-to-PostgreSQL migration. What does this mean for the remaining 8%?</p>
-        <div class="scenario-options" id="opts-d46q0">
-            <div class="scenario-option">A. The migration is essentially complete and can proceed unattended</div>
-            <div class="scenario-option">B. Complex objects like certain stored procedures/functions couldn't be auto-converted and need manual developer remediation before cutover</div>
-            <div class="scenario-option">C. SCT failed and DMS cannot be used</div>
-            <div class="scenario-option">D. 8% of the data will be lost during migration</div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q1.</strong> A team is migrating an on-premises Oracle database to Amazon Aurora PostgreSQL. They plan to use AWS DMS with full load plus CDC. What critical step is missing from their plan?</p>
+          <div class="scenario-options" id="opts-d46q1">
+            <div class="scenario-option">A. Nothing — DMS handles both schema and data for heterogeneous migrations</div>
+            <div class="scenario-option">B. Using AWS SCT to convert the schema and procedural code before DMS runs</div>
+            <div class="scenario-option">C. Using AWS DataSync to move the schema files</div>
+            <div class="scenario-option">D. Enabling the schema conversion option in the DMS console</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d46q1', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d46q1"><strong>Correct answer: B.</strong> DMS moves data but does not translate schema between engines. SCT must convert the schema and procedural code first, then DMS loads data into the converted target.</div>
         </div>
-        <button class="scenario-reveal-btn" onclick="revealAnswer('d46q0', 1)">Reveal Answer</button>
-        <div class="scenario-explanation" id="exp-d46q0"><strong>Correct answer: B.</strong> SCT's conversion percentage reflects schema/code objects only; a high percentage still commonly leaves complex procedural logic that must be manually rewritten before the heterogeneous migration is production-ready.</div>
-      </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q2.</strong> SCT's assessment report shows 94% automatic conversion for an Oracle-to-PostgreSQL migration. The project manager reads this as "94% done." What is wrong with that interpretation?</p>
+          <div class="scenario-options" id="opts-d46q2">
+            <div class="scenario-option">A. Nothing — 94% automatic conversion means 94% of the work is complete</div>
+            <div class="scenario-option">B. The percentage counts objects, and the unconverted 6% is disproportionately complex procedural code carrying business logic</div>
+            <div class="scenario-option">C. The percentage only counts tables, so views and procedures are excluded entirely</div>
+            <div class="scenario-option">D. The percentage is a marketing figure with no basis in the actual conversion</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d46q2', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d46q2"><strong>Correct answer: B.</strong> The figure is an object count, not an effort measure. Objects that fail to convert are typically the complex ones, so the remaining work can be weeks of developer time.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q3.</strong> Where does AWS SCT run?</p>
+          <div class="scenario-options" id="opts-d46q3">
+            <div class="scenario-option">A. As a managed AWS service in the target region</div>
+            <div class="scenario-option">B. As a desktop application installed on a workstation or EC2 instance that connects to the source and target databases</div>
+            <div class="scenario-option">C. Inside the DMS replication instance</div>
+            <div class="scenario-option">D. As a Lambda function triggered by the migration workflow</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d46q3', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d46q3"><strong>Correct answer: B.</strong> SCT is a client-side desktop tool with no AWS control plane. It connects outward using credentials you configure, and its project file lives wherever you choose to store it.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q4.</strong> A migration moves an on-premises MySQL database to Amazon RDS for MySQL. The application uses stored procedures. Which tools are required?</p>
+          <div class="scenario-options" id="opts-d46q4">
+            <div class="scenario-option">A. SCT and DMS, because stored procedures are involved</div>
+            <div class="scenario-option">B. DMS only — the engine is unchanged, so the schema and procedures move as-is</div>
+            <div class="scenario-option">C. SCT only, since DMS cannot handle MySQL</div>
+            <div class="scenario-option">D. DataSync and SCT</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d46q4', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d46q4"><strong>Correct answer: B.</strong> This is a homogeneous migration. Same engine means no translation is needed, so SCT is a distractor and DMS alone handles the move.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q5.</strong> After applying SCT-converted stored procedures to Aurora PostgreSQL, the application runs without errors but produces subtly incorrect totals on some reports. What is the most likely cause?</p>
+          <div class="scenario-options" id="opts-d46q5">
+            <div class="scenario-option">A. DMS corrupted the data during the load</div>
+            <div class="scenario-option">B. Semantic drift — a converted construct is syntactically valid but behaves differently at the edges, such as null handling or implicit type coercion</div>
+            <div class="scenario-option">C. The Aurora cluster is under-provisioned</div>
+            <div class="scenario-option">D. SCT did not run the assessment phase</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d46q5', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d46q5"><strong>Correct answer: B.</strong> Silent semantic drift is the hardest conversion failure to detect because nothing errors. It is why converted procedural code needs output comparison against the source, not just a successful compile.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q6.</strong> A team wants to move 40 TB of NFS file share data to Amazon EFS on a nightly schedule with integrity validation. Which tool fits?</p>
+          <div class="scenario-options" id="opts-d46q6">
+            <div class="scenario-option">A. AWS SCT</div>
+            <div class="scenario-option">B. AWS DMS</div>
+            <div class="scenario-option">C. AWS DataSync</div>
+            <div class="scenario-option">D. AWS MGN</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d46q6', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d46q6"><strong>Correct answer: C.</strong> DataSync handles file and object transfer between on-premises storage and AWS storage services. SCT and DMS are database tools and have no concept of a file share.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q7.</strong> During an SCT conversion, a complex Oracle package with vendor-specific error handling produces a commented-out block with action items rather than working code. What does this mean for the project plan?</p>
+          <div class="scenario-options" id="opts-d46q7">
+            <div class="scenario-option">A. The migration cannot proceed and the target engine must be changed</div>
+            <div class="scenario-option">B. A developer must reimplement that logic against the target dialect, and the effort must be estimated and scheduled</div>
+            <div class="scenario-option">C. SCT will retry automatically on the next run</div>
+            <div class="scenario-option">D. The object can be skipped because it is not used by the application</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d46q7', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d46q7"><strong>Correct answer: B.</strong> Objects in the manual bucket are the real project work. They must be reimplemented by a developer and sized into the migration timeline.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q8.</strong> Which statement correctly describes the division of labor between SCT and DMS?</p>
+          <div class="scenario-options" id="opts-d46q8">
+            <div class="scenario-option">A. SCT migrates data; DMS converts schema</div>
+            <div class="scenario-option">B. SCT converts schema and code; DMS migrates data and captures ongoing changes</div>
+            <div class="scenario-option">C. Both tools convert schema, and DMS additionally migrates data</div>
+            <div class="scenario-option">D. They are interchangeable and either can do the full migration</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d46q8', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d46q8"><strong>Correct answer: B.</strong> SCT is schema and procedural code; DMS is data movement and change data capture. They are complements that run in that order.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q9.</strong> A migration team runs DMS before applying the SCT-converted schema to the target. What is the likely outcome?</p>
+          <div class="scenario-options" id="opts-d46q9">
+            <div class="scenario-option">A. DMS creates the missing tables automatically</div>
+            <div class="scenario-option">B. DMS fails writing into a target that lacks the expected tables, producing errors that point at the target rather than the missing schema step</div>
+            <div class="scenario-option">C. DMS silently skips the missing tables and reports success</div>
+            <div class="scenario-option">D. Nothing changes — order does not matter</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d46q9', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d46q9"><strong>Correct answer: B.</strong> DMS requires the target schema to exist. Running it first produces target-side errors that misdirect diagnosis away from the actual missing step.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q10.</strong> An engineer asks how to grant SCT the IAM permissions it needs to read the source database. What is the correct response?</p>
+          <div class="scenario-options" id="opts-d46q10">
+            <div class="scenario-option">A. Attach a managed policy to the SCT service role in the console</div>
+            <div class="scenario-option">B. SCT is a client-side tool — it uses database credentials configured in its connection profiles, not an IAM service role</div>
+            <div class="scenario-option">C. Add the permissions to the DMS replication instance role</div>
+            <div class="scenario-option">D. SCT inherits permissions from the account's root user</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d46q10', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d46q10"><strong>Correct answer: B.</strong> There is no SCT service role. The tool connects with database credentials you supply in its connection profiles, which is a direct consequence of it being a desktop application.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q11.</strong> A converted column that held large numeric values in Oracle is mapped to a PostgreSQL type with a narrower range. When does this problem surface?</p>
+          <div class="scenario-options" id="opts-d46q11">
+            <div class="scenario-option">A. Immediately, during the schema conversion step</div>
+            <div class="scenario-option">B. During the DMS full load, which will reject out-of-range values</div>
+            <div class="scenario-option">C. Potentially months after cutover, when a value outside the target type's range first arrives</div>
+            <div class="scenario-option">D. Never — SCT validates all type mappings against actual data</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d46q11', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d46q11"><strong>Correct answer: C.</strong> Type fidelity problems are latent. They appear only when a value outside the target type's range arrives, which can be long after cutover. Review the type mapping table rather than accepting it.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q12.</strong> A migration program includes both rehosting 200 application servers and changing a database engine from SQL Server to Aurora MySQL. Which tools map to which workload?</p>
+          <div class="scenario-options" id="opts-d46q12">
+            <div class="scenario-option">A. MGN for the servers, SCT plus DMS for the database</div>
+            <div class="scenario-option">B. SCT for the servers, MGN for the database</div>
+            <div class="scenario-option">C. DMS for both workloads</div>
+            <div class="scenario-option">D. DataSync for the servers, SCT for the database</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d46q12', 0)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d46q12"><strong>Correct answer: A.</strong> MGN rehosts servers with no engine change. The database workload is heterogeneous, so it needs SCT for schema and code plus DMS for data.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q13.</strong> Why does SCT generate a SQL script for review rather than applying converted DDL directly to the target?</p>
+          <div class="scenario-options" id="opts-d46q13">
+            <div class="scenario-option">A. Because it lacks network access to the target database</div>
+            <div class="scenario-option">B. Because the output is a draft containing action items that require human decisions before it is safe to apply</div>
+            <div class="scenario-option">C. Because DDL cannot be applied programmatically to Aurora</div>
+            <div class="scenario-option">D. Because the script must be signed by an AWS account administrator</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d46q13', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d46q13"><strong>Correct answer: B.</strong> The generated script is deliberately a reviewable draft. Action items embedded in it are instructions for a developer, not comments to be ignored.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q14.</strong> A team wants to reduce the risk of converted procedures behaving differently from the originals. Which approach addresses this most directly?</p>
+          <div class="scenario-options" id="opts-d46q14">
+            <div class="scenario-option">A. Increase the Aurora instance size before cutover</div>
+            <div class="scenario-option">B. Run the converted procedures in parallel against a copy of production data and compare outputs to the originals before cutover</div>
+            <div class="scenario-option">C. Re-run the SCT conversion a second time and diff the two outputs</div>
+            <div class="scenario-option">D. Enable Multi-AZ on the target cluster</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d46q14', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d46q14"><strong>Correct answer: B.</strong> A parallel-run period with output comparison is the only reliable way to catch semantic drift, because the failure produces wrong results rather than errors.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q15.</strong> Six months after a heterogeneous migration cutover, the source Oracle database is still running and receiving occasional schema changes from a team that did not know the migration was complete. What is the underlying process failure?</p>
+          <div class="scenario-options" id="opts-d46q15">
+            <div class="scenario-option">A. SCT should have been re-run after cutover</div>
+            <div class="scenario-option">B. No decommission date was set for the source, leaving two systems with ambiguous authority</div>
+            <div class="scenario-option">C. DMS CDC should have been left running indefinitely</div>
+            <div class="scenario-option">D. The target engine choice was wrong</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d46q15', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d46q15"><strong>Correct answer: B.</strong> Keeping the source alive without a defined decommission date creates a second system to maintain and growing ambiguity about which one is authoritative. Set the decommission date when you set the cutover date.</div>
+        </div>
       </section>
+
+      <section class="doc-section" id="preview">
+        <h2 class="section-heading">Peek into Tomorrow</h2>
+        <div class="card card-purple">
+          <p>Everything in this day assumed the thing being migrated is a database, and that the tools involved understand what a table, a schema, and a stored procedure are. That assumption is doing a lot of quiet work. It is why SCT can read a catalog and produce an assessment, why DMS can capture changes at the row level, and why the whole heterogeneous migration story has a coherent shape at all.</p>
+          <p>The open question is what happens when the data has no schema to convert — when it is a file share full of documents, a directory tree of images, or an object store with millions of keys and no relational structure whatsoever. None of the machinery from today applies. There is no catalog to assess, no procedural code to translate, and no concept of a row-level change to capture. What replaces it is a different set of concerns entirely: how you keep a transfer running for days without saturating the link that production also depends on, and how you know — with evidence rather than hope — that every file arrived intact and none were silently skipped. Tomorrow's topic is the tool that answers those questions, and the interesting part is how much of its design is about verification rather than transfer.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="sources">
+        <h2 class="section-heading">Sources</h2>
+        <div class="card">
+          <ul class="source-list">
+            <li><a href="https://docs.aws.amazon.com/SchemaConversionTool/latest/userguide/CHAP_Welcome.html" target="_blank">AWS Schema Conversion Tool User Guide — What Is AWS SCT?</a></li>
+            <li><a href="https://docs.aws.amazon.com/SchemaConversionTool/latest/userguide/CHAP_AssessmentReport.html" target="_blank">AWS SCT — Working with the Assessment Report</a></li>
+            <li><a href="https://docs.aws.amazon.com/SchemaConversionTool/latest/userguide/CHAP_Converting.html" target="_blank">AWS SCT — Converting Database Schemas</a></li>
+            <li><a href="https://docs.aws.amazon.com/dms/latest/userguide/CHAP_BestPractices.html" target="_blank">AWS DMS — Best Practices for Database Migration</a></li>
+            <li><a href="https://docs.aws.amazon.com/prescriptive-guidance/latest/migration-database-oracle/welcome.html" target="_blank">AWS Prescriptive Guidance — Migrating Oracle Databases to AWS</a></li>
+            <li><a href="https://docs.aws.amazon.com/prescriptive-guidance/latest/migration-sql-server/welcome.html" target="_blank">AWS Prescriptive Guidance — Migrating Microsoft SQL Server to AWS</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/Aurora.AuroraPostgreSQL.html" target="_blank">Amazon Aurora User Guide — Working with Aurora PostgreSQL</a></li>
+            <li><a href="https://aws.amazon.com/dms/schema-conversion-tool/" target="_blank">AWS Schema Conversion Tool product page</a></li>
+          </ul>
+        </div>
+      </section>
+
       <div class="day-nav">
         <a href="day-045.html">&larr; Day 45: AWS Application Migration Service (MGN) — Lift-and-Shift Rehost</a>
         <button class="btn btn-green" onclick="markComplete(46, 'day-047.html')">Mark Day 46 Complete &rarr;</button>

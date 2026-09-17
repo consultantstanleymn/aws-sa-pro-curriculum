@@ -104,25 +104,278 @@
         <span class="pill pill-green">Phase 5: Practice Exams &amp; Exam Technique</span>
       </div>
       <h1 class="hero-title">Mock Exam 3 Distractor Analysis &amp; Timing/Pacing Strategy</h1>
-      <div class="reading-meta">&#128337; ~3 min read &middot; 2 services covered</div>
+      <div class="reading-meta">&#128337; ~58 min read &middot; 2 services covered</div>
       <div class="services-grid">
         <span class="service-tag">Distractor Analysis</span>
         <span class="service-tag">Exam Pacing</span>
       </div>
       <div id="tracker"></div>
-      <section class="doc-section">
-        <h2 class="section-heading">Today's Concept</h2>
+      <section class="doc-section" id="recap">
+        <h2 class="section-heading">Recap</h2>
         <div class="card card-accent">
-          <p>Beyond content review, analyze your time-per-question data: which question types cost you the most time, and refine your flag-and-skip strategy accordingly.</p>
-        </div>
-        <h3 class="sub-heading">Hands-on Lab / Practical Action (45 min)</h3>
-        <div class="card">
-          <p>Track time spent per question on Mock Exam 3; identify the 10 slowest questions and diagnose whether the delay was content gaps or overthinking.</p>
+          <p>Mock Exam 3 was the consistency check: the third full 75-question timed run, and the first one where the score should have stopped bouncing around and started trending toward the 80%+ target range. That is a different kind of result than Mock Exam 1 or 2 produced. A rising score on a third attempt can mean the deep reviews worked, or it can mean the question bank has become familiar enough that pattern recognition is doing work that understanding should be doing. Those two explanations look identical on a score report and they fail in opposite directions on exam day.</p>
+          <p>This is the same service opposite failure mode problem in its purest form. The same mock exam that proves your content gaps are closing can also be quietly teaching you to answer by shape rather than by reasoning, and the only instrument that separates the two is the timing data you have been ignoring. Mock Exam 3 is the last run where you still have enough runway to act on what the clock says, so the analysis today is deliberately split: half of it is the distractor patterns that keep costing you points, and half of it is the per-question time data that tells you whether those points were lost to ignorance or to overthinking.</p>
         </div>
       </section>
-      <section class="doc-section">
+      <section class="doc-section" id="patterns">
+        <h2 class="section-heading">Distractor Patterns From Mock Exam 3</h2>
+        <p>Each entry below is a recurring wrong-answer shape rather than a single question. The exam reuses a small number of these shapes across every domain, which is why a distractor you fell for on a networking question will reappear wearing a database costume three sections later. For each one, the useful work is naming the tell that separates it from the correct answer, because the tell is what you actually apply under time pressure.</p>
+
+        <h3 class="sub-heading">Pattern 1: The Single-Account Answer to a Multi-Account Question</h3>
+        <p>The most common distractor family on this exam is an option that solves the stated problem correctly but does so inside one account. A question describes forty accounts, a central security team, and a requirement that no workload team can disable logging, and one option reads something like "create an IAM role in each account with a trust policy allowing the security team to assume it." That option is not wrong in the sense of being impossible. It is wrong because it requires forty separate trust policies, forty separate role definitions, and forty separate places for drift to accumulate, and the question's framing about a central team is the tell that the examiner wants an Organizations-level mechanism.</p>
+        <p>The tell is almost always a phrase about scale or central control: "across all accounts," "without per-account configuration," "cannot be modified by workload teams." When you see one of those, eliminate any option whose implementation is per-account, even if the option is technically functional. On Mock Exam 3 this shape showed up in the governance questions and again in a networking question about sharing a VPC, where the tempting answer was VPC peering between every pair of accounts and the correct answer was RAM subnet sharing from a central network account.</p>
+
+        <h3 class="sub-heading">Pattern 2: The Service That Exists But Does Not Do That</h3>
+        <p>This pattern is more dangerous than the first because it requires you to know a service well enough to know its boundary. The distractor names a real AWS service, describes a plausible-sounding capability, and the capability is simply not something that service does. "Use AWS Config to block the API call" is the canonical example: Config evaluates and reports, it does not deny. "Use CloudTrail to alert on the change" is the same shape, because CloudTrail records what happened after the fact and has no enforcement path.</p>
+        <p>The tell is a verb mismatch. Read the option and ask what the verb requires: prevention, detection, or notification. SCPs, permission boundaries, and resource policies prevent. Config rules, GuardDuty, and CloudTrail detect. SNS, EventBridge, and CloudWatch alarms notify. If the question says "prevent" or "ensure that no one can," any option whose verb is detect or notify is a distractor regardless of how well the service fits the domain. Mock Exam 3 leaned on this in the SCP section, where an option proposed using an IAM policy to restrict a region for an entire account, which fails because IAM policies cannot constrain the account's own root user or the services that do not honor identity policies.</p>
+
+        <h3 class="sub-heading">Pattern 3: The Cheaper Option That Violates a Stated Constraint</h3>
+        <p>Cost questions are where this pattern lives, and it is the one that most often survives a first pass because the arithmetic in the option is genuinely correct. A question states an RTO of fifteen minutes and an RPO of five minutes, and one option is Backup and Restore with a note that it is the lowest-cost approach. The cost claim is true. The option is still wrong because Backup and Restore cannot meet a fifteen-minute RTO for a workload of any real size, and the question gave you the RTO precisely so you would use it as a filter.</p>
+        <p>The tell is that the question contains a number you have not yet used. SAP-C02 rarely includes a constraint for decoration. If you find yourself choosing an option without having referenced the RTO, the RPO, the latency target, or the throughput figure in your reasoning, go back and check whether the option you picked actually satisfies it. On Mock Exam 3 this appeared in the DR section and again in a DynamoDB question where the cheap option was provisioned capacity with auto scaling for a workload the question had described as wildly unpredictable.</p>
+
+        <h3 class="sub-heading">Pattern 4: The Right Service With the Wrong Configuration Mode</h3>
+        <p>Here the service is correct and the mode is wrong, which makes the option feel like a near-miss and therefore hard to eliminate. Storage Gateway is the classic host: a question about replacing physical tape infrastructure offers File Gateway, Volume Gateway in stored mode, and Tape Gateway, and only the last one preserves the existing backup software's workflow. The service family is right in all three options, so the discriminator has to be the interface the workload actually speaks.</p>
+        <p>The tell is the word describing the existing interface: file, block, or tape. Ask what the on-premises system presents today and match the mode to it rather than to the general category. The same shape appears with DMS migration types, where Full Load and Full Load plus CDC are both correct DMS configurations and only one satisfies a minimal-downtime requirement, and with Step Functions Standard versus Express, where both are correct workflow types and only one fits a high-volume short-duration workload. Mock Exam 3 used this in the migration section and in a caching question where Redis and Memcached were both plausible until the question mentioned failover.</p>
+
+        <h3 class="sub-heading">Pattern 5: The Answer That Adds a Hop Nobody Asked For</h3>
+        <p>Some distractors are architecturally sound and simply insert an unnecessary component. A question asks how to let on-premises servers resolve names in a private hosted zone, and one option proposes a Route 53 Resolver outbound endpoint with a forwarding rule. That is a real pattern, it is documented, and it solves the inverse problem. The correct answer is an inbound endpoint, because the direction of the query is what determines which endpoint type you need.</p>
+        <p>The tell is to restate the question as a direction: who is asking, and who is answering. Inbound endpoints answer queries coming from outside AWS. Outbound endpoints ask queries going to outside AWS. Once you have written the direction down, the extra-hop options eliminate themselves. This pattern also shows up in hybrid connectivity, where an option will route traffic through a Transit Gateway when the requirement is to expose a single service and the correct answer is PrivateLink, and in observability, where an option proposes X-Ray when the question is about verifying a user-facing flow from outside the infrastructure and the correct answer is a Synthetics canary.</p>
+
+        <h3 class="sub-heading">Pattern 6: The Manual Step Hidden Inside an Automated-Sounding Option</h3>
+        <p>This one is designed to catch candidates who are pattern-matching on the word "automated." An option will describe an automated pipeline and then include a clause like "with an operator approving the failover in the console" or "after the on-call engineer updates the DNS record." The automation is real, but the recovery path still depends on a human being awake and available, which contradicts any question that specifies an RTO measured in seconds or minutes.</p>
+        <p>The tell is a human subject in the option's verb. Scan for "operator," "engineer," "administrator," "manually," and "approves." If the question's RTO is under about fifteen minutes, any option containing one of those words is almost certainly wrong, because the human response time alone consumes the budget. Mock Exam 3 used this in the multi-region section, where the tempting answer was a Lambda triggered by a CloudWatch alarm to update Route 53, and the correct answer was Global Accelerator or Route 53 ARC depending on whether the question emphasized network-layer failover or auditable failover control.</p>
+
+        <h3 class="sub-heading">Pattern 7: The Over-Permissive Fix for a Least-Privilege Question</h3>
+        <p>When a question describes a privilege escalation risk, one distractor will always be the blunt instrument: remove the permission entirely, or attach AdministratorAccess and rely on review. Removing <code>iam:CreateRole</code> from a delegated admin does eliminate the escalation, and it also eliminates the delegation the question asked you to preserve. The correct answer is a permission boundary enforced by a condition on the create call, which caps the new role's maximum permissions without removing the ability to create roles at all.</p>
+        <p>The tell is whether the question asks you to preserve a capability while constraining it. If it does, any option that removes the capability is wrong, and any option that leaves it unconstrained is also wrong. The answer has to be a constraint mechanism: permission boundaries, SCPs, or a condition key. Mock Exam 3 used this shape in the IAM section and in a Control Tower question where the tempting answer was to disable an elective guardrail rather than to understand that mandatory guardrails cannot be disabled at all.</p>
+
+        <h3 class="sub-heading">Pattern 8: The Correct Answer to a Different Question</h3>
+        <p>This is the most expensive pattern to fall for because the option is not merely plausible, it is a well-formed answer to a question the examiner did not ask. A question about reducing alert fatigue offers "lower the alarm threshold" and "increase the evaluation period to twenty-four hours," both of which are real techniques for changing alarm behavior, and neither of which addresses the stated problem of correlated false positives. The correct answer is a composite alarm requiring two signals to be in ALARM simultaneously.</p>
+        <p>The tell is to reread the question's problem statement after you have picked an answer and confirm that your choice addresses that specific problem rather than a neighboring one. This is also the pattern that produces the most second-guessing, which is why it belongs in the flag-and-review set rather than the answer-now set. On Mock Exam 3 it appeared in the observability section and in a cost question where the tempting answer was Compute Optimizer for a problem that was actually about tag hygiene, and the correct answer was enforcing cost allocation tags before any reporting could be meaningful.</p>
+
+        <h3 class="sub-heading">Pattern 9: The Distractor That Is True Only in the Management Account</h3>
+        <p>Organizations questions have a dedicated distractor family built around the management account's special status. An option will propose applying an SCP to the management account, or running a workload there because it has the broadest permissions, or using it as the log archive. Each of these is wrong for a specific structural reason: SCPs do not apply to the management account, workloads there cannot be constrained by the org's own guardrails, and the log archive belongs in a dedicated Security OU account precisely so that workload teams cannot reach it.</p>
+        <p>The tell is the phrase "management account" or "root account" appearing in an option that also contains a governance verb. If the option is doing anything other than billing, Organizations administration, or org-wide services like IAM Identity Center, it is a distractor. Mock Exam 3 used this in the governance section, and it is worth noting that the same logic extends to the root user of any account, which is why the mandatory Control Tower guardrail against root access keys exists.</p>
+
+        <h3 class="sub-heading">Pattern 10: The Option That Solves the Symptom</h3>
+        <p>Some distractors address the visible failure rather than its cause. A DynamoDB table is throttling under high write volume, and one option proposes increasing the table's provisioned capacity. That will help for a while and then stop helping, because the throttling is caused by a low-cardinality partition key concentrating writes onto a handful of partitions, and each partition has its own throughput ceiling regardless of the table-level number. The correct answer is to redesign the key.</p>
+        <p>The tell is whether the option changes a quantity or a structure. Quantity changes (more capacity, bigger instance, more replicas) are the tempting answers; structural changes (better key design, different routing, different replication topology) are usually the correct ones when the question describes a workload that has already been scaled up and is still failing. Mock Exam 3 used this in the DynamoDB section and in a Lambda question where the tempting answer was to increase the function timeout and the correct answer was reserved concurrency to cap downstream connections.</p>
+
+        <h3 class="sub-heading">Pattern 11: The Cross-Region Answer to a Cross-AZ Question</h3>
+        <p>Availability and durability questions are separated by a scope word, and the distractors exploit candidates who read past it. A question about surviving the loss of an Availability Zone offers a cross-region read replica, and a question about surviving a regional outage offers Multi-AZ. Both options are real architectures and both are wrong for the stated scope, because Multi-AZ does not protect against a regional event and a cross-region replica does not provide automatic failover within a region.</p>
+        <p>The tell is the scope noun: AZ, region, or account. Underline it mentally before reading the options, then eliminate anything whose blast-radius coverage is larger or smaller than what was asked. This pattern is closely related to Pattern 3, since the scope word is often the constraint the cheap option violates, but it is worth separating because the scope word appears in questions that have nothing to do with cost. Mock Exam 3 used it in the Aurora and S3 sections, where the correct answers were Aurora Global Database and Glacier Deep Archive respectively, and the tempting answers were RDS Multi-AZ and One Zone-IA.</p>
+
+        <h3 class="sub-heading">Pattern 12: The Answer That Ignores the Existing Investment</h3>
+        <p>Migration questions frequently include a constraint about what the organization already has: a team with deep Kubernetes experience, an existing VMware estate, backup software that must keep working, a Terraform-based provisioning pipeline. One distractor will propose the architecturally cleanest target that discards that investment, and it will be wrong because the question's framing made the investment a requirement rather than a preference.</p>
+        <p>The tell is a sentence in the question about the team's skills or the existing tooling. When you see one, the correct answer is usually the option that preserves it: EKS rather than ECS for the Kubernetes team, VMware Cloud on AWS rather than MGN for the estate that must not be converted, Tape Gateway rather than File Gateway for the backup software that speaks tape, AFT rather than hand-rolled account provisioning for the Terraform shop. Mock Exam 3 used this in the compute and migration sections, and it is the pattern most likely to be missed by candidates who have memorized service capabilities without reading the organizational context.</p>
+
+        <h3 class="sub-heading">Pattern 13: The Distractor With a Plausible Number Attached</h3>
+        <p>Numbers in options are a signal, and the exam uses them both ways. A correct option may cite a real limit, and a distractor may cite a number that sounds authoritative and is simply not the relevant one. Transit Gateway peering's 1500-byte MTU cap is a real figure that appears in correct answers about inter-region peering; a distractor might attach the same number to a question about intra-region attachments, where it does not apply.</p>
+        <p>The tell is whether the number is doing work in the option or decorating it. If removing the number leaves the option's logic intact, the number is decoration and you should evaluate the option on its mechanism. If removing the number breaks the option, the number is load-bearing and you need to know whether it is the right figure for the stated context. Mock Exam 3 used this in the networking section, and the practical defense is to keep a short list of the limits you have actually seen cited in the curriculum rather than memorizing numbers in isolation.</p>
+
+        <h3 class="sub-heading">Pattern 14: The Option That Confuses Detection With Recovery</h3>
+        <p>Resilience questions often describe a failure and ask what to do about it, and the distractors split between noticing and recovering. An option will propose a CloudWatch alarm on error rate, which is a detection mechanism, when the question asks how the system should behave during the failure. The correct answer is usually a degradation or failover behavior: a circuit breaker, a queue that absorbs the load, a health check that removes the endpoint, or a routing control that shifts traffic.</p>
+        <p>The tell is the question's verb again, but at a higher level than Pattern 2. Ask whether the question is asking you to observe, to prevent, or to survive. Observability questions want metrics, traces, and canaries. Prevention questions want SCPs, boundaries, and policies. Survival questions want redundancy, graceful degradation, and tested failover. Mock Exam 3 used this in the SRE section, where the tempting answer to a Game Day question was to increase backup frequency and the correct answer was to actually run the exercise and validate the runbook.</p>
+
+        <h3 class="sub-heading">Pattern 15: The Timing Tell — Which Patterns Cost You the Clock</h3>
+        <p>The second half of today's analysis is not about content at all. When you review Mock Exam 3's per-question timing, the slow questions cluster into two groups that require opposite remedies. The first group is slow because you did not know the material: you read the options twice, eliminated two, and guessed between the remaining pair. The second group is slow because you knew the material and could not commit, usually because two options were both defensible and you were hunting for a tiebreaker the question had already given you.</p>
+        <p>The remedy for the first group is content review, and the domain tagging from the previous analysis days tells you where to spend it. The remedy for the second group is a decision rule, not more studying. If you consistently lose time on Pattern 8 and Pattern 3, the fix is to write the constraint down before reading the options so the tiebreaker is visible on the first pass. If you lose time on Pattern 6 and Pattern 14, the fix is to classify the question's verb before reading the options. Both are mechanical habits, and both are worth more in the last week than another pass through the service documentation.</p>
+      </section>
+      <section class="doc-section" id="lab">
+        <h2 class="section-heading">Hands-On Lab / Practical Action (45 min)</h2>
+        <div class="card card-green">
+          <p>Pull up your Mock Exam 3 results and build two artifacts from them. The first is a pattern tally: go through every question you missed and every question you answered correctly but flagged as uncertain, and assign each one to one of the fifteen patterns above. Most people find that three or four patterns account for the majority of their misses, and that the distribution is different from what they expected. If Pattern 3 and Pattern 11 dominate, your problem is constraint-reading rather than service knowledge, and the fix is a reading habit rather than more study time.</p>
+          <p>The second artifact is a timing table. If your practice platform records per-question time, export it; if it does not, reconstruct it from your flagging behavior and your memory of where the clock felt tight. Sort the questions into four buckets: fast and correct, fast and wrong, slow and correct, slow and wrong. Fast and wrong is the most urgent bucket because it means you are confidently applying a wrong rule, and those are the misses that will not self-correct with more practice. Slow and correct is the second priority, because those are the questions where a decision rule would buy back minutes you can spend on the genuinely hard items.</p>
+          <p>Then write the decision rules down. For each of your top three patterns, write one sentence that starts with a trigger and ends with an action: "when the question says prevent, eliminate any option whose verb is detect or notify," or "when the question gives an RTO, write it down before reading the options." Keep these on the same page as your weak-spot cheat sheet, because they are the same kind of artifact and they will be reviewed together on the final day. The test of a good decision rule is that it is mechanical enough to apply while tired, which is the state you will be in during the last twenty questions of the real exam.</p>
+          <p>Finally, re-time yourself on the ten slowest questions from Mock Exam 3 with the decision rules in hand. You are not trying to get them right this time, since you have already seen the answers. You are measuring whether the rule shortens the deliberation, and if it does not, the rule is too abstract to be useful and needs to be rewritten as something more concrete. A rule that saves you thirty seconds across ten questions is worth roughly five minutes of exam time, which is the difference between finishing with a review pass and finishing with the clock at zero.</p>
+        </div>
+      </section>
+      <section class="doc-section" id="quiz">
         <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
-        <p style="color:var(--text-muted);font-style:italic;">Detailed scenario questions for this day will be added when the curriculum reaches it — see the <a href="day-056.html">Day 56 DMS lesson</a> for the full format this site is building toward.</p>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q1.</strong> A company with 40 AWS accounts wants a central security team to be able to read CloudTrail logs from every account, and no workload team may be able to disable or delete the logging. Which approach satisfies this?</p>
+          <div class="scenario-options" id="opts-d66q1">
+            <div class="scenario-option">A. Create an IAM role in each of the 40 accounts with a trust policy allowing the security team to assume it, and document the setup in a runbook.</div>
+            <div class="scenario-option">B. Deliver logs to a dedicated log-archive account in a Security OU, protected by SCPs that deny deletion or modification of logging resources.</div>
+            <div class="scenario-option">C. Enable CloudTrail in the management account and use CloudTrail Lake to query all accounts.</div>
+            <div class="scenario-option">D. Use AWS Config rules in each account to detect and remediate any attempt to disable logging.</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d66q1', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d66q1"><strong>Correct answer: B.</strong> The question's framing about a central team and a prohibition on workload teams is the tell for an Organizations-level mechanism. Option A is the single-account answer to a multi-account question (Pattern 1) and requires 40 separate trust policies. Option D is the detect-not-prevent distractor (Pattern 2), since Config reports rather than denies.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q2.</strong> A regulated workload must not be able to launch resources outside two approved AWS Regions, and the restriction must apply to every principal in the account including administrators. What should be used?</p>
+          <div class="scenario-options" id="opts-d66q2">
+            <div class="scenario-option">A. An IAM policy attached to every role in the account denying actions outside the two Regions.</div>
+            <div class="scenario-option">B. An SCP attached to the account's OU denying actions outside the two Regions, exempting global services such as IAM, Route 53, CloudFront, and Support.</div>
+            <div class="scenario-option">C. An AWS Config rule that detects out-of-Region resource creation and triggers a Lambda to delete the resource.</div>
+            <div class="scenario-option">D. A CloudTrail trail with an EventBridge rule that notifies the security team when out-of-Region calls occur.</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d66q2', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d66q2"><strong>Correct answer: B.</strong> The requirement that the restriction apply to administrators is the tell that an identity policy is insufficient, since IAM policies cannot constrain the account's own root user. Options C and D are detect-and-notify answers to a prevent question (Pattern 2).</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q3.</strong> A workload can tolerate an RTO of 15 minutes and an RPO of 5 minutes, and the business wants to minimize standing infrastructure cost. Which DR strategy fits?</p>
+          <div class="scenario-options" id="opts-d66q3">
+            <div class="scenario-option">A. Backup and Restore, since it has the lowest standing cost of any DR strategy.</div>
+            <div class="scenario-option">B. Pilot Light, with core data continuously replicated and minimal standby infrastructure scaled up on failover.</div>
+            <div class="scenario-option">C. Multi-Site Active-Active, since it guarantees the lowest RTO and RPO.</div>
+            <div class="scenario-option">D. Warm Standby with a full-scale replica running in the secondary Region at all times.</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d66q3', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d66q3"><strong>Correct answer: B.</strong> Option A is the cheaper option that violates a stated constraint (Pattern 3): its cost claim is true, but it cannot meet a 15-minute RTO for a real workload. Option C satisfies the RTO but ignores the cost constraint, and Option D is more standing infrastructure than the requirement justifies.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q4.</strong> An enterprise wants to retire its physical backup tape infrastructure while keeping its existing backup software and workflows unchanged. What should be deployed?</p>
+          <div class="scenario-options" id="opts-d66q4">
+            <div class="scenario-option">A. File Gateway presenting an S3 bucket as an NFS share.</div>
+            <div class="scenario-option">B. Volume Gateway in stored mode presenting iSCSI block storage.</div>
+            <div class="scenario-option">C. Tape Gateway presenting a virtual tape library compatible with existing backup software.</div>
+            <div class="scenario-option">D. AWS Backup with a cross-account copy into an isolated backup account.</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d66q4', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d66q4"><strong>Correct answer: C.</strong> The service family is right in options A, B, and C, so the discriminator is the interface the workload speaks (Pattern 4). The question specifies tape and unchanged backup software, which only Tape Gateway preserves.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q5.</strong> On-premises DNS servers need to resolve names in a private Route 53 hosted zone hosted in a VPC. What must be configured?</p>
+          <div class="scenario-options" id="opts-d66q5">
+            <div class="scenario-option">A. A Route 53 Resolver outbound endpoint with a forwarding rule for the private zone.</div>
+            <div class="scenario-option">B. A Route 53 Resolver inbound endpoint, with the on-premises resolvers forwarding queries to it.</div>
+            <div class="scenario-option">C. A public hosted zone containing the same records, resolvable from anywhere.</div>
+            <div class="scenario-option">D. A NAT Gateway with DNS forwarding enabled in the VPC.</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d66q5', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d66q5"><strong>Correct answer: B.</strong> Restate the question as a direction: on-premises is asking, AWS is answering, so an inbound endpoint is required. Option A is the extra-hop distractor (Pattern 5) that solves the inverse problem, and Option D names a capability NAT Gateway does not have.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q6.</strong> A critical system must fail over between Regions within seconds when a Region becomes unhealthy, and the failover must not depend on DNS TTLs or client-side caching. What should be used?</p>
+          <div class="scenario-options" id="opts-d66q6">
+            <div class="scenario-option">A. Route 53 latency-based routing with health checks on both Regions.</div>
+            <div class="scenario-option">B. A CloudWatch alarm that triggers a Lambda function to update the Route 53 record set.</div>
+            <div class="scenario-option">C. AWS Global Accelerator with endpoint groups in both Regions, using static anycast IPs.</div>
+            <div class="scenario-option">D. An Application Load Balancer in each Region with cross-Region health checks.</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d66q6', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d66q6"><strong>Correct answer: C.</strong> The explicit exclusion of DNS TTL and client caching eliminates Option A. Option B is the manual step hidden inside an automated-sounding option (Pattern 6), since the Lambda path still depends on alarm evaluation and a human-visible control plane.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q7.</strong> A delegated admin role can create IAM roles for developers. The security team wants to keep that delegation but prevent the admin from creating a role with AdministratorAccess. What should be enforced?</p>
+          <div class="scenario-options" id="opts-d66q7">
+            <div class="scenario-option">A. Remove iam:CreateRole from the delegated admin role.</div>
+            <div class="scenario-option">B. Require a permission boundary on every role the admin creates, enforced by a condition on iam:PermissionsBoundary in the CreateRole call.</div>
+            <div class="scenario-option">C. Attach an explicit Deny for AdministratorAccess to every developer role after creation.</div>
+            <div class="scenario-option">D. Require MFA for the delegated admin role and review created roles weekly.</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d66q7', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d66q7"><strong>Correct answer: B.</strong> The question asks you to preserve the delegation while constraining it, which makes Option A the over-permissive fix in reverse (Pattern 7): it eliminates the escalation by eliminating the capability. Option C is a detect-and-remediate answer to a prevent question.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q8.</strong> On-call engineers are paged repeatedly by isolated latency spikes that resolve on their own, and the team wants to page only when a genuine incident is underway. What should be configured?</p>
+          <div class="scenario-options" id="opts-d66q8">
+            <div class="scenario-option">A. Lower the latency alarm threshold so spikes are caught earlier.</div>
+            <div class="scenario-option">B. Increase the alarm's evaluation period to 24 hours so transient spikes are averaged out.</div>
+            <div class="scenario-option">C. A composite alarm that enters ALARM only when both the latency alarm and the error-rate alarm are in ALARM state.</div>
+            <div class="scenario-option">D. Delete the latency alarm and rely on customer support tickets as the signal.</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d66q8', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d66q8"><strong>Correct answer: C.</strong> Options A and B are correct answers to a different question (Pattern 8): both change alarm behavior, neither addresses correlated false positives. Option D removes the signal entirely rather than correlating it.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q9.</strong> A company wants a dedicated account that aggregates CloudTrail logs from every account and cannot be modified by workload teams. Where should this account live, and how should it be protected?</p>
+          <div class="scenario-options" id="opts-d66q9">
+            <div class="scenario-option">A. In the management account, since it already has the broadest permissions in the Organization.</div>
+            <div class="scenario-option">B. In a dedicated Security OU with an SCP that denies deletion or modification of logging resources.</div>
+            <div class="scenario-option">C. Inside the Workloads/Prod OU so it is close to the data it audits.</div>
+            <div class="scenario-option">D. In a standalone account outside the Organization, with cross-account access granted to the security team.</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d66q9', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d66q9"><strong>Correct answer: B.</strong> Option A is the management-account distractor (Pattern 9): SCPs do not apply there, so the account cannot be constrained by the Organization's own guardrails. Option C places the log archive inside the OU whose members it is meant to be protected from.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q10.</strong> A DynamoDB table using a five-value status attribute as its partition key is throttling under high write volume even though the table's provisioned capacity is well above observed throughput. What should be done?</p>
+          <div class="scenario-options" id="opts-d66q10">
+            <div class="scenario-option">A. Increase the table's provisioned write capacity units.</div>
+            <div class="scenario-option">B. Switch the table to on-demand capacity mode.</div>
+            <div class="scenario-option">C. Redesign the partition key as a composite key that spreads writes across many partitions.</div>
+            <div class="scenario-option">D. Enable DynamoDB Accelerator (DAX) in front of the table.</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d66q10', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d66q10"><strong>Correct answer: C.</strong> The question states that capacity is already above observed throughput, which is the tell that the problem is structural rather than quantitative (Pattern 10). Options A and B change a quantity; Option D addresses read latency, not write hot partitions.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q11.</strong> An object is rarely accessed, must survive the loss of an entire Availability Zone, and a 12-hour retrieval time is acceptable. Cost is the primary concern. Which storage class fits?</p>
+          <div class="scenario-options" id="opts-d66q11">
+            <div class="scenario-option">A. S3 One Zone-IA.</div>
+            <div class="scenario-option">B. S3 Glacier Deep Archive.</div>
+            <div class="scenario-option">C. S3 Standard-IA.</div>
+            <div class="scenario-option">D. S3 Intelligent-Tiering.</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d66q11', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d66q11"><strong>Correct answer: B.</strong> The scope noun is Availability Zone, and Option A is the cross-AZ answer that fails it (Pattern 11) because One Zone-IA does not survive an AZ loss. Option C is durable but not the lowest cost, and Option D optimizes transitions rather than minimizing storage cost.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q12.</strong> A team has deep existing Kubernetes tooling and multi-cloud portability requirements, and is choosing a container platform on AWS. Which fits best?</p>
+          <div class="scenario-options" id="opts-d66q12">
+            <div class="scenario-option">A. Amazon ECS with the EC2 launch type.</div>
+            <div class="scenario-option">B. Amazon EKS with managed node groups.</div>
+            <div class="scenario-option">C. AWS Lambda with container image packaging.</div>
+            <div class="scenario-option">D. AWS Batch on Fargate.</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d66q12', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d66q12"><strong>Correct answer: B.</strong> The question states the team's existing investment, which is the tell for Pattern 12. ECS is architecturally sound but discards the Kubernetes tooling and portability requirement, and Lambda and Batch do not run standard Kubernetes workloads.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q13.</strong> After creating a Transit Gateway peering attachment between two Regions, spoke VPCs in each Region still cannot reach each other. What is the most likely cause?</p>
+          <div class="scenario-options" id="opts-d66q13">
+            <div class="scenario-option">A. The two Transit Gateways are in different Availability Zones.</div>
+            <div class="scenario-option">B. Peering attachments do not support route propagation, so static routes must be added to each TGW route table.</div>
+            <div class="scenario-option">C. Inter-Region peering is not supported and a Direct Connect connection is required.</div>
+            <div class="scenario-option">D. Security groups in the spoke VPCs are blocking inter-Region traffic by default.</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d66q13', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d66q13"><strong>Correct answer: B.</strong> This is the same service opposite failure mode shape: VPC and TGW attachments propagate routes, peering attachments do not. Option C is a plausible-sounding but false limitation, and Option D misattributes a routing gap to security groups.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q14.</strong> A team has documented DR runbooks with stated RTO and RPO targets but has never exercised them. What should be done before relying on them?</p>
+          <div class="scenario-options" id="opts-d66q14">
+            <div class="scenario-option">A. Increase backup frequency so the RPO target is more likely to be met.</div>
+            <div class="scenario-option">B. Add a CloudWatch alarm on replication lag so failures are detected sooner.</div>
+            <div class="scenario-option">C. Run a Game Day using AWS Fault Injection Service to simulate the failure and validate that the runbook and automated recovery actually work.</div>
+            <div class="scenario-option">D. Document the runbook in more detail and have it reviewed by the architecture team.</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d66q14', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d66q14"><strong>Correct answer: C.</strong> Options A and B confuse detection with recovery (Pattern 14): both improve noticing, neither validates that recovery works. Option D improves the documentation of an unverified procedure, which is the assumption the question is asking you to test.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q15.</strong> Finance wants AWS spend broken out per business unit, but resources are inconsistently tagged today. What should be done first?</p>
+          <div class="scenario-options" id="opts-d66q15">
+            <div class="scenario-option">A. Enable AWS Compute Optimizer to identify over-provisioned instances and reduce spend.</div>
+            <div class="scenario-option">B. Enforce a mandatory tagging policy requiring cost allocation tags at resource creation, then activate those tags for cost allocation reporting.</div>
+            <div class="scenario-option">C. Enable Cost Explorer and group by account, since each business unit has its own account.</div>
+            <div class="scenario-option">D. Build a Cost and Usage Report and reconcile it manually against a spreadsheet of business unit ownership.</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d66q15', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d66q15"><strong>Correct answer: B.</strong> Option A is the correct answer to a different question (Pattern 8): Compute Optimizer reduces spend but does not attribute it. Option D produces granular data that is still unattributable without tag hygiene, which is the prerequisite the question is asking about.</div>
+        </div>
+      </section>
+      <section class="doc-section" id="preview">
+        <h2 class="section-heading">Preview</h2>
+        <div class="card card-purple">
+          <p>The uncomfortable question this analysis leaves open is whether the patterns you just tallied are actually gone, or whether you have simply learned to recognize them in the specific phrasing Mock Exam 3 used. Pattern recognition trained on one question bank is a fragile asset. It survives a re-read of the same exam and collapses the moment the same underlying trap is dressed in different vocabulary, which is exactly what a different vendor's question bank will do to you.</p>
+          <p>Mock Exam 4 is the test of that fragility, and it is deliberately scheduled as a full 75-question timed run from a different source than the first three. If your score holds or improves, the decision rules you wrote today are doing real work. If it drops, the drop is diagnostic rather than discouraging: it tells you which patterns you learned as shapes rather than as principles, and those are the ones to rewrite before Mock Exam 5. Sit it under the same conditions as the previous three, with the decision rules on a separate page you do not consult until the review.</p>
+        </div>
+      </section>
+      <section class="doc-section" id="sources">
+        <h2 class="section-heading">Sources</h2>
+        <div class="card">
+          <ul class="source-list">
+            <li><a href="https://docs.aws.amazon.com/wellarchitected/latest/framework/welcome.html" target="_blank">AWS Well-Architected Framework</a> — pillar structure used to tag weak domains during distractor analysis.</li>
+            <li><a href="https://docs.aws.amazon.com/prescriptive-guidance/latest/strategy-migration/welcome.html" target="_blank">AWS Prescriptive Guidance — Migration Strategies</a> — the 7 Rs framing referenced in the migration pattern entries.</li>
+            <li><a href="https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/AlarmThatSendsEmail.html" target="_blank">Amazon CloudWatch — Alarms and Composite Alarms</a> — alarm semantics behind the alert-fatigue pattern.</li>
+            <li><a href="https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/routing-policy.html" target="_blank">Amazon Route 53 — Routing Policies</a> — routing and health-check behavior referenced in the failover patterns.</li>
+            <li><a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/storage-class-intro.html" target="_blank">Amazon S3 — Storage Classes</a> — durability and retrieval characteristics behind the scope-word pattern.</li>
+          </ul>
+        </div>
       </section>
       <div class="day-nav">
         <a href="day-065.html">&larr; Day 65: Full-Length Mock Exam 3 — 75 Questions Timed</a>

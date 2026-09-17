@@ -104,37 +104,361 @@
         <span class="pill pill-green">Phase 1: Multi-Account Governance &amp; Networking</span>
       </div>
       <h1 class="hero-title">AWS Control Tower &amp; Account Factory</h1>
-      <div class="reading-meta">&#128337; ~3 min read &middot; 2 services covered</div>
+      <div class="reading-meta">&#128337; ~58 min read &middot; 2 services covered</div>
       <div class="services-grid">
         <span class="service-tag">Control Tower</span>
         <span class="service-tag">Account Factory for Terraform (AFT)</span>
       </div>
       <div id="tracker"></div>
-      <section class="doc-section">
-        <h2 class="section-heading">Today's Concept</h2>
+
+      <section class="doc-section" id="recap">
+        <h2 class="section-heading">Recap: From Permission Ceilings to Automated Landing Zones</h2>
         <div class="card card-accent">
-          <p>Control Tower automates a multi-account landing zone: it provisions a management account, log-archive account, and audit account, and enforces mandatory and elective guardrails (implemented as SCPs and AWS Config rules) across enrolled OUs. Account Factory for Terraform (AFT) extends this with pipeline-driven account provisioning for teams already standardized on Terraform.</p>
-        </div>
-        <h3 class="sub-heading">Hands-on Lab / Practical Action (45 min)</h3>
-        <div class="card">
-          <p>Review how Account Factory for Terraform (AFT) layers custom account customizations on top of Control Tower's baseline guardrails.</p>
+          <p>Day 2 established that an SCP is a permission ceiling rather than a grant: the default FullAWSAccess policy permits everything until you attach explicit Deny statements, and the effective permission for any call is the intersection of the identity policy and every SCP that applies to the account. That model is powerful but it is also entirely manual. Someone has to create each account, place it in the right OU, attach the right SCPs, and remember to exempt global services from a region-restriction SCP so that IAM, Route 53, CloudFront, and Support keep working. At ten accounts that is tedious. At two hundred accounts, across a dozen teams, with auditors asking who changed what and when, it is a governance failure waiting to happen.</p>
+          <p>Control Tower extends the SCP mechanics from Day 2 by automating the scaffolding those policies attach to. It provisions the accounts, creates the OUs, attaches the guardrails, and keeps the whole structure in a known-good state as accounts are added and removed. The SCPs you learned to write by hand are still the enforcement mechanism underneath; Control Tower is the factory that stamps out the structure they live in.</p>
         </div>
       </section>
-      <section class="doc-section">
+
+      <section class="doc-section" id="why-on-exam">
+        <h2 class="section-heading">1. Why This Is on the Exam</h2>
+        <p>SAP-C02 Domain 1 covers organizational complexity, and the exam consistently tests whether you can distinguish a landing zone that was assembled by hand from one that is managed by Control Tower. The distinction matters because the two have different failure characteristics, different upgrade paths, and different answers to the question "how do we onboard a new team next quarter?" A scenario that describes a company with forty AWS accounts, a compliance requirement to prove that no account can disable CloudTrail, and a mandate to onboard acquisitions within days is describing a problem that hand-built Organizations cannot solve at the required velocity.</p>
+        <p>The exam also tests the boundary between Control Tower and the tools that surround it. Candidates routinely confuse Control Tower with Organizations, with AWS Config, with Service Catalog, and with the Account Factory products. Each of those is a component of the landing zone rather than a substitute for it, and the exam will offer them as distractors in scenarios where the correct answer is the composed whole. Understanding which layer owns which responsibility is the difference between picking the right answer and picking the plausible one.</p>
+        <p>There is a third reason this day matters, and it is the one that trips up experienced architects. Control Tower is opinionated. It makes choices on your behalf — which accounts exist, which OUs they live in, which regions are governed, how drift is detected — and those choices constrain what you can do later. A scenario that asks you to add a custom OU structure, or to govern only two regions, or to bring an existing account under management, is testing whether you know where Control Tower's opinions end and your own configuration begins. The exam rewards candidates who can articulate those boundaries precisely.</p>
+        <p>Finally, the Account Factory for Terraform (AFT) material appears in scenarios about platform engineering teams. When a question describes a team that already manages infrastructure as code and wants account provisioning to flow through the same pipeline, AFT is usually the intended answer. Recognizing that signal — existing Terraform investment plus a desire for account vending — is worth several questions across the exam.</p>
+      </section>
+
+      <section class="doc-section" id="mechanism">
+        <h2 class="section-heading">2. How Control Tower Actually Works</h2>
+        <p>Control Tower is not a single service so much as an orchestration layer over several. When you enable it in a management account, it creates a landing zone: a set of accounts, OUs, SCPs, Config rules, and IAM roles that together form a governed baseline. The landing zone is built inside your existing AWS Organization, not beside it. Control Tower reads the Organization's structure, creates the OUs it needs, and enrolls accounts into them. If you already have OUs, Control Tower will work with them, but it will also create its own — the Security OU, for example, which holds the log-archive and audit accounts.</p>
+        <p>The three accounts Control Tower creates are worth naming precisely because exam questions hinge on their roles. The log-archive account receives CloudTrail logs and Config snapshots from every enrolled account, giving you a central, tamper-resistant record. The audit account holds cross-account IAM roles that security teams use to inspect other accounts without needing credentials in each one. The management account is the Organization's root account, and Control Tower runs from there. None of these three should host workloads; they exist to observe and govern the accounts that do.</p>
+        <p>Guardrails are the enforcement layer, and they come in two implementation flavors. Preventive guardrails are SCPs — the same mechanism from Day 2 — and they block actions outright. Detective guardrails are AWS Config rules, and they detect when a resource drifts out of compliance without preventing the action. A guardrail like "disallow public read access to S3 buckets" is detective: the bucket can be made public, but Config will flag it and the compliance dashboard will show the account as non-compliant. A guardrail like "disallow root user access keys" is preventive: the SCP blocks the API call. Knowing which guardrails are preventive and which are detective tells you what a scenario's compliance evidence will actually look like.</p>
+        <p>Drift detection is the mechanism that keeps the landing zone honest. Control Tower continuously compares the actual state of the OUs, SCPs, and accounts against the expected state. If someone edits an SCP outside Control Tower, or moves an account between OUs manually, the drift is detected and surfaced. Some drift can be repaired automatically; some requires you to re-register the OU or account. This is the operational cost of the automation: you gain a known-good baseline, but you also gain a system that will notice when you deviate from it.</p>
+        <p>Account Factory is the provisioning engine. When you create a new account through Control Tower, Account Factory uses a Service Catalog product to vend it, applying a baseline template that includes the account's OU placement, its guardrails, and any network configuration you have defined. The account is created, enrolled, and governed in one operation. AFT takes that same idea and moves the trigger into Terraform: instead of clicking through the console, you open a pull request against a repository, and a pipeline runs the account creation and customization. The account still lands in the same landing zone with the same guardrails; only the interface changes.</p>
+      </section>
+
+      <section class="doc-section" id="decision-boundary">
+        <h2 class="section-heading">3. The Core Decision Boundary: Managed Landing Zone vs. Hand-Built Organizations</h2>
+        <p>The fork that most Control Tower scenarios hinge on is whether the organization should adopt a managed landing zone at all. Control Tower is not free in operational terms: it imposes structure, it requires you to work within its OU model, and it adds a layer of tooling that your team must learn. The question is whether the governance guarantees it provides are worth that cost. For an organization with a handful of accounts and a single team, hand-built Organizations with a few well-written SCPs is often the simpler answer. For an organization with dozens of accounts, multiple teams, and an auditor asking for evidence, the manual approach becomes a liability.</p>
+        <p>The second fork is where customization lives. Control Tower gives you a baseline; almost every real deployment needs more than the baseline. The question is whether that additional configuration is applied through Control Tower's own extension points — customizations for accounts, custom guardrails, AFT — or bolted on outside the landing zone. Configuration applied outside the landing zone is invisible to drift detection and will eventually be flagged or overwritten. Configuration applied through the extension points is governed, versioned, and reproducible. The exam tends to reward the answer that keeps customization inside the managed boundary.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Consideration</th><th>Hand-built Organizations</th><th>Control Tower landing zone</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Setup effort</td><td>High per account; manual OU and SCP wiring</td><td>One-time enablement, then automated per account</td></tr>
+              <tr><td>Guardrail enforcement</td><td>Whatever SCPs you remember to attach</td><td>Mandatory guardrails always on; elective per OU</td></tr>
+              <tr><td>Compliance evidence</td><td>Assembled manually from Config and CloudTrail</td><td>Built-in dashboard and drift detection</td></tr>
+              <tr><td>Account provisioning</td><td>Manual or custom scripts</td><td>Account Factory (console) or AFT (pipeline)</td></tr>
+              <tr><td>Flexibility</td><td>Unlimited; you own every decision</td><td>Constrained by Control Tower's OU and region model</td></tr>
+              <tr><td>Ongoing maintenance</td><td>Grows linearly with account count</td><td>Centralized; drift detected automatically</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The practical rule is that Control Tower pays for itself once account count and compliance requirements cross a threshold that varies by organization but is usually somewhere in the low tens. Below that, the overhead of the landing zone can exceed the benefit. Above it, the manual approach's failure modes — missed SCPs, ungoverned accounts, no drift detection — become the dominant risk. Exam scenarios rarely give you an exact account count, so read the compliance and velocity signals instead: auditors, acquisitions, rapid team onboarding, and multi-team governance all point toward the managed landing zone.</p>
+      </section>
+
+      <section class="doc-section" id="config-tradeoffs">
+        <h2 class="section-heading">4. Configuration Modes and Their Tradeoffs</h2>
+        <p>Once you have decided to adopt Control Tower, the next set of choices determines how much of your organization it governs and how much customization you layer on top. The first choice is which regions are governed. Control Tower can govern all regions or a selected subset, and the choice has real consequences. Governing all regions gives you uniform guardrails everywhere but can be operationally heavy and may conflict with teams that legitimately need to work in regions you did not anticipate. Governing a subset reduces overhead but leaves ungoverned regions where the same guardrails do not apply — a gap that auditors will notice.</p>
+        <p>The second choice is how accounts are provisioned. The console-based Account Factory is the default: you fill in a form, and Control Tower vends the account. It is simple and requires no pipeline infrastructure, but it is a manual step, and manual steps do not scale to a platform team's workflow. AFT replaces the form with a Terraform module and a pipeline. The tradeoff is real: AFT requires you to stand up and maintain the pipeline, the repository structure, and the Terraform state, but it gives you version-controlled account definitions, peer review, and the ability to apply customizations as code. Teams already invested in Terraform find AFT's cost trivial; teams without that investment may find it a significant new surface to operate.</p>
+        <p>The third choice is how much customization to apply per account. Control Tower's baseline is deliberately minimal. Real accounts need VPCs, IAM roles, logging configuration, and often service-specific setup. AFT supports this through account customizations — Terraform that runs after the account is vended — and through a global customization that applies to every account. The tradeoff is between consistency and flexibility: a global customization guarantees every account gets the same baseline, while per-account customizations let teams diverge. Divergence is where drift and inconsistency creep in, so the exam tends to favor the answer that maximizes shared baseline and minimizes per-account special cases.</p>
+        <p>The fourth choice is whether to enroll existing accounts. Control Tower can bring accounts that already exist under management, but the process is not seamless. Existing accounts may have resources that violate guardrails, OUs that do not match Control Tower's model, or configurations that conflict with the baseline. Enrollment is possible but requires remediation first. A scenario that describes a large existing estate and asks how to bring it under governance is testing whether you know that enrollment is a migration project, not a toggle.</p>
+      </section>
+
+      <section class="doc-section" id="sizing-limits">
+        <h2 class="section-heading">5. Sizing, Limits and Quotas</h2>
+        <p>Control Tower's limits are mostly organizational rather than performance-related, and the exam tests them because they determine what a landing zone can and cannot do. The most commonly cited constraint is the number of accounts an organization can have, which is governed by AWS Organizations quotas rather than Control Tower itself; Control Tower inherits those limits. The practical implication is that very large enterprises may need to think about whether a single organization is the right unit, or whether multiple organizations with separate landing zones are warranted.</p>
+        <p>OU depth is another constraint worth knowing. Control Tower supports nested OUs, but the nesting depth is limited, and the guardrail model becomes harder to reason about as depth increases. A common design mistake is to create a deep OU hierarchy that mirrors the org chart; the guardrails then have to be attached at multiple levels, and the effective permission for any account becomes the intersection of many SCPs. Shallow, purpose-based OUs — Security, Infrastructure, Workloads, Sandbox — are easier to govern and easier to explain to auditors.</p>
+        <p>Guardrail counts are bounded by the number of controls Control Tower offers, which grows over time as AWS adds new ones. The relevant exam point is not the exact number but the distinction between mandatory, strongly recommended, and elective guardrails. Mandatory guardrails are always on and cannot be disabled; strongly recommended guardrails are on by default but can be turned off; elective guardrails are off by default and enabled per OU. A scenario that asks how to enforce a specific control will usually be answerable by identifying which category the control falls into.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Limit / quota</th><th>What it constrains</th><th>Practical implication</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Accounts per organization</td><td>Total account count</td><td>Very large estates may need multiple organizations</td></tr>
+              <tr><td>OU nesting depth</td><td>Hierarchy complexity</td><td>Prefer shallow, purpose-based OUs</td></tr>
+              <tr><td>Mandatory guardrails</td><td>Always-on controls</td><td>Cannot be disabled; design around them</td></tr>
+              <tr><td>Elective guardrails</td><td>Per-OU optional controls</td><td>Enable selectively to match compliance needs</td></tr>
+              <tr><td>Governed regions</td><td>Where guardrails apply</td><td>Ungoverned regions are a compliance gap</td></tr>
+              <tr><td>AFT pipeline concurrency</td><td>Account vending throughput</td><td>Bulk onboarding may need batching</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>AFT has its own operational limits that matter in practice. The pipeline that vends accounts has a finite concurrency, so onboarding hundreds of accounts at once requires batching rather than a single large run. The Terraform state for account customizations is stored centrally, and that state becomes a critical dependency: if it is lost or corrupted, re-applying customizations becomes difficult. These are not exam trivia so much as operational realities that shape how a platform team plans a large onboarding.</p>
+      </section>
+
+      <section class="doc-section" id="failure-modes">
+        <h2 class="section-heading">6. Failure Modes and What They Look Like in Production</h2>
+        <p>The most common failure mode is drift that nobody notices until an audit. Someone edits an SCP directly in the Organizations console, or moves an account between OUs to work around a guardrail, and the landing zone's expected state no longer matches reality. The symptom is a compliance dashboard that shows an OU or account as drifted, often weeks after the change. The first diagnostic move is to compare the current OU and SCP configuration against Control Tower's expected state and identify what changed; the repair is usually to re-register the OU or account, which re-applies the baseline.</p>
+        <p>A second failure mode is guardrail conflict. A team enables an elective guardrail that blocks an action their workload legitimately needs, and the workload starts failing in ways that are hard to trace because the error surfaces as an access denied rather than a guardrail message. The symptom is a sudden spike in access-denied errors in one account after a guardrail change. The first diagnostic move is to check the account's effective SCPs and Config rules against the failing API call, then either disable the elective guardrail or add a documented exception. This is why elective guardrails should be enabled deliberately rather than in bulk.</p>
+        <p>A third failure mode is the ungoverned account. An account is created outside Control Tower — perhaps by a team with Organizations permissions — and never enrolled. It has no guardrails, no centralized logging, and no drift detection. The symptom is an account that appears in the Organization but not in the Control Tower dashboard. The first diagnostic move is to reconcile the Organization's account list against Control Tower's enrolled accounts and enroll the stragglers. Preventing this in the first place usually means restricting who can create accounts directly in Organizations.</p>
+        <p>A fourth failure mode is AFT pipeline failure during account vending. The account may be created but the customizations fail to apply, leaving an account that exists but is not fully configured. The symptom is an account that appears in the dashboard but is missing expected resources. The first diagnostic move is to inspect the pipeline run logs and the Terraform state for that account, then re-run the customization. Because the account already exists, re-running is usually safe, but the state must be consistent or the re-run will fail in confusing ways.</p>
+      </section>
+
+      <section class="doc-section" id="sre-angle">
+        <h2 class="section-heading">7. The Operational and SRE Angle</h2>
+        <p>From an SRE perspective, Control Tower is infrastructure that governs infrastructure, and it deserves the same monitoring discipline as any other critical system. The landing zone's health is measured by drift: how many OUs and accounts are in the expected state, and how quickly drift is detected and repaired. A useful SLO is something like "no account remains drifted for more than one business day," with the drift dashboard as the primary signal. Alarms should fire when drift is detected, not when it is repaired, so that the team has a chance to investigate the cause rather than just the symptom.</p>
+        <p>The second operational concern is the AFT pipeline itself. It is a deployment pipeline, and it should be monitored like one: success rate, duration, and failure reasons. A pipeline that fails silently leaves accounts half-configured, and the failure may not surface until the account's workload misbehaves. Alarms on pipeline failure, plus a runbook that describes how to inspect and re-run a failed customization, are the minimum. The runbook should also cover the case where the Terraform state is inconsistent, since that is the failure that most often requires manual intervention.</p>
+        <p>The third concern is the guardrail change process. Enabling or disabling an elective guardrail is a change to the organization's security posture, and it should go through the same review as any other production change. The operational pattern that works is to treat guardrail changes as code: define them in the AFT repository, review them in a pull request, and apply them through the pipeline. This gives you a record of who changed which guardrail and when, which is exactly what an auditor will ask for. It also means a guardrail change can be rolled back the same way any other code change can.</p>
+        <p>Finally, the landing zone has a recovery story that should be tested. If the management account is compromised or the landing zone is misconfigured, how do you restore governance? The answer usually involves the log-archive account, which holds the historical record, and the audit account, which holds the cross-account roles. A game day that simulates the loss of the management account's configuration is a reasonable exercise, and it will surface dependencies — like the AFT state bucket — that are easy to overlook until they are needed.</p>
+      </section>
+
+      <section class="doc-section" id="gotchas">
+        <h2 class="section-heading">8. Edge Cases and Exam Gotchas</h2>
+        <p>The first gotcha is the management account's special status. It is not subject to SCPs, which means guardrails do not constrain it. Control Tower runs from the management account, and the management account should not host workloads. A scenario that asks where to place a workload that must be exempt from guardrails is testing whether you know that the management account is the only place SCPs do not apply — and that using it for that purpose is an anti-pattern.</p>
+        <p>The second gotcha is the difference between preventive and detective guardrails. A scenario that asks how to prevent an action will be answered by a preventive guardrail (an SCP); a scenario that asks how to detect and report an action will be answered by a detective guardrail (a Config rule). Confusing the two leads to answers that detect when the question asked to prevent, or vice versa. The exam uses this distinction frequently because it maps cleanly onto the difference between blocking and observing.</p>
+        <p>The third gotcha is the relationship between Control Tower and Organizations. Control Tower does not replace Organizations; it builds on top of it. The Organization still exists, still has its own quotas, and still has its own management account. A scenario that asks how to centrally manage billing across accounts is an Organizations question, not a Control Tower question, even though both are involved in the landing zone.</p>
+        <p>The fourth gotcha is the enrollment of existing accounts. Control Tower can enroll accounts that already exist, but the process requires the account to meet certain prerequisites and may require remediation. A scenario that describes a large existing estate and asks for the fastest path to governance is testing whether you know that enrollment is not instantaneous and that a phased approach is usually required.</p>
+        <p>The fifth gotcha is the AFT versus Account Factory distinction. Account Factory is the console-based provisioning mechanism built into Control Tower; AFT is the Terraform-based extension. A scenario that mentions an existing Terraform investment is pointing at AFT; a scenario that mentions a team without infrastructure-as-code maturity is pointing at the console-based Account Factory. The two are not interchangeable, and the exam expects you to pick based on the team's existing tooling.</p>
+      </section>
+
+      <section class="doc-section" id="vs-comparison">
+        <h2 class="section-heading">9. Control Tower vs. the Services It Gets Confused With</h2>
+        <p>Control Tower sits at the center of a cluster of services that each do part of the job, and the exam will offer them as alternatives. Organizations is the foundation: it creates accounts and OUs and provides the SCP mechanism. Control Tower uses Organizations but adds the landing zone, guardrails, and drift detection. A scenario that asks how to consolidate billing is an Organizations question; a scenario that asks how to enforce a baseline across accounts is a Control Tower question.</p>
+        <p>AWS Config is the detection engine underneath detective guardrails. Control Tower manages Config rules on your behalf, but Config itself is a general-purpose resource compliance service that can be used independently. A scenario that asks how to detect non-compliant resources in a single account is a Config question; a scenario that asks how to enforce compliance across an organization is a Control Tower question. The distinction is scope: Config observes, Control Tower governs.</p>
+        <p>Service Catalog is the mechanism Account Factory uses to vend accounts. It is a general-purpose catalog for approved products, and Control Tower uses it as an implementation detail. A scenario that asks how to offer a curated set of approved infrastructure to developers is a Service Catalog question; a scenario that asks how to provision governed accounts is a Control Tower question. The exam rarely asks about Service Catalog directly in this context, but it may appear as a distractor.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Service</th><th>Primary job</th><th>Pick it when…</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>AWS Organizations</td><td>Account and OU management, SCPs, consolidated billing</td><td>You need the foundation, not the governance layer</td></tr>
+              <tr><td>Control Tower</td><td>Automated landing zone, guardrails, drift detection</td><td>You need a governed multi-account baseline at scale</td></tr>
+              <tr><td>AWS Config</td><td>Resource compliance detection</td><td>You need to detect non-compliance, not prevent it</td></tr>
+              <tr><td>Service Catalog</td><td>Curated product catalog</td><td>You need to offer approved infrastructure to teams</td></tr>
+              <tr><td>Account Factory (console)</td><td>Manual account vending</td><td>Your team has no IaC pipeline and needs accounts now</td></tr>
+              <tr><td>AFT</td><td>Pipeline-driven account vending and customization</td><td>Your team already manages infrastructure as Terraform</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The rule of thumb that resolves most scenarios is to ask what layer the question is operating at. If it is about the existence of accounts and OUs, it is Organizations. If it is about the governance of those accounts, it is Control Tower. If it is about detecting a specific resource's compliance, it is Config. If it is about how accounts are provisioned, it is Account Factory or AFT depending on the team's tooling. Naming the layer before choosing the service is the habit that makes these questions tractable.</p>
+      </section>
+
+      <section class="doc-section" id="lab">
+        <h2 class="section-heading">Hands-on Lab: Layering AFT Customizations on a Control Tower Baseline (45 min)</h2>
+        <div class="card card-green">
+          <p>This lab walks through how Account Factory for Terraform layers custom account customizations on top of Control Tower's baseline guardrails. You will not need a live AWS account to follow the reasoning, but if you have a sandbox organization, the steps map directly onto the AFT setup process. The goal is to understand the boundary between what Control Tower provides and what AFT adds, because that boundary is where most exam scenarios live.</p>
+          <p><strong>Step 1 — Establish the baseline.</strong> Start by listing what Control Tower provides before AFT is involved: the landing zone, the Security OU with log-archive and audit accounts, the mandatory guardrails, and the Account Factory product in Service Catalog. Write these down as the "baseline layer." Everything AFT does sits on top of this layer and must not conflict with it. If a customization you plan would violate a mandatory guardrail, it cannot be applied — the guardrail wins.</p>
+          <p><strong>Step 2 — Identify the customization surface.</strong> AFT exposes two customization points: account customizations, which run per account after it is vended, and global customizations, which run for every account. Map your requirements onto these two surfaces. A VPC that every account needs is a global customization. A service-specific IAM role that only the data platform accounts need is an account customization. The mapping exercise is the point: it forces you to decide what is truly universal versus what is team-specific.</p>
+          <p><strong>Step 3 — Write the customization as Terraform.</strong> For each customization, write the Terraform that creates the resources. The key constraint is that the Terraform runs with the permissions AFT has in the target account, which are themselves bounded by the account's guardrails. If your Terraform tries to create a resource that a guardrail blocks, the apply will fail. This is the mechanism by which guardrails constrain customization: they do not prevent you from writing the Terraform, they prevent it from succeeding.</p>
+          <p><strong>Step 4 — Wire the pipeline.</strong> AFT's pipeline is triggered by changes to the account request repository. When a new account request is merged, the pipeline vends the account through Account Factory, then runs the global customization, then runs the account-specific customization. Trace this sequence and note where failures can occur: account vending can fail, the global customization can fail, and the account customization can fail. Each failure leaves the account in a different state, and the runbook should describe how to recover from each.</p>
+          <p><strong>Step 5 — Test the guardrail interaction.</strong> Deliberately write a customization that attempts an action a guardrail blocks — for example, creating an S3 bucket with public access when a guardrail forbids it. Run the pipeline and observe the failure. The failure should surface as an access-denied error in the Terraform apply, and the account should be left in a partially configured state. This exercise teaches you what guardrail conflicts look like in practice, which is the failure mode most likely to appear in a real deployment.</p>
+          <p><strong>Step 6 — Document the boundary.</strong> Finally, write a short document that states, for your organization, which configuration lives in Control Tower and which lives in AFT. The rule is that anything that must be enforced across all accounts belongs in Control Tower guardrails; anything that configures resources within an account belongs in AFT. Configuration that lives outside both — applied manually or by a separate tool — is ungoverned and will eventually drift. The document is the artifact that keeps the boundary explicit as the organization grows.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="quiz">
         <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
-        
-      <div class="scenario-card">
-        <p class="scenario-question"><strong>Q1.</strong> What is the key difference between a mandatory and an elective Control Tower guardrail?</p>
-        <div class="scenario-options" id="opts-d3q0">
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q1.</strong> A company has 60 AWS accounts and an auditor has asked for evidence that no account can disable CloudTrail logging. Which approach provides that evidence most directly?</p>
+          <div class="scenario-options" id="opts-d3q1">
+            <div class="scenario-option">A. A spreadsheet listing each account's CloudTrail configuration, updated quarterly</div>
+            <div class="scenario-option">B. A Control Tower landing zone with a preventive guardrail blocking CloudTrail changes, plus the compliance dashboard as evidence</div>
+            <div class="scenario-option">C. An IAM policy in each account that denies CloudTrail changes</div>
+            <div class="scenario-option">D. A monthly manual review of CloudTrail settings by the security team</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d3q1', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d3q1"><strong>Correct answer: B.</strong> A preventive guardrail (an SCP) blocks the action outright, and Control Tower's compliance dashboard provides the continuous evidence an auditor needs. Manual reviews and per-account policies do not scale or provide continuous proof.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q2.</strong> What is the key difference between a mandatory and an elective Control Tower guardrail?</p>
+          <div class="scenario-options" id="opts-d3q2">
             <div class="scenario-option">A. Mandatory guardrails cost extra</div>
-            <div class="scenario-option">B. Mandatory guardrails cannot be disabled and are always enforced; elective guardrails are optional best practices you can turn on/off</div>
+            <div class="scenario-option">B. Mandatory guardrails cannot be disabled and are always enforced; elective guardrails are optional best practices you can turn on or off</div>
             <div class="scenario-option">C. Elective guardrails only apply to the management account</div>
             <div class="scenario-option">D. There is no functional difference</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d3q2', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d3q2"><strong>Correct answer: B.</strong> Mandatory guardrails are always active and cannot be disabled; elective and strongly recommended guardrails can be enabled per OU based on governance needs.</div>
         </div>
-        <button class="scenario-reveal-btn" onclick="revealAnswer('d3q0', 1)">Reveal Answer</button>
-        <div class="scenario-explanation" id="exp-d3q0"><strong>Correct answer: B.</strong> Mandatory guardrails (e.g. disallow root user access keys) are always active; elective and strongly recommended guardrails can be enabled per OU based on your governance needs.</div>
-      </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q3.</strong> A platform team already manages all infrastructure as Terraform and wants new AWS accounts to be provisioned through their existing pull-request workflow. What should they use?</p>
+          <div class="scenario-options" id="opts-d3q3">
+            <div class="scenario-option">A. The console-based Account Factory in Control Tower</div>
+            <div class="scenario-option">B. Account Factory for Terraform (AFT), which vends accounts through a pipeline</div>
+            <div class="scenario-option">C. AWS Organizations' CreateAccount API called manually</div>
+            <div class="scenario-option">D. AWS Service Catalog without Control Tower</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d3q3', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d3q3"><strong>Correct answer: B.</strong> AFT extends Control Tower's Account Factory with pipeline-driven provisioning, matching a team already standardized on Terraform and pull-request review.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q4.</strong> Which accounts does Control Tower create as part of the landing zone, and what is the log-archive account's role?</p>
+          <div class="scenario-options" id="opts-d3q4">
+            <div class="scenario-option">A. Management, log-archive, and audit; the log-archive account centrally stores CloudTrail logs and Config snapshots</div>
+            <div class="scenario-option">B. Management and production only; the production account stores logs</div>
+            <div class="scenario-option">C. One account per OU; logs are stored in each OU's account</div>
+            <div class="scenario-option">D. No accounts are created; Control Tower only creates OUs</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d3q4', 0)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d3q4"><strong>Correct answer: A.</strong> Control Tower provisions management, log-archive, and audit accounts. The log-archive account is the central, tamper-resistant store for CloudTrail logs and Config snapshots from every enrolled account.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q5.</strong> A team enables an elective guardrail that blocks an action their workload legitimately needs, and the workload starts failing with access-denied errors. What is the first diagnostic move?</p>
+          <div class="scenario-options" id="opts-d3q5">
+            <div class="scenario-option">A. Reboot the workload's instances</div>
+            <div class="scenario-option">B. Check the account's effective SCPs and Config rules against the failing API call, then disable the guardrail or add a documented exception</div>
+            <div class="scenario-option">C. Delete the account and recreate it</div>
+            <div class="scenario-option">D. Increase the workload's IAM permissions</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d3q5', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d3q5"><strong>Correct answer: B.</strong> Guardrail conflicts surface as access-denied errors. The first move is to compare the effective SCPs and Config rules against the failing call, then resolve the conflict deliberately.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q6.</strong> An account appears in the AWS Organization but not in the Control Tower dashboard. What does this indicate?</p>
+          <div class="scenario-options" id="opts-d3q6">
+            <div class="scenario-option">A. The account is in a different region</div>
+            <div class="scenario-option">B. The account was created outside Control Tower and was never enrolled, so it has no guardrails or centralized logging</div>
+            <div class="scenario-option">C. The account is suspended</div>
+            <div class="scenario-option">D. Control Tower is experiencing an outage</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d3q6', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d3q6"><strong>Correct answer: B.</strong> An account in the Organization but absent from the Control Tower dashboard is an ungoverned account. Reconcile the Organization's account list against enrolled accounts and enroll the stragglers.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q7.</strong> Which statement about the management account in a Control Tower landing zone is correct?</p>
+          <div class="scenario-options" id="opts-d3q7">
+            <div class="scenario-option">A. It is subject to all mandatory guardrails like any other account</div>
+            <div class="scenario-option">B. It is not subject to SCPs, so it should not host workloads and should be reserved for billing, Organizations, and Control Tower</div>
+            <div class="scenario-option">C. It is the recommended place to run workloads that need guardrail exemptions</div>
+            <div class="scenario-option">D. It is deleted once Control Tower is enabled</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d3q7', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d3q7"><strong>Correct answer: B.</strong> The management account is immune to SCPs, so guardrails do not constrain it. Best practice keeps it workload-free to minimize blast radius.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q8.</strong> A scenario asks how to detect — not prevent — that an S3 bucket in an enrolled account has been made public. Which guardrail type applies?</p>
+          <div class="scenario-options" id="opts-d3q8">
+            <div class="scenario-option">A. A preventive guardrail implemented as an SCP</div>
+            <div class="scenario-option">B. A detective guardrail implemented as an AWS Config rule</div>
+            <div class="scenario-option">C. A permission boundary</div>
+            <div class="scenario-option">D. A VPC endpoint policy</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d3q8', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d3q8"><strong>Correct answer: B.</strong> Detective guardrails are Config rules: they detect and report non-compliance without blocking the action. Preventive guardrails (SCPs) block the action outright.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q9.</strong> A company wants to bring 200 existing AWS accounts under Control Tower governance. What is the most accurate characterization of this effort?</p>
+          <div class="scenario-options" id="opts-d3q9">
+            <div class="scenario-option">A. A single toggle that enrolls all accounts instantly</div>
+            <div class="scenario-option">B. A migration project requiring prerequisite checks and remediation of accounts that violate guardrails or do not match the OU model</div>
+            <div class="scenario-option">C. Impossible; Control Tower only works with new accounts</div>
+            <div class="scenario-option">D. A billing change only, with no governance impact</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d3q9', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d3q9"><strong>Correct answer: B.</strong> Existing accounts can be enrolled, but the process requires prerequisites and remediation. It is a phased migration, not an instant toggle.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q10.</strong> Which service provides the underlying account and OU structure that Control Tower builds on?</p>
+          <div class="scenario-options" id="opts-d3q10">
+            <div class="scenario-option">A. AWS Config</div>
+            <div class="scenario-option">B. AWS Organizations</div>
+            <div class="scenario-option">C. AWS Service Catalog</div>
+            <div class="scenario-option">D. IAM Identity Center</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d3q10', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d3q10"><strong>Correct answer: B.</strong> Control Tower builds on AWS Organizations: it reads the Organization's structure, creates the OUs it needs, and enrolls accounts into them.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q11.</strong> An AFT pipeline run creates an account but the account customization fails. What state is the account in, and what is the recovery step?</p>
+          <div class="scenario-options" id="opts-d3q11">
+            <div class="scenario-option">A. The account does not exist; re-run the pipeline from scratch</div>
+            <div class="scenario-option">B. The account exists but is partially configured; inspect the pipeline logs and Terraform state, then re-run the customization</div>
+            <div class="scenario-option">C. The account is automatically deleted by Control Tower</div>
+            <div class="scenario-option">D. The account is fully configured; the failure is cosmetic</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d3q11', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d3q11"><strong>Correct answer: B.</strong> A failed customization leaves the account existing but partially configured. Inspect the pipeline logs and Terraform state, then re-run the customization — ensuring state consistency first.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q12.</strong> Which of the following is the best SLO for a Control Tower landing zone?</p>
+          <div class="scenario-options" id="opts-d3q12">
+            <div class="scenario-option">A. 100% of accounts enrolled within one hour of creation</div>
+            <div class="scenario-option">B. No account remains drifted from the expected state for more than one business day</div>
+            <div class="scenario-option">C. Zero guardrail changes per quarter</div>
+            <div class="scenario-option">D. All accounts in a single OU</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d3q12', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d3q12"><strong>Correct answer: B.</strong> Drift is the landing zone's primary health signal. An SLO bounding how long drift persists is measurable and meaningful; the other options are either unmeasurable or counterproductive.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q13.</strong> A team wants to apply a VPC configuration to every account that Control Tower vends. Where should this configuration live?</p>
+          <div class="scenario-options" id="opts-d3q13">
+            <div class="scenario-option">A. As a per-account customization in AFT, duplicated for each account</div>
+            <div class="scenario-option">B. As a global customization in AFT, applied to every account</div>
+            <div class="scenario-option">C. Manually, after each account is created</div>
+            <div class="scenario-option">D. As an SCP on the OU</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d3q13', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d3q13"><strong>Correct answer: B.</strong> A global customization applies to every account, guaranteeing a consistent baseline. Per-account duplication invites divergence, and SCPs govern permissions rather than configuring resources.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q14.</strong> Which statement best describes the relationship between Control Tower and AWS Config?</p>
+          <div class="scenario-options" id="opts-d3q14">
+            <div class="scenario-option">A. Control Tower replaces AWS Config</div>
+            <div class="scenario-option">B. Control Tower uses AWS Config rules to implement detective guardrails, but Config can also be used independently for single-account compliance</div>
+            <div class="scenario-option">C. AWS Config is only available inside Control Tower</div>
+            <div class="scenario-option">D. They are unrelated services</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d3q14', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d3q14"><strong>Correct answer: B.</strong> Control Tower manages Config rules on your behalf for detective guardrails, but Config is a general-purpose compliance service usable on its own. The distinction is scope: Config observes, Control Tower governs.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q15.</strong> A company governs only two AWS regions in Control Tower, but a team launches resources in a third region. What is the governance consequence?</p>
+          <div class="scenario-options" id="opts-d3q15">
+            <div class="scenario-option">A. The resources are automatically deleted</div>
+            <div class="scenario-option">B. The third region is ungoverned, so the landing zone's guardrails do not apply there — a compliance gap auditors will notice</div>
+            <div class="scenario-option">C. Control Tower automatically expands to govern the third region</div>
+            <div class="scenario-option">D. There is no consequence; region selection is cosmetic</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d3q15', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d3q15"><strong>Correct answer: B.</strong> Guardrails apply only in governed regions. Resources in ungoverned regions fall outside the landing zone's controls, creating a compliance gap that must be closed by expanding governance or restricting region use.</div>
+        </div>
       </section>
+
+      <section class="doc-section" id="preview">
+        <h2 class="section-heading">Peek into Tomorrow</h2>
+        <div class="card card-purple">
+          <p>Control Tower solves the problem of provisioning and governing accounts, but it leaves a question unanswered: once those accounts exist, how do the humans who work in them actually get access? The landing zone creates the structure, and the guardrails constrain what can be done inside it, but neither of those things gives an engineer a way to log in. The default answer — an IAM user in each account — is exactly the anti-pattern that multi-account governance is supposed to eliminate. It multiplies credentials, it makes offboarding a manual scavenger hunt, and it gives you no central place to revoke access when someone leaves.</p>
+          <p>Tomorrow's topic addresses that gap directly. IAM Identity Center replaces per-account IAM users with permission sets mapped to SAML federation from an external identity provider, auto-provisioning an IAM role into each assigned account. The open question today's material leaves is how those permission sets interact with the guardrails you just learned to configure: a permission set grants access, but the SCP still caps it, and the two have to be designed together. The interesting part is what happens when a permission set and a guardrail disagree — and which one wins.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="sources">
+        <h2 class="section-heading">Sources</h2>
+        <div class="card">
+          <ul class="source-list">
+            <li><a href="https://docs.aws.amazon.com/controltower/latest/userguide/what-is-control-tower.html" target="_blank">AWS Control Tower User Guide — What Is AWS Control Tower?</a></li>
+            <li><a href="https://docs.aws.amazon.com/controltower/latest/userguide/how-control-tower-works.html" target="_blank">AWS Control Tower User Guide — How AWS Control Tower Works</a></li>
+            <li><a href="https://docs.aws.amazon.com/controltower/latest/userguide/controls.html" target="_blank">AWS Control Tower User Guide — Controls (Guardrails)</a></li>
+            <li><a href="https://docs.aws.amazon.com/controltower/latest/userguide/account-factory.html" target="_blank">AWS Control Tower User Guide — Account Factory</a></li>
+            <li><a href="https://docs.aws.amazon.com/controltower/latest/userguide/aft-overview.html" target="_blank">AWS Control Tower User Guide — Account Factory for Terraform (AFT)</a></li>
+            <li><a href="https://docs.aws.amazon.com/controltower/latest/userguide/drift.html" target="_blank">AWS Control Tower User Guide — Detect and Resolve Drift</a></li>
+            <li><a href="https://docs.aws.amazon.com/organizations/latest/userguide/orgs_introduction.html" target="_blank">AWS Organizations User Guide — What Is AWS Organizations?</a></li>
+            <li><a href="https://docs.aws.amazon.com/config/latest/developerguide/WhatIsConfig.html" target="_blank">AWS Config Developer Guide — What Is AWS Config?</a></li>
+            <li><a href="https://docs.aws.amazon.com/wellarchitected/latest/security-pillar/welcome.html" target="_blank">AWS Well-Architected Framework — Security Pillar</a></li>
+          </ul>
+        </div>
+      </section>
+
       <div class="day-nav">
         <a href="day-002.html">&larr; Day 2: Service Control Policy (SCP) Mechanics</a>
         <button class="btn btn-green" onclick="markComplete(3, 'day-004.html')">Mark Day 3 Complete &rarr;</button>

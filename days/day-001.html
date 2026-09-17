@@ -104,49 +104,361 @@
         <span class="pill pill-green">Phase 1: Multi-Account Governance &amp; Networking</span>
       </div>
       <h1 class="hero-title">Multi-Account Architecture &amp; AWS Organizations</h1>
-      <div class="reading-meta">&#128337; ~3 min read &middot; 2 services covered</div>
+      <div class="reading-meta">&#128337; ~57 min read &middot; 2 services covered</div>
       <div class="services-grid">
         <span class="service-tag">AWS Organizations</span>
         <span class="service-tag">Organizational Units</span>
       </div>
       <div id="tracker"></div>
-      <section class="doc-section">
-        <h2 class="section-heading">Today's Concept</h2>
+
+      <section class="doc-section" id="welcome">
+        <h2 class="section-heading">How to Use This Curriculum</h2>
         <div class="card card-accent">
-          <p>AWS Organizations lets you centrally manage billing and policy across many AWS accounts, grouped into Organizational Units (OUs) that mirror your business or environment structure (e.g. Security, Infrastructure, Workloads/Prod, Workloads/Dev). The management (root) account should hold no workloads — it exists purely for consolidated billing and org-wide policy.</p>
-        </div>
-        <h3 class="sub-heading">Hands-on Lab / Practical Action (45 min)</h3>
-        <div class="card">
-          <p>Draft an OU hierarchy isolating Dev, Staging, and Production accounts under a Workloads OU, with a separate Security OU for log-archive and audit accounts.</p>
+          <p>This is a 70-day, phase-structured build toward the AWS Certified Solutions Architect – Professional exam. Each day is one topic, and each day page has the same shape: a short recap of the previous day's material, nine body subsections that go deep on the day's service or pattern, a hands-on lab, a fifteen-question scenario drill, and a preview of what the next day resolves. The recap and preview sections are the connective tissue — they are what keeps seventy days from reading as seventy disconnected service notes.</p>
+          <p>Budget roughly an hour per day. The prose is written to be read once at a normal pace, not skimmed; the lab is where the material actually sticks, and the quiz is where you find out whether it did. Do not skip the quiz, and do not read the explanation before committing to an answer — the value of the drill is in the moment of choosing. The curriculum assumes you already hold an associate-level understanding of core AWS services and are now building the architectural judgment the Professional exam tests: choosing between defensible options under stated constraints, and knowing why the plausible-sounding alternative is wrong.</p>
         </div>
       </section>
-      <section class="doc-section">
-        <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
-        
-      <div class="scenario-card">
-        <p class="scenario-question"><strong>Q1.</strong> A company wants a dedicated account that only aggregates CloudTrail logs from every other account and cannot be modified by workload teams. Where should this account live?</p>
-        <div class="scenario-options" id="opts-d1q0">
+
+      <section class="doc-section" id="why-on-exam">
+        <h2 class="section-heading">1. Why Multi-Account Architecture Is on the Exam</h2>
+        <p>The SAP-C02 exam opens with Domain 1, Design Solutions for Organizational Complexity, and that domain is not really about any single service. It is about the question of how a large organization should be shaped on AWS, and the answer AWS has converged on over the last several years is that it should be shaped as many accounts rather than one. That conclusion is counterintuitive enough to candidates who learned AWS on a single account that the exam spends real question budget testing whether you have internalized it. A scenario that describes a company with a single production account, a shared IAM user directory, and a growing pile of resource-based policies is describing an architecture that has already failed in a way that is not yet visible, and the correct answer is almost always to restructure into accounts rather than to patch the existing account with more policies.</p>
+        <p>The architectural problem that multi-account solves is blast radius, and it solves it at a layer that no in-account control can reach. Within a single account, every principal that can create IAM policies can, in principle, escalate to full account administrator. A developer with permission to create a role and attach a policy can attach AdministratorAccess to that role and assume it. A compromised CI/CD credential with iam:PassRole and a broad enough set of service permissions can do the same. The only reliable boundary against this class of escalation is an account boundary, because crossing an account requires an explicit trust relationship that the target account controls. When you separate workloads into accounts, a compromise in one account is contained by the fact that the other accounts do not trust it. That containment is the primary reason the exam treats account separation as the default rather than as an advanced pattern.</p>
+        <p>The secondary reasons are quotas and billing. Service quotas are per-account, so a runaway workload in one account cannot exhaust the API rate limits or instance capacity that another account depends on. Consolidated billing through AWS Organizations aggregates all member accounts onto a single bill, which means volume discounts and Savings Plan commitments apply across the whole organization rather than per account, and it means the finance team has one place to look. Neither of these is as architecturally interesting as blast radius, but both show up in exam scenarios phrased around cost allocation or quota isolation, and both are consequences of the same structural decision.</p>
+        <p>The exam also tests the failure mode of getting this wrong in the other direction. An organization that creates an account per developer, or per microservice, or per environment without any grouping structure ends up with hundreds of accounts and no way to apply policy to them coherently. The Organizational Unit hierarchy is the mechanism that makes many accounts manageable, and a scenario that describes an unmanageable account sprawl is testing whether you reach for OUs as the organizing principle. The rest of this lesson is about how that hierarchy is built, what it constrains, and where it breaks.</p>
+      </section>
+
+      <section class="doc-section" id="mechanism">
+        <h2 class="section-heading">2. How AWS Organizations Actually Works</h2>
+        <p>AWS Organizations is a management layer that sits above individual accounts and provides three things: a hierarchy for grouping accounts, a consolidated billing relationship, and a policy attachment mechanism. The hierarchy is a tree. At the top is the organization root, which is not an account but a container. Beneath the root are Organizational Units, which can nest arbitrarily deep, and beneath the OUs are the member accounts themselves. Every account in the organization has exactly one parent, and the tree is the structure along which policies are inherited. The account that created the organization is the management account, sometimes called the root account or the payer account, and it holds a special position: it is the only account that can create and attach policies to the organization, and it is the only account that is exempt from those policies.</p>
+        <p>Consolidated billing is the mechanism that makes the organization financially coherent. When an account joins an organization, its charges roll up to the management account's bill, and the member account's own payment method is no longer used. This has a practical consequence that surprises people: the management account becomes financially responsible for every member account, which means a compromised or misconfigured member account can generate charges the management account must pay. It also means that Reserved Instance and Savings Plan discounts purchased in one account apply across the organization, and that the volume tiering for services like S3 is calculated on aggregate usage rather than per account. The exam occasionally tests whether you know that consolidated billing is the reason to use Organizations even when you do not need the policy features.</p>
+        <p>The policy attachment mechanism is the part that matters most for governance, and it is worth being precise about what Organizations itself provides versus what other services provide on top of it. Organizations natively supports Service Control Policies, which are the subject of the next day's material, and it supports tag policies and backup policies as organization-level policy types. It does not itself provide identity management, account provisioning automation, or compliance detection — those come from IAM Identity Center, Control Tower, and AWS Config respectively, all of which integrate with Organizations but are separate services. A common exam trap is a scenario that asks for centralized identity management and offers AWS Organizations as an answer; Organizations is the prerequisite that makes Identity Center's cross-account provisioning possible, but it is not the identity service.</p>
+        <p>Account creation and invitation are the two ways accounts enter an organization. An account created directly through Organizations is born inside the organization and is immediately subject to its policies. An existing standalone account can be invited and must accept the invitation, which is a deliberate friction point because joining an organization transfers billing control and subjects the account to policies it did not author. Once an account is a member, leaving the organization requires the management account to remove it, and a member account cannot unilaterally depart. That asymmetry is the structural reason Organizations is a governance tool rather than a convenience: the management account holds the power, and member accounts are along for the ride.</p>
+      </section>
+
+      <section class="doc-section" id="core-decision-boundary">
+        <h2 class="section-heading">3. The Core Decision Boundary: How to Split Accounts</h2>
+        <p>The single fork that most multi-account scenario questions hinge on is where the account boundaries go, and the answer is almost never "one account per team" or "one account per application." The organizing principle that AWS's own guidance converges on is to split by what needs a hard boundary, and then to group by what shares a lifecycle. The hard boundaries are security, billing, and blast radius. The shared lifecycles are environments and business units. An account boundary is expensive — it means separate IAM, separate VPCs unless you share them, separate service quotas, and a cross-account trust relationship for anything that needs to talk across it — so you want as few of them as the hard boundaries require, and you want the ones you have to be drawn where a compromise would otherwise spread.</p>
+        <p>The pattern that falls out of this is a small number of top-level OUs with distinct purposes. A Security OU holds the accounts that exist to observe and protect the rest of the organization: the log-archive account that aggregates CloudTrail and Config data, and the audit account that holds the security tooling and the read-only cross-account roles. These accounts are deliberately isolated because their value depends on workload teams not being able to modify them. An Infrastructure OU holds shared services: the network account that owns the Transit Gateway and the shared VPCs, the DNS account, and the account that runs centralized CI/CD. A Workloads OU holds the accounts that run actual applications, typically subdivided by environment (Prod, Staging, Dev) or by business unit, or both. A Sandbox OU holds accounts that exist for experimentation and are expected to be torn down and recreated.</p>
+        <p>The environment split within Workloads is the one candidates most often get wrong on the exam. The instinct is to put Dev, Staging, and Prod in the same account with different VPCs or different resource name prefixes, because that is how it is done in a single-account world. The correct answer is almost always separate accounts, because the boundary that matters is not network isolation — that is what VPCs and security groups are for — but permission isolation. A developer who can deploy to Dev should not be able to deploy to Prod, and the cleanest way to enforce that is to give them a role in the Dev account and no role in the Prod account. Doing it with IAM policies inside one account is possible but fragile, because every new policy is a chance to accidentally grant Prod access.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Split dimension</th><th>Use when</th><th>Cost of getting it wrong</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Security / audit</td><td>Always — logging and audit accounts must be isolated from workloads</td><td>A workload compromise can tamper with the evidence of the compromise</td></tr>
+              <tr><td>Environment (Prod vs non-Prod)</td><td>Always — permission isolation between environments</td><td>A non-Prod credential can reach production resources</td></tr>
+              <tr><td>Business unit</td><td>When units have separate budgets, compliance regimes, or ownership</td><td>Cost attribution becomes guesswork; one unit's incident pages another's on-call</td></tr>
+              <tr><td>Shared services</td><td>When a resource is consumed by many accounts (network, DNS, CI/CD)</td><td>Duplicated infrastructure and inconsistent configuration across accounts</td></tr>
+              <tr><td>Sandbox / experimentation</td><td>When teams need to try things without governance friction</td><td>Experimental resources accumulate in production accounts</td></tr>
+              <tr><td>Per-team or per-app</td><td>Rarely — only when a team genuinely needs its own quota and billing boundary</td><td>Account sprawl with no coherent policy attachment point</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The pick-X-when rules that follow from this table are the ones to carry into the exam. Pick a separate account when the requirement is a boundary that cannot be crossed by an in-account administrator, when the requirement is independent service quotas, or when the requirement is separate cost attribution. Pick an OU when the requirement is to apply the same policy to a set of accounts. Pick a VPC or subnet when the requirement is network segmentation within a single trust domain. Pick an IAM role when the requirement is to grant a specific principal access to a specific resource. The exam frequently offers all four as options for a scenario that only one of them actually satisfies, and the discriminator is almost always whether the requirement says "even if an administrator in that account tries."</p>
+      </section>
+
+      <section class="doc-section" id="config-tradeoffs">
+        <h2 class="section-heading">4. OU Design and the Tradeoffs of Each Structure</h2>
+        <p>Once you have decided how many accounts you need, the next set of decisions is about how to arrange them in the OU tree, and the tradeoff is always between policy precision and policy maintenance. A flat structure — every account directly under the root — gives you the simplest possible tree and the coarsest possible policy control, because any policy you attach at the root applies to everything. A deep structure with many nested OUs gives you precise control, because you can attach a policy at exactly the level where it applies, but it costs you the cognitive overhead of remembering which policies are attached where and what the effective permission set is for any given account. The exam does not test your aesthetic preference here, but it does test whether you understand that inheritance means a policy attached high in the tree is organization-wide and cannot be relaxed from below.</p>
+        <p>The most common structural mistake is to organize the tree by team rather than by function. A tree with OUs named after departments looks natural to an organization chart, but it makes policy attachment awkward, because the policies you actually want to write are almost never department-specific. Region restrictions, service blocks, and logging requirements apply to categories of accounts — production, non-production, security, sandbox — not to the marketing team's accounts specifically. Organizing by function means a new policy is attached once at the right level and applies correctly to every account that should receive it. Organizing by team means the same policy has to be attached to each team's OU, and the day a team reorganizes, the policy attachment is wrong.</p>
+        <p>The second tradeoff is depth versus breadth. A tree that is three levels deep (root, environment OU, account) is easy to reason about and covers most organizations. A tree that is five levels deep (root, business unit, environment, application tier, account) gives finer control but makes it harder to answer the question "what policies apply to this account" without walking the whole path. The practical guidance is to add a level only when there is a policy that genuinely needs to attach at that level and nowhere else. If you cannot name the policy that justifies a level, the level is probably not earning its complexity.</p>
+        <p>The third tradeoff is how to handle accounts that do not fit the pattern. There is always at least one — an account with a regulatory requirement that conflicts with the standard region restriction, or an account that needs to run a service the rest of the organization blocks. The two options are to create a dedicated OU for the exception, which keeps the exception visible and auditable, or to attach an account-level policy that carves out the exception, which is more surgical but easier to forget. The exam tends to favor the dedicated OU because it makes the exception a first-class part of the structure rather than a hidden override, and because it means the exception can be reviewed as a unit rather than discovered by reading every account's attachments.</p>
+        <p>Finally, there is the question of how much of the tree to build up front. Building the full tree before you have accounts to put in it produces empty OUs that may not match how the organization actually evolves. Building it incrementally as accounts are needed produces a tree shaped by history rather than by design. The pragmatic middle is to build the top-level OUs that correspond to the hard boundaries — Security, Infrastructure, Workloads, Sandbox — on day one, and to add sub-OUs beneath Workloads only when there is a policy or a billing requirement that justifies them. That gives you a structure that is correct from the start without over-committing to a shape you will want to change.</p>
+      </section>
+
+      <section class="doc-section" id="sizing-limits">
+        <h2 class="section-heading">5. Sizing, Limits, and Quotas</h2>
+        <p>The limits that matter for Organizations are mostly generous, but a few of them shape real design decisions and the exam does test them. The headline number is that an organization can contain a large number of accounts — the default quota is in the thousands, and it can be raised — so account count is rarely the binding constraint. What is more likely to bind is the number of accounts you can create per day, which is a rate limit rather than a total limit, and which matters when you are provisioning a new business unit's worth of accounts through automation. If a scenario describes a bulk account creation that fails partway through, the cause is usually the creation rate limit rather than the total account quota.</p>
+        <p>Organizational Unit depth is limited, and the limit is deep enough that it is rarely hit in practice, but the exam does occasionally test whether you know that nesting is bounded. The more practically relevant limit is the number of policies that can be attached to a single target, which is what constrains how many guardrails you can stack on one OU. Because policies are intersected, a design that needs many guardrails on one OU will eventually hit the attachment limit, and the response is to consolidate policies rather than to restructure the tree. This is one of the reasons the deny-list posture is preferred: a single deny-list policy can express many guardrails, whereas an allow-list policy tends to need one policy per service.</p>
+        <p>Consolidated billing has its own limits, and the one worth knowing is that an account can belong to exactly one organization at a time. There is no way to have an account participate in two organizations' billing, which means a merger or acquisition requires a deliberate decision about which organization the acquired accounts join. The exam frames this as a scenario about integrating an acquired company, and the correct answer usually involves either inviting the acquired accounts into the existing organization or keeping them separate with a cross-account trust relationship, depending on whether the requirement is unified governance or preserved autonomy.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Limit</th><th>Shape of the limit</th><th>Practical implication</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Accounts per organization</td><td>Thousands by default, raisable</td><td>Rarely binding; account sprawl is a design problem, not a quota problem</td></tr>
+              <tr><td>Account creation rate</td><td>Per-day rate limit</td><td>Bulk provisioning must be paced; failures mid-run are rate-related</td></tr>
+              <tr><td>OU nesting depth</td><td>Bounded but deep</td><td>Add a level only when a policy justifies it</td></tr>
+              <tr><td>Policies attached per target</td><td>Limited per account/OU/root</td><td>Favors consolidated deny-list policies over many small ones</td></tr>
+              <tr><td>Organizations per account</td><td>Exactly one</td><td>Mergers require an explicit decision about which org the accounts join</td></tr>
+              <tr><td>Management account</td><td>Exactly one, cannot be changed</td><td>Its identity is fixed at organization creation; plan for it</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The management account deserves its own note because it is the one account whose position cannot be changed after the fact. It is the account that created the organization, and there is no supported operation to transfer that role to a different account. If the management account is compromised, the attacker has the ability to detach every policy in the organization, invite arbitrary accounts, and change the billing relationship. This is why the guidance to keep it workload-free is not a stylistic preference but a security requirement, and why the exam treats "move the workload out of the management account" as the correct answer to any scenario that describes workloads running there.</p>
+      </section>
+
+      <section class="doc-section" id="failure-modes">
+        <h2 class="section-heading">6. Failure Modes and What They Look Like in Production</h2>
+        <p>The characteristic failure of a multi-account architecture is not an outage but a slow accumulation of exceptions that erode the boundaries the architecture was built to provide. It starts with a legitimate need — a team needs cross-account access to a shared resource — and it is solved with a trust relationship that is broader than the need required. Over time, the number of cross-account trusts grows, each one slightly wider than necessary, and the account boundaries that were supposed to contain a compromise become porous. The symptom is not visible in any single metric; it shows up in an access review as a list of roles that nobody can confidently say are still needed, and in an incident as a compromise that spreads further than the architecture diagram suggested it would.</p>
+        <p>The second failure mode is the orphaned account. An account is created for a project, the project ends, and the account is left running with its resources, its IAM users, and its trust relationships intact. Because it is no longer anyone's active responsibility, it does not receive the policy updates that the rest of the organization receives, and it becomes the weakest link. The diagnostic signal is an account that appears in the organization's account list but not in any team's ownership records, and the mitigation is a periodic review that either assigns an owner or closes the account. The exam frames this as a governance question rather than a technical one, and the correct answer usually involves tagging accounts with ownership metadata and reviewing untagged accounts.</p>
+        <p>The third failure mode is the policy that was correct when it was written and is wrong now. A region-restriction policy written when the organization operated in two regions becomes a blocker when a new region is approved, and the failure surfaces as an AccessDenied in a service that has nothing obviously to do with regions. The diagnostic move is to check the SCP chain before checking IAM, because the error message does not distinguish between the two layers. The mitigation is to treat organization-level policy changes as change-controlled events with a documented review cadence, so that policies are revisited when the organization's requirements change rather than when they cause an incident.</p>
+        <p>The fourth failure mode is the one that is hardest to detect because it looks like success: an organization that has grown to hundreds of accounts with no coherent OU structure. Every account is directly under the root, every policy is attached at the root, and the effective permission set is the same for every account in the organization. This is not a security failure in the sense of a breach, but it is a governance failure in the sense that the organization has all the cost of many accounts and none of the isolation benefit. The diagnostic signal is that a policy change intended for one category of accounts affects all of them, and the mitigation is to restructure the tree around the boundaries that actually matter.</p>
+      </section>
+
+      <section class="doc-section" id="sre-angle">
+        <h2 class="section-heading">7. The Operational and SRE Angle</h2>
+        <p>From an SRE perspective, the multi-account structure is a blast-radius control, and the way to evaluate it is to ask what a single compromised credential can reach. In a well-structured organization, the answer is one account's resources plus whatever that account has been explicitly trusted with. In a poorly structured one, the answer is everything, because the trust relationships form a connected graph. The operational practice that keeps this honest is a periodic review of cross-account trust relationships, treated as a first-class inventory rather than as an incidental configuration detail. The review asks, for each trust, whether the granting account still needs it and whether the scope is still the minimum required.</p>
+        <p>Monitoring for multi-account problems is mostly about watching the organization's own control plane rather than watching workloads. The events worth alarming on are the ones that change the structure: CreateAccount, InviteAccountToOrganization, LeaveOrganization, AttachPolicy, DetachPolicy, and the account-level changes that move an account between OUs. These are low-frequency, high-consequence events, and a notification on each one gives the platform team a chance to catch a mistake before it becomes an incident. CloudTrail records them in the management account, and the practical pattern is a CloudWatch alarm or an EventBridge rule that routes them to a review channel.</p>
+        <p>The SLO implication of multi-account structure is indirect but real. Because service quotas are per-account, a workload that shares an account with a noisy neighbor can be throttled by that neighbor's activity, which shows up as latency or error-rate SLO breaches that have nothing to do with the workload's own code. Separating the noisy neighbor into its own account is a resilience measure as much as a governance one, and the exam does test this framing. The runbook shape that follows is: on an unexplained throttling incident, check whether the account is shared with other workloads before assuming the workload itself is at fault.</p>
+        <p>The other operational consideration is the cost of the structure itself. Every account has a baseline cost — the resources that exist in every account regardless of workload, such as the default VPC, the CloudTrail trail, and the Config recorder — and an organization with hundreds of accounts pays that baseline hundreds of times. This is rarely the dominant cost, but it is a real one, and it is the reason the guidance is to split accounts by hard boundaries rather than by every conceivable dimension. The exam occasionally frames a cost-optimization scenario around account consolidation, and the correct answer usually preserves the security and environment boundaries while consolidating accounts that were split for no structural reason.</p>
+      </section>
+
+      <section class="doc-section" id="gotchas">
+        <h2 class="section-heading">8. Edge Cases and Exam Gotchas</h2>
+        <p>The gotchas cluster around the same theme: the management account is special, and the boundaries are structural rather than policy-based. The first and most heavily tested gotcha is that the management account is exempt from Service Control Policies. Any scenario that asks you to constrain the management account with an SCP is testing whether you know it cannot be done, and the correct answer is to move the workload out of the management account rather than to try to constrain it. The second is that the management account cannot be changed after the organization is created, so a scenario that asks you to designate a different account as the payer is testing whether you know that is not a supported operation.</p>
+        <p>The third gotcha is the distinction between Organizations and the services that build on it. Organizations provides the hierarchy and the policy attachment mechanism; it does not provide identity management, account provisioning automation, or compliance detection. A scenario that asks for centralized SSO and offers Organizations as an option is testing whether you reach for IAM Identity Center instead. A scenario that asks for automated account provisioning and offers Organizations is testing whether you reach for Control Tower or AFT. The pattern is that Organizations is the prerequisite, not the solution.</p>
+        <p>The fourth gotcha is the direction of the trust relationship in cross-account access. When account A needs to access a resource in account B, the trust is established by account B granting access to a principal in account A, and the principal in account A must also have permission to assume the role or call the API. Both sides need a policy, and a scenario that describes access failing despite one side being configured correctly is testing whether you know both are required. The fifth is that consolidated billing does not imply consolidated permissions: joining an organization does not grant any account access to any other account's resources, and a scenario that assumes otherwise is testing whether you conflate the billing relationship with the trust relationship.</p>
+        <p>The sixth gotcha is the account creation rate limit, which shows up in scenarios about bulk provisioning. The seventh is that an account can belong to exactly one organization, which matters in merger scenarios. The eighth is that removing an account from an organization requires the management account to act, so a scenario that describes a member account trying to leave is testing whether you know it cannot. The ninth, and the one most often missed, is that the OU structure is not a security boundary in itself — it is a policy attachment point. Two accounts in different OUs with the same policies attached have the same effective permissions, and a scenario that assumes OU membership alone provides isolation is testing whether you understand that the isolation comes from the policies, not the tree.</p>
+      </section>
+
+      <section class="doc-section" id="vs-comparison">
+        <h2 class="section-heading">9. Organizations vs. the Services It Gets Confused With</h2>
+        <p>Organizations sits in a family of governance services that all look like "a way to manage many accounts," and the exam deliberately mixes them. The closest relative is AWS Control Tower, which is not a separate mechanism but a managed wrapper that provisions an Organizations structure and attaches a curated set of SCPs and Config rules to it. The distinction is that Organizations gives you the raw hierarchy and you decide what to attach, while Control Tower gives you an opinionated landing zone with guardrails already in place. A scenario that asks for a landing zone with minimal design effort is pointing at Control Tower; a scenario that asks for a custom hierarchy with specific policies is pointing at Organizations directly.</p>
+        <p>The second relative is IAM Identity Center, which provides centralized human access across the accounts in an organization. It depends on Organizations — it can only provision roles into accounts that are members — but it is a distinct service with its own configuration. The third is AWS RAM, which shares specific resources across accounts without merging their networks or their permissions. The fourth is AWS Config, which detects and reports on resource configuration but does not prevent anything. The fifth is the SCP itself, which is a policy type that Organizations supports rather than a separate service.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Service</th><th>What it provides</th><th>Depends on Organizations?</th><th>Pick it when…</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>AWS Organizations</td><td>Account hierarchy, consolidated billing, policy attachment</td><td>—</td><td>You need the structural foundation and will author your own policies</td></tr>
+              <tr><td>Control Tower</td><td>Opinionated landing zone with managed guardrails</td><td>Yes</td><td>You want a landing zone provisioned and maintained for you</td></tr>
+              <tr><td>IAM Identity Center</td><td>Centralized SSO and permission sets across accounts</td><td>Yes</td><td>Humans need federated access to many accounts</td></tr>
+              <tr><td>AWS RAM</td><td>Resource-level sharing across accounts</td><td>No (works within an org)</td><td>A specific resource must be consumed by other accounts</td></tr>
+              <tr><td>AWS Config</td><td>Configuration recording and compliance detection</td><td>No</td><td>You need to detect drift, not prevent it</td></tr>
+              <tr><td>Service Control Policy</td><td>Permission ceiling attached to root/OU/account</td><td>Yes</td><td>You need a boundary account admins cannot override</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The pick-X-when rules that fall out of this table are the ones to carry into the exam. Pick Organizations when the requirement is the structural foundation: the hierarchy, the billing relationship, and the place where policies attach. Pick Control Tower when the requirement is a landing zone that is provisioned and maintained rather than hand-built. Pick IAM Identity Center when the requirement is human access across accounts. Pick RAM when the requirement is to share a specific resource without merging networks. Pick Config when the requirement is detection. Pick an SCP when the requirement is prevention. The exam frequently offers several of these for a scenario that only one satisfies, and the discriminator is usually whether the requirement is about structure, identity, resource sharing, detection, or prevention.</p>
+      </section>
+
+      <section class="doc-section" id="lab">
+        <h2 class="section-heading">Hands-on Lab: Designing and Building an OU Hierarchy</h2>
+        <div class="card card-green">
+          <p>The goal of this lab is to design an OU hierarchy that isolates Dev, Staging, and Production under a Workloads OU, with a separate Security OU for log-archive and audit accounts, and then to build enough of it to verify that inheritance behaves as expected. Work in a non-production organization or a dedicated sandbox; do not restructure a live organization on your first attempt. Budget roughly 45 minutes.</p>
+          <p><strong>Step 1 — Draw the tree before you build it.</strong> On paper or in a diagramming tool, sketch the hierarchy you intend to create. Start with the root, then add four top-level OUs: Security, Infrastructure, Workloads, and Sandbox. Under Workloads, add three sub-OUs: Prod, Staging, and Dev. Under Security, add two sub-OUs: LogArchive and Audit. The point of drawing first is to force the question of what policy attaches at each level; if you cannot name a policy for a level, note that and consider whether the level is earning its complexity.</p>
+          <p><strong>Step 2 — Create the top-level OUs.</strong> In the management account, open AWS Organizations and create the four top-level OUs. Confirm that the root still has the default FullAWSAccess SCP attached and that each new OU inherits it. Note the OU IDs that Organizations assigns; you will need them if you later automate policy attachment.</p>
+          <p><strong>Step 3 — Create the nested OUs.</strong> Create the Prod, Staging, and Dev OUs beneath Workloads, and the LogArchive and Audit OUs beneath Security. Observe that nesting is allowed to an arbitrary depth and that the console shows the full path for each OU. This is the structure that will determine policy inheritance, so verify the parent-child relationships are what you drew in Step 1.</p>
+          <p><strong>Step 4 — Create or move accounts into the tree.</strong> If you have existing sandbox accounts, move them into the appropriate OUs. If not, create two new accounts through Organizations and place one in Workloads/Dev and one in Security/LogArchive. Note that account creation is a rate-limited operation and that a new account takes a few minutes to become fully usable.</p>
+          <p><strong>Step 5 — Verify inheritance with a test policy.</strong> Create a simple SCP that denies a harmless action — for example, denying ec2:DescribeInstances — and attach it to the Workloads OU. From the account in Workloads/Dev, attempt the action and confirm it is denied. Then attach the same policy to the Security OU and confirm that the account in Security/LogArchive is also denied. This demonstrates that a policy attached at an OU applies to every account beneath it, including accounts in nested OUs.</p>
+          <p><strong>Step 6 — Test the management account exemption.</strong> From the management account, attempt the same action that the SCP denies. It should succeed, because SCPs do not apply to the management account. This is the single most important behavior to have observed directly, because it is the mechanical reason the management account must stay workload-free.</p>
+          <p><strong>Step 7 — Document the structure.</strong> Record the final tree, the OU IDs, and the policies attached at each level in your organization's governance documentation. Note which levels have no policy attached and why, so that a future reviewer can tell the difference between a deliberate omission and an oversight. Finally, detach the test SCP and confirm the previously denied action now succeeds, which is the rollback move you would use in an incident.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="quiz">
+        <h2 class="section-heading">Scenario Question Drills</h2>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q1.</strong> A company wants a dedicated account that only aggregates CloudTrail logs from every other account and cannot be modified by workload teams. Where should this account live?</p>
+          <div class="scenario-options" id="opts-d1q1">
             <div class="scenario-option">A. Directly under the root, alongside Production</div>
             <div class="scenario-option">B. In a dedicated Security OU with a restrictive SCP</div>
             <div class="scenario-option">C. Inside the Workloads/Prod OU for proximity to the data it audits</div>
             <div class="scenario-option">D. In the management account itself</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d1q1', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d1q1"><strong>Correct answer: B.</strong> Log-archive and audit accounts belong in a dedicated Security OU protected by SCPs that deny deletion or modification of logging resources, isolated from workload OUs.</div>
         </div>
-        <button class="scenario-reveal-btn" onclick="revealAnswer('d1q0', 1)">Reveal Answer</button>
-        <div class="scenario-explanation" id="exp-d1q0"><strong>Correct answer: B.</strong> Log-archive/audit accounts belong in a dedicated Security OU protected by SCPs that deny deletion or modification of logging resources, isolated from workload OUs.</div>
-      </div>
 
-      <div class="scenario-card">
-        <p class="scenario-question"><strong>Q2.</strong> Why should the AWS Organizations management account never run workloads?</p>
-        <div class="scenario-options" id="opts-d1q1">
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q2.</strong> Why should the AWS Organizations management account never run workloads?</p>
+          <div class="scenario-options" id="opts-d1q2">
             <div class="scenario-option">A. It has a lower service quota by default</div>
             <div class="scenario-option">B. SCPs cannot be applied to it, so it should be kept empty to reduce blast radius and support least privilege</div>
             <div class="scenario-option">C. It is billed at a premium rate</div>
             <div class="scenario-option">D. It cannot host EC2 instances</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d1q2', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d1q2"><strong>Correct answer: B.</strong> The management account is immune to SCPs, so best practice keeps it workload-free to minimize risk — it should only handle billing, Organizations, and org-wide services like IAM Identity Center.</div>
         </div>
-        <button class="scenario-reveal-btn" onclick="revealAnswer('d1q1', 1)">Reveal Answer</button>
-        <div class="scenario-explanation" id="exp-d1q1"><strong>Correct answer: B.</strong> The management account is immune to SCPs, so best practice keeps it workload-free to minimize risk — it should only handle billing, Organizations, and org-wide services like IAM Identity Center.</div>
-      </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q3.</strong> A company has Dev, Staging, and Prod workloads in a single AWS account, separated by VPCs and resource name prefixes. A developer with deploy permissions in Dev accidentally modifies a production resource. What structural change prevents this class of error?</p>
+          <div class="scenario-options" id="opts-d1q3">
+            <div class="scenario-option">A. Add more restrictive IAM policies to the developer's role</div>
+            <div class="scenario-option">B. Separate Dev, Staging, and Prod into distinct accounts under a Workloads OU, so the developer has a role in Dev and none in Prod</div>
+            <div class="scenario-option">C. Move production resources into a separate VPC with stricter security groups</div>
+            <div class="scenario-option">D. Enable MFA on the developer's account</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d1q3', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d1q3"><strong>Correct answer: B.</strong> The boundary that matters here is permission isolation, not network isolation. Separate accounts make the developer's lack of Prod access structural rather than policy-dependent.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q4.</strong> An organization has grown to 200 accounts, all placed directly under the root, with all policies attached at the root. What is the primary governance problem with this structure?</p>
+          <div class="scenario-options" id="opts-d1q4">
+            <div class="scenario-option">A. The organization has exceeded the account quota</div>
+            <div class="scenario-option">B. Every policy applies to every account, so the organization has the cost of many accounts and none of the isolation benefit</div>
+            <div class="scenario-option">C. Consolidated billing no longer works</div>
+            <div class="scenario-option">D. Accounts cannot be moved once created</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d1q4', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d1q4"><strong>Correct answer: B.</strong> A flat tree with root-level policies gives every account the same effective permission set. The OU structure exists to make policy attachment precise; without it, the accounts are separated but not governed differently.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q5.</strong> A company acquires another company that has its own AWS organization. The requirement is unified governance and a single bill. What is the correct approach?</p>
+          <div class="scenario-options" id="opts-d1q5">
+            <div class="scenario-option">A. Leave both organizations in place and manage them separately</div>
+            <div class="scenario-option">B. Invite the acquired company's accounts into the existing organization, accepting that each account can belong to only one organization</div>
+            <div class="scenario-option">C. Merge the two management accounts into one</div>
+            <div class="scenario-option">D. Create a third organization and move both into it</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d1q5', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d1q5"><strong>Correct answer: B.</strong> An account can belong to exactly one organization, so unified governance means inviting the acquired accounts into the existing organization. Management accounts cannot be merged.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q6.</strong> A platform team needs to provision 50 new accounts for a new business unit in a single day. The provisioning script fails partway through. What is the most likely cause?</p>
+          <div class="scenario-options" id="opts-d1q6">
+            <div class="scenario-option">A. The organization has hit its total account quota</div>
+            <div class="scenario-option">B. The account creation rate limit has been exceeded</div>
+            <div class="scenario-option">C. The management account is out of capacity</div>
+            <div class="scenario-option">D. Consolidated billing has been disabled</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d1q6', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d1q6"><strong>Correct answer: B.</strong> Account creation is rate-limited per day. Bulk provisioning must be paced, and a mid-run failure is typically the rate limit rather than the total account quota.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q7.</strong> A security team wants to guarantee that a compromised workload account cannot tamper with the CloudTrail logs that record its activity. Which structural decision supports this?</p>
+          <div class="scenario-options" id="opts-d1q7">
+            <div class="scenario-option">A. Enable CloudTrail in every account with a local S3 bucket</div>
+            <div class="scenario-option">B. Aggregate logs into a dedicated log-archive account in a Security OU that workload accounts do not trust and cannot modify</div>
+            <div class="scenario-option">C. Encrypt the logs with a KMS key in the workload account</div>
+            <div class="scenario-option">D. Enable MFA delete on the workload account's bucket</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d1q7', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d1q7"><strong>Correct answer: B.</strong> The isolation that matters is the account boundary. A log-archive account in a Security OU, with no trust relationship granting workload accounts write or delete access, is what makes the logs tamper-resistant.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q8.</strong> Which statement about consolidated billing is correct?</p>
+          <div class="scenario-options" id="opts-d1q8">
+            <div class="scenario-option">A. It grants member accounts access to each other's resources</div>
+            <div class="scenario-option">B. It rolls member account charges onto the management account's bill and applies volume discounts across the organization, without granting any cross-account permissions</div>
+            <div class="scenario-option">C. It requires all accounts to use the same payment method</div>
+            <div class="scenario-option">D. It is optional and can be disabled per account</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d1q8', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d1q8"><strong>Correct answer: B.</strong> Consolidated billing is a financial relationship, not a permission relationship. Joining an organization does not grant any account access to another account's resources.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q9.</strong> A company wants to organize its OU tree. Which organizing principle produces the most maintainable policy attachment?</p>
+          <div class="scenario-options" id="opts-d1q9">
+            <div class="scenario-option">A. By department name, mirroring the org chart</div>
+            <div class="scenario-option">B. By function — Security, Infrastructure, Workloads, Sandbox — with environment sub-OUs under Workloads</div>
+            <div class="scenario-option">C. Alphabetically by account name</div>
+            <div class="scenario-option">D. By the date each account was created</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d1q9', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d1q9"><strong>Correct answer: B.</strong> Policies apply to categories of accounts — production, non-production, security, sandbox — not to departments. Organizing by function means a new policy attaches once at the right level.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q10.</strong> An account was created for a project that has since ended. It still has IAM users, resources, and cross-account trust relationships, and it has not received recent policy updates. What is this failure mode called, and what is the mitigation?</p>
+          <div class="scenario-options" id="opts-d1q10">
+            <div class="scenario-option">A. Account sprawl; the mitigation is to delete the organization</div>
+            <div class="scenario-option">B. An orphaned account; the mitigation is a periodic review that assigns an owner or closes the account</div>
+            <div class="scenario-option">C. A quota breach; the mitigation is to raise the account limit</div>
+            <div class="scenario-option">D. A billing anomaly; the mitigation is to enable Cost Explorer</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d1q10', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d1q10"><strong>Correct answer: B.</strong> Orphaned accounts are the weakest link because they fall outside the review cadence. Tagging accounts with ownership metadata and reviewing untagged accounts is the standard mitigation.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q11.</strong> Two accounts sit in different OUs but have identical policies attached at every level of their respective paths. Are their effective permissions different?</p>
+          <div class="scenario-options" id="opts-d1q11">
+            <div class="scenario-option">A. Yes, because OU membership itself is a security boundary</div>
+            <div class="scenario-option">B. No — the OU structure is a policy attachment point, not a boundary in itself; identical policies produce identical effective permissions</div>
+            <div class="scenario-option">C. Yes, because nested OUs always add restrictions</div>
+            <div class="scenario-option">D. Only if the accounts are in different regions</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d1q11', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d1q11"><strong>Correct answer: B.</strong> Isolation comes from the policies attached along the path, not from the tree shape. Two accounts with the same effective policy set have the same effective permissions regardless of where they sit.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q12.</strong> A company needs centralized single sign-on for engineers across 40 accounts, with each engineer's access determined by their corporate identity provider group. Which service provides this?</p>
+          <div class="scenario-options" id="opts-d1q12">
+            <div class="scenario-option">A. AWS Organizations</div>
+            <div class="scenario-option">B. IAM Identity Center</div>
+            <div class="scenario-option">C. AWS Resource Access Manager</div>
+            <div class="scenario-option">D. AWS Config</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d1q12', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d1q12"><strong>Correct answer: B.</strong> Organizations is the prerequisite that makes cross-account provisioning possible, but IAM Identity Center is the service that provides federated human access and permission sets.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q13.</strong> A workload in a shared account is being throttled on API calls because another workload in the same account is making a high volume of requests. What structural change addresses this?</p>
+          <div class="scenario-options" id="opts-d1q13">
+            <div class="scenario-option">A. Request a quota increase for the shared account</div>
+            <div class="scenario-option">B. Move the noisy workload into its own account so the two workloads have independent service quotas</div>
+            <div class="scenario-option">C. Add a retry with exponential backoff to the throttled workload</div>
+            <div class="scenario-option">D. Enable CloudTrail on both workloads</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d1q13', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d1q13"><strong>Correct answer: B.</strong> Service quotas are per-account, so separating the noisy neighbor into its own account is a resilience measure as much as a governance one. Retries help but do not remove the shared-quota contention.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q14.</strong> A member account's administrator wants to leave the organization. What happens?</p>
+          <div class="scenario-options" id="opts-d1q14">
+            <div class="scenario-option">A. The account can leave unilaterally at any time</div>
+            <div class="scenario-option">B. The management account must remove the account; a member account cannot unilaterally depart</div>
+            <div class="scenario-option">C. The account leaves automatically after 90 days of inactivity</div>
+            <div class="scenario-option">D. Leaving requires deleting all resources first</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d1q14', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d1q14"><strong>Correct answer: B.</strong> The asymmetry is deliberate: the management account holds the power to add and remove accounts, and member accounts cannot unilaterally depart.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q15.</strong> A company wants a landing zone with a curated set of guardrails already in place, provisioned and maintained by AWS, rather than hand-building the OU structure and writing every policy. Which service fits?</p>
+          <div class="scenario-options" id="opts-d1q15">
+            <div class="scenario-option">A. AWS Organizations alone</div>
+            <div class="scenario-option">B. AWS Control Tower</div>
+            <div class="scenario-option">C. AWS Config</div>
+            <div class="scenario-option">D. AWS Trusted Advisor</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d1q15', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d1q15"><strong>Correct answer: B.</strong> Control Tower provisions an Organizations structure and attaches a curated set of SCPs and Config rules. Organizations alone gives you the raw hierarchy and leaves the policy authoring to you.</div>
+        </div>
       </section>
+
+      <section class="doc-section" id="preview">
+        <h2 class="section-heading">Peek into Tomorrow</h2>
+        <div class="card card-purple">
+          <p>Everything in this lesson assumed that the OU hierarchy is where governance happens, but the hierarchy by itself constrains nothing. An account sitting in a Workloads/Prod OU with no policy attached to that OU has exactly the permissions its own IAM configuration grants it, and the account's administrators can rewrite that configuration at will. The structure is a place to attach policy; it is not policy. That leaves the central question of this phase unresolved: what actually stops an account administrator from doing something the organization has decided they should not be able to do?</p>
+          <p>The answer is a policy type that attaches to the tree and caps what every account beneath it can do, and the mechanics of that cap are subtler than they first appear. It is not a grant — an account with a permissive policy attached still needs its own IAM allow to do anything. It is a ceiling, and the default ceiling permits everything until someone attaches an explicit Deny. The interesting questions are about what happens when the ceiling and the account's own policies disagree, and about the class of operations that do not behave the way a naive region restriction would predict.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="sources">
+        <h2 class="section-heading">Sources</h2>
+        <div class="card">
+          <ul class="source-list">
+            <li><a href="https://docs.aws.amazon.com/organizations/latest/userguide/orgs_introduction.html" target="_blank" rel="noopener">AWS Organizations User Guide — What is AWS Organizations?</a></li>
+            <li><a href="https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_ous.html" target="_blank" rel="noopener">AWS Organizations User Guide — Managing organizational units</a></li>
+            <li><a href="https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_accounts.html" target="_blank" rel="noopener">AWS Organizations User Guide — Managing accounts in an organization</a></li>
+            <li><a href="https://docs.aws.amazon.com/organizations/latest/userguide/orgs_reference_limits.html" target="_blank" rel="noopener">AWS Organizations User Guide — Quotas for AWS Organizations</a></li>
+            <li><a href="https://docs.aws.amazon.com/awsaccountbilling/latest/aboutv2/consolidated-billing.html" target="_blank" rel="noopener">AWS Billing User Guide — Consolidated billing for AWS Organizations</a></li>
+            <li><a href="https://docs.aws.amazon.com/whitepapers/latest/organizing-your-aws-environment/organizing-your-aws-environment.html" target="_blank" rel="noopener">AWS Whitepaper — Organizing Your AWS Environment Using Multiple Accounts</a></li>
+            <li><a href="https://docs.aws.amazon.com/wellarchitected/latest/security-pillar/security.html" target="_blank" rel="noopener">AWS Well-Architected Framework — Security Pillar</a></li>
+            <li><a href="https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_evaluation-logic.html" target="_blank" rel="noopener">IAM User Guide — Policy evaluation logic</a></li>
+            <li><a href="https://docs.aws.amazon.com/controltower/latest/userguide/what-is-control-tower.html" target="_blank" rel="noopener">AWS Control Tower User Guide — What is AWS Control Tower?</a></li>
+          </ul>
+        </div>
+      </section>
+
       <div class="day-nav">
         <span></span>
         <button class="btn btn-green" onclick="markComplete(1, 'day-002.html')">Mark Day 1 Complete &rarr;</button>

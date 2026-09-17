@@ -104,36 +104,356 @@
         <span class="pill pill-green">Phase 3: SRE Observability, Resilience &amp; DR</span>
       </div>
       <h1 class="hero-title">CloudWatch Synthetics &amp; Canaries for SLO Monitoring</h1>
-      <div class="reading-meta">&#128337; ~3 min read &middot; 2 services covered</div>
+      <div class="reading-meta">&#128337; ~58 min read &middot; 2 services covered</div>
       <div class="services-grid">
         <span class="service-tag">CloudWatch Synthetics</span>
         <span class="service-tag">Canaries</span>
       </div>
       <div id="tracker"></div>
-      <section class="doc-section">
-        <h2 class="section-heading">Today's Concept</h2>
+
+      <section class="doc-section" id="recap">
+        <h2 class="section-heading">Recap: From Alarm Logic to User-Visible Truth</h2>
         <div class="card card-accent">
-          <p>Synthetics canaries are scripted (Puppeteer/Selenium-based) probes that continuously exercise your endpoints/user flows from outside your infrastructure, catching availability and latency SLO breaches before real users report them — complementary to internal metrics.</p>
-        </div>
-        <h3 class="sub-heading">Hands-on Lab / Practical Action (45 min)</h3>
-        <div class="card">
-          <p>Create a canary that logs into the application and completes a checkout flow every 5 minutes, alarming on failure or latency SLO breach.</p>
+          <p>Day 29 established that a CloudWatch alarm is only as good as the metric feeding it, and that composite alarms exist because single-metric thresholds generate noise. The AND/OR logic of a composite alarm — page only when high latency AND high error rate are both true — is a real advance over paging on either signal alone, and anomaly detection bands let you alarm on a metric whose healthy shape you cannot express as a static number. But every one of those mechanisms shares an assumption that deserves scrutiny: the metric being evaluated is produced by something inside your infrastructure, measuring something your infrastructure can see.</p>
+          <p>Today extends that thread by attacking the assumption directly. A composite alarm built on ALB target response time and Lambda error rate can be perfectly tuned and still miss a broken login page, because the failure lives in a layer no internal metric observes — a DNS record, a CDN edge rule, a third-party identity provider, a JavaScript bundle that fails to parse in one browser. Synthetics canaries are the outside-in complement to the inside-out alarm stack: scripted probes that exercise the real user path from outside your VPC and publish their own metrics into the same CloudWatch namespace your alarms already read. The alarm machinery from Day 29 does not change; what changes is that you now have a signal that can actually see the failure.</p>
         </div>
       </section>
-      <section class="doc-section">
+
+      <section class="doc-section" id="why-on-exam">
+        <h2 class="section-heading">1. Why This Is on the Exam</h2>
+        <p>SAP-C02 scenario questions are written around a specific kind of gap: the architecture looks healthy on every dashboard the team has built, yet the business is losing money. The exam's Domain 2 (Design for New Solutions) and Domain 4 (Continuous Improvement for Existing Solutions) both probe whether you can identify what a monitoring strategy is blind to, and Synthetics is the canonical answer whenever the blind spot is the user's actual experience rather than the server's internal state. A question that describes a multi-region active-active application with comprehensive CloudWatch dashboards, X-Ray tracing, and composite alarms, and then asks what additional monitoring would detect a regional edge failure before customers call the support line, is pointing at canaries.</p>
+        <p>The reason this is a durable exam topic rather than a trivia item is that it sits at the intersection of two things the exam cares about deeply: SLO definition and blast-radius reasoning. An availability SLO expressed as "99.9% of checkout attempts succeed" cannot be measured by any metric your application emits, because your application only knows about the requests that reached it. Requests that died at the DNS resolver, at the CDN, or in the client's browser never appear in your logs at all. Synthetics closes that measurement gap by generating known-good traffic on a schedule and asserting on the result, which turns an unmeasurable SLO into an observable one. Expect questions that give you an SLO target and ask which monitoring approach can actually attest to it.</p>
+        <p>There is also a cost-and-complexity dimension the exam likes to test. Canaries are not free, they are not instantaneous, and they cannot cover every path. A scenario that asks you to monitor a 40-step internal admin workflow with a canary is testing whether you understand that canaries are best reserved for high-value, stable, externally reachable user journeys. The exam will offer you a canary as a distractor for problems that are better solved with distributed tracing, log-based metrics, or synthetic load testing, and it will offer you those alternatives as distractors for problems that only a canary can solve. Knowing the boundary is the point.</p>
+      </section>
+
+      <section class="doc-section" id="mechanism">
+        <h2 class="section-heading">2. How a Canary Actually Runs</h2>
+        <p>A canary is not a ping. It is a small Node.js or Python script that CloudWatch Synthetics executes on a schedule inside an AWS-managed, serverless execution environment. The script receives a Synthetics runtime library that wraps Puppeteer (for browser-based canaries) or raw HTTP clients (for API canaries), and it is expected to do three things: drive the target, assert on what it observes, and emit structured results. The runtime handles the rest — launching the headless browser, capturing screenshots and HAR files on failure, uploading artifacts to S3, and publishing metrics into the CloudWatch namespace <code>CloudWatchSynthetics</code>.</p>
+        <p>The execution model matters for reasoning about cost and reliability. Each canary run is an isolated invocation with its own ephemeral environment; there is no persistent browser session between runs, which means every run pays the cold-start cost of launching Chromium. That cost is why the minimum useful interval is generally measured in minutes rather than seconds, and why a canary that takes 45 seconds to execute at a 1-minute frequency is effectively running continuously. The runtime also enforces a timeout, and a canary that exceeds it is recorded as a failure with a distinct status code rather than a generic error — a distinction that matters when you are writing alarms, because a timeout usually means the target is slow rather than down.</p>
+        <p>Results flow out on two channels. The first is metrics: every run publishes <code>SuccessPercent</code>, <code>Duration</code>, <code>Failed</code>, and <code>2xx</code>/<code>4xx</code>/<code>5xx</code> counts, plus any custom metrics your script emits via the Synthetics library. The second is artifacts: screenshots, logs, and HAR files written to the S3 bucket you nominate when you create the canary. The metrics are what your alarms consume; the artifacts are what a human consumes at 3 a.m. when the alarm fires and they need to know whether the page rendered a login form or a CloudFront error page. Designing a canary without thinking about the artifact side is a common mistake — the metric tells you something broke, the screenshot tells you what.</p>
+        <p>Finally, canaries can run either on a schedule or on demand, and they can be triggered by other systems. The scheduled mode is the default and the one exam scenarios describe. On-demand invocation is useful for validating a deployment immediately after it completes, and for the "smoke test" step in a pipeline. Both modes publish to the same metrics, which means an alarm cannot distinguish a scheduled failure from a pipeline-triggered one unless you tag the runs — worth knowing when you are designing a deployment gate that should not page the on-call engineer.</p>
+      </section>
+
+      <section class="doc-section" id="decision-boundary">
+        <h2 class="section-heading">3. The Core Decision Boundary: What Deserves a Canary</h2>
+        <p>The single fork every Synthetics scenario question hinges on is whether the thing you need to monitor is observable from inside your infrastructure. If it is, a canary is redundant and expensive. If it is not, a canary is the only tool that can see it. The practical test is to ask where the failure would occur: if the failure would occur in code you deploy and instrument, internal metrics and traces will catch it; if the failure would occur in the path between the user and your code — DNS, CDN, load balancer configuration, TLS certificates, third-party dependencies, client-side rendering — only an outside-in probe will catch it.</p>
+        <p>This boundary has a second dimension that is easy to miss: stability. A canary is a scripted assertion, which means it encodes an expectation about what the target should look like. If the target's UI changes weekly, the canary becomes a maintenance burden that fails for reasons unrelated to availability, and the team learns to ignore its alarms. The exam will sometimes present a fast-moving internal tool as a canary candidate and expect you to recognize that the maintenance cost outweighs the benefit. Canaries earn their keep on stable, high-value, externally reachable journeys: login, search, checkout, the primary API endpoint a partner integrates against.</p>
+        <p>The table below is the decision boundary in its most compressed form. Read it as a set of rules for eliminating distractors rather than as a taxonomy to memorize.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Signal you need</th><th>Best tool</th><th>Why not a canary</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Is the service process alive and responding to health checks?</td><td>Route 53 health checks, ALB target health</td><td>Canary adds cost and latency for a question already answered</td></tr>
+              <tr><td>Which internal service is slow on a specific request?</td><td>X-Ray distributed tracing</td><td>Canary sees the total duration, not the per-hop breakdown</td></tr>
+              <tr><td>Is the login page reachable and functional for a real user?</td><td>Synthetics canary</td><td>No internal metric observes the client-side path</td></tr>
+              <tr><td>Are error rates elevated in application logs?</td><td>CloudWatch Logs metric filters</td><td>Canary samples one path; logs cover all traffic</td></tr>
+              <tr><td>Will the system hold up under 10x load?</td><td>Load testing (Distributed Load Testing on AWS)</td><td>Canary is a single synthetic user, not a load generator</td></tr>
+              <tr><td>Is a third-party payment provider degraded?</td><td>Synthetics canary against the integration path</td><td>Provider's own status page is not an alarm source</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="doc-section" id="config-tradeoffs">
+        <h2 class="section-heading">4. Configuration Modes and Their Tradeoffs</h2>
+        <p>Once you have decided a canary is warranted, the configuration knobs determine what it costs and how quickly it detects a problem. The first and most consequential is the blueprint. Synthetics ships pre-built blueprints for the common cases — Heartbeat Monitoring (a simple URL fetch and status assertion), API Canary (a scripted HTTP request sequence with response validation), Broken Link Checker (crawls a page and verifies every link), Visual Monitoring (compares a screenshot against a baseline and flags pixel differences), and GUI Workflow Builder (records a browser session and replays it). Choosing a blueprint is choosing how much of the assertion logic you write yourself. Heartbeat is nearly free to configure and catches availability failures; GUI Workflow catches functional regressions but requires you to maintain a recorded script that breaks whenever the UI changes.</p>
+        <p>The second knob is frequency, and it is where the cost conversation actually happens. A canary running every minute costs roughly sixty times what the same canary running every hour costs, and the detection latency for a failure is bounded below by the frequency. The right frequency is a function of your SLO: if your availability SLO is 99.9% measured monthly, a failure that lasts five minutes consumes about 0.7% of your monthly error budget, so a one-minute canary that detects it in under two minutes is proportionate. A five-minute canary on the same SLO would let a single incident consume several percent of the budget before anyone noticed. The exam rarely asks you to compute this, but it does ask you to reason about detection latency versus cost.</p>
+        <p>The third knob is the runtime version and the script itself. Synthetics runtimes are versioned (for example <code>syn-nodejs-puppeteer-7.0</code> and later), and AWS deprecates older runtimes on a published schedule. A canary pinned to a deprecated runtime will eventually stop running, which is a silent monitoring failure — the worst kind, because the absence of alarms looks like health. The fourth knob is the S3 artifact location and retention, which determines how much forensic evidence you have after an incident and how much you pay for storing screenshots. The fifth is the VPC configuration: a canary can run inside a VPC to reach private endpoints, but doing so requires the canary's execution role to have ENI permissions and the subnets to have a route to the target, and it removes the canary's ability to test the public path. Most user-facing canaries should run outside the VPC precisely because the public path is what you are trying to verify.</p>
+      </section>
+
+      <section class="doc-section" id="sizing-limits">
+        <h2 class="section-heading">5. Sizing, Limits and Quotas</h2>
+        <p>The numbers that matter for Synthetics fall into three groups: execution limits, cost drivers, and integration limits. On execution, each canary run has a configurable timeout with a default of 30 seconds and a maximum of 15 minutes, and the runtime itself imposes a hard ceiling on how long a single run can occupy its environment. A canary whose script routinely approaches the timeout is a canary that will produce false failures under load, so the practical guidance is to keep the scripted path short and assert early rather than driving a long workflow.</p>
+        <p>On cost, the two drivers are the number of runs and the duration of each run. Synthetics pricing is per canary run, with a separate charge for the browser-based runs that use more memory. This is why the frequency decision from the previous section is the dominant cost lever: doubling the frequency doubles the bill, and a canary that takes 90 seconds to execute costs more per run than one that takes 15 seconds. The S3 artifacts add a smaller, usually negligible storage cost, but a canary that captures a full HAR file on every run rather than only on failure can accumulate meaningful storage over months.</p>
+        <p>On integration, the limits that bite in practice are the CloudWatch metrics retention (standard resolution metrics are retained for 15 months, but the canary's own success metrics are published at one-minute resolution and are best alarmed on with a short evaluation period) and the alarm evaluation window. A canary running every five minutes publishes a data point every five minutes; an alarm with a one-minute period and a single evaluation will see missing data for four out of five minutes and may enter <code>INSUFFICIENT_DATA</code>. The correct pattern is to set the alarm period to match the canary frequency and to treat missing data as breaching, because a canary that stops running is itself an incident. The table below collects the numbers worth remembering.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Parameter</th><th>Typical value / limit</th><th>Practical implication</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Default run timeout</td><td>30 seconds</td><td>Short scripts; assert early</td></tr>
+              <tr><td>Maximum run timeout</td><td>15 minutes</td><td>Long workflows are possible but costly and fragile</td></tr>
+              <tr><td>Minimum useful frequency</td><td>1 minute</td><td>Detection latency floor for availability failures</td></tr>
+              <tr><td>Metric namespace</td><td><code>CloudWatchSynthetics</code></td><td>Alarms read <code>SuccessPercent</code> and <code>Duration</code> from here</td></tr>
+              <tr><td>Artifact destination</td><td>S3 bucket you nominate</td><td>Screenshots and HAR files for post-incident forensics</td></tr>
+              <tr><td>Runtime lifecycle</td><td>Versioned, deprecated on a published schedule</td><td>Pinned old runtimes silently stop running</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="doc-section" id="failure-modes">
+        <h2 class="section-heading">6. Failure Modes and What They Look Like in Production</h2>
+        <p>The most dangerous canary failure is not a red alarm; it is a canary that has quietly stopped running. This happens when the runtime version is deprecated, when the execution role's permissions are revoked, when the S3 artifact bucket is deleted, or when the canary's schedule is disabled during a maintenance window and never re-enabled. In every case the symptom is identical: the <code>SuccessPercent</code> metric stops receiving data points, and an alarm configured with the default missing-data treatment may sit in <code>INSUFFICIENT_DATA</code> indefinitely without paging anyone. The first diagnostic move when you suspect this is to check the canary's last run timestamp in the Synthetics console, not the alarm state.</p>
+        <p>The second failure mode is the false positive caused by target drift. A GUI Workflow canary that asserts on a specific button label will fail the moment a designer renames the button, and the failure will look exactly like an availability incident. The distinguishing signal is that the canary's <code>Duration</code> metric stays normal while <code>SuccessPercent</code> drops — a real outage usually shows both degrading, because a slow or unreachable target takes longer to fail. When you see success drop with duration flat, the first thing to check is the screenshot artifact, which will show the new UI rather than an error page.</p>
+        <p>The third failure mode is the canary that is too aggressive and becomes a load source. A canary that drives a full checkout flow every minute from three regions is generating real orders and real payment authorizations, and if the target is not idempotent you have created a business problem. The mitigation is to design the canary against a dedicated test account or a sandbox path, and to make the scripted actions idempotent where possible. The fourth failure mode is credential expiry: a canary that logs in with a stored credential will start failing the day that credential rotates, and the failure will be indistinguishable from an authentication outage unless you monitor the canary's own error messages. Storing canary credentials in Secrets Manager and having the script fetch them at runtime is the pattern that avoids this.</p>
+      </section>
+
+      <section class="doc-section" id="sre-angle">
+        <h2 class="section-heading">7. The SRE Angle: Canaries as SLO Instruments</h2>
+        <p>From an SRE perspective, a canary is not primarily a monitoring tool; it is a measurement instrument for an SLO that would otherwise be unmeasurable. The distinction matters because it changes how you configure it. If you are using a canary to page an on-call engineer, you want it to be sensitive and you accept some false positives. If you are using it to compute an availability SLO, you want it to be representative of real user traffic, which means the canary's success rate should track the real user success rate closely enough that you can defend the number in a post-incident review. Those two goals pull in different directions, and mature teams often run two canaries: a fast, sensitive one for alerting and a slower, more representative one for SLO reporting.</p>
+        <p>The alarm design follows from the SLO. A canary publishing <code>SuccessPercent</code> every minute should have an alarm on <code>SuccessPercent &lt; 100</code> with a period of one minute and an evaluation of one or two datapoints, treating missing data as breaching. That alarm should feed into the composite alarm structure from Day 29 rather than paging directly, so that a single canary failure in one region does not wake someone up when the other regions are healthy. The composite pattern — canary failure AND elevated real-user error rate — is the one that distinguishes a genuine outage from a canary-specific problem, and it is the pattern the exam is most likely to describe.</p>
+        <p>The runbook shape for a canary alarm is short and specific. First, open the screenshot artifact from the failing run; it answers the question "what did the user see" faster than any log query. Second, check whether the failure is isolated to one region or global, which distinguishes a regional edge problem from an application problem. Third, check the canary's own last successful run timestamp to rule out the silent-stop failure mode. Fourth, if the screenshot shows a valid page, check whether the assertion itself is stale. That four-step sequence resolves the large majority of canary alarms, and writing it down before the first incident is what turns a canary from a noise source into a useful signal.</p>
+      </section>
+
+      <section class="doc-section" id="gotchas">
+        <h2 class="section-heading">8. Edge Cases and Exam Gotchas</h2>
+        <p>The gotchas cluster around three themes: what a canary cannot see, what it costs to run, and how it interacts with the rest of the observability stack. On the first theme, a canary cannot see the experience of a real user on a slow connection, cannot see a failure that only affects one browser, and cannot see a failure that only affects authenticated users unless you script the authentication. It also cannot see a failure that occurs between the canary's region and the user's region if the canary runs from a single region — which is why multi-region canaries are the pattern for multi-region applications. A single-region canary on a multi-region application will report success while an entire region's users are down.</p>
+        <p>On the second theme, the cost trap is frequency. A team that sets a canary to run every minute "to be safe" and then adds a second canary for each of ten critical paths has created a monitoring bill that can rival the application's compute bill. The exam will sometimes present this as a scenario where the correct answer is to reduce frequency or consolidate paths rather than to add more canaries. The related trap is artifact retention: capturing a full HAR file on every successful run rather than only on failure is a common misconfiguration that quietly accumulates storage cost.</p>
+        <p>On the third theme, the interaction gotchas are about alarm wiring. A canary alarm with a one-minute period on a five-minute canary will flap between <code>OK</code> and <code>INSUFFICIENT_DATA</code>, and if missing data is treated as not-breaching the alarm will never fire. A canary alarm that pages directly rather than through a composite will generate noise during regional degradations. A canary that runs inside a VPC cannot test the public path, so a VPC-configured canary on a public-facing application is testing the wrong thing. And a canary whose execution role lacks <code>s3:PutObject</code> on the artifact bucket will fail to publish artifacts, which means the alarm fires but the screenshot is missing — a failure mode that is invisible until you need the evidence.</p>
+      </section>
+
+      <section class="doc-section" id="vs-comparison">
+        <h2 class="section-heading">9. Synthetics vs. the Services It Gets Confused With</h2>
+        <p>Synthetics is most often confused with three things: Route 53 health checks, X-Ray tracing, and load testing. The confusion with health checks is the most common, because both are outside-in probes that run on a schedule. The difference is depth. A health check asks "does this endpoint return a healthy status code" and nothing more; it cannot log in, cannot follow a redirect chain, cannot assert on page content, and cannot measure the time to interactive. A canary can do all of those things. The exam will offer a health check as the answer to a question about detecting a broken login flow, and the correct answer is a canary, because the health check would return 200 from the load balancer while the login page renders an error.</p>
+        <p>The confusion with X-Ray is about direction. X-Ray traces a request that already reached your application, breaking it into per-hop latency and identifying which internal service is slow. A canary generates a request from outside and measures the total time to a successful assertion. They are complementary: a canary tells you the user-visible path is broken, and X-Ray tells you which internal hop is responsible. The exam will sometimes describe a scenario where the canary is failing and ask what to do next, and the correct answer is to use X-Ray to find the slow hop — not to add more canaries.</p>
+        <p>The confusion with load testing is about volume. A canary is a single synthetic user; a load test is thousands. A canary detects availability and functional regressions; a load test detects capacity limits. The exam will offer a canary as the answer to a question about validating that a system can handle a traffic spike, and the correct answer is a load testing tool. The table below is the disambiguation in its most compressed form.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Service</th><th>What it answers</th><th>Pick it when…</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Route 53 health check</td><td>Is the endpoint returning a healthy status?</td><td>You need fast, cheap failover routing</td></tr>
+              <tr><td>CloudWatch Synthetics</td><td>Can a real user complete the journey?</td><td>The failure would occur outside your infrastructure</td></tr>
+              <tr><td>AWS X-Ray</td><td>Which internal hop is slow or failing?</td><td>The request reached your app and you need the breakdown</td></tr>
+              <tr><td>Distributed Load Testing</td><td>Does the system hold under N concurrent users?</td><td>You are validating capacity, not availability</td></tr>
+              <tr><td>CloudWatch Logs metric filters</td><td>What is the error rate across all real traffic?</td><td>You need aggregate behavior, not a single path</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="doc-section" id="lab">
+        <h2 class="section-heading">Hands-on Lab: A Checkout Canary with an SLO Alarm (45 min)</h2>
+        <div class="card card-green">
+          <p>This lab builds a canary that exercises a login-and-checkout flow every five minutes, publishes its results to CloudWatch, and wires an alarm that pages only when the canary fails and real-user error rate is also elevated. You will need an AWS account with permissions to create Synthetics canaries, IAM roles, CloudWatch alarms, and an S3 bucket. If you do not have a real checkout flow, substitute a public test site or a simple static page you control; the mechanics are identical.</p>
+          <ol>
+            <li><strong>Create the artifact bucket.</strong> In S3, create a bucket named for your canary artifacts, for example <code>synthetics-artifacts-&lt;account-id&gt;-&lt;region&gt;</code>. Enable default encryption and a lifecycle rule that expires objects after 30 days. This bucket holds the screenshots and HAR files that make the canary useful during an incident.</li>
+            <li><strong>Create the execution role.</strong> Create an IAM role that Synthetics can assume, with a trust policy for <code>lambda.amazonaws.com</code> and permissions for <code>s3:PutObject</code> on the artifact bucket, <code>cloudwatch:PutMetricData</code>, and <code>logs:CreateLogStream</code>/<code>logs:PutLogEvents</code>. If your canary needs to read a credential from Secrets Manager, add <code>secretsmanager:GetSecretValue</code> scoped to that specific secret.</li>
+            <li><strong>Create the canary.</strong> In the CloudWatch console, choose Synthetics, then Create canary. Select the GUI Workflow Builder blueprint if you want to record the flow, or the API Canary blueprint if you prefer to script the HTTP calls. Name it <code>checkout-canary</code>, point it at your target URL, and select the artifact bucket and execution role from the previous steps.</li>
+            <li><strong>Script the flow.</strong> For a GUI canary, record the login and checkout steps, then edit the generated script to replace any hard-coded credentials with a Secrets Manager fetch. For an API canary, write the request sequence explicitly and assert on the response body, not just the status code — a 200 response containing an error message is a failure the status check would miss.</li>
+            <li><strong>Set the schedule.</strong> Configure the canary to run every five minutes. Note the tradeoff you are accepting: a failure that begins immediately after a run will not be detected for up to five minutes, which on a 99.9% monthly SLO consumes roughly 0.7% of the error budget per incident. If that is too much, reduce the interval to one minute and accept the higher cost.</li>
+            <li><strong>Run it once manually.</strong> Use the Run now action and confirm the canary succeeds. Open the artifact in S3 and verify the screenshot shows the expected page. This step catches permission and networking problems before they become alarm noise.</li>
+            <li><strong>Create the alarm.</strong> Create a CloudWatch alarm on the <code>SuccessPercent</code> metric in the <code>CloudWatchSynthetics</code> namespace, dimensioned by your canary name. Set the period to five minutes to match the canary frequency, the statistic to Average, the threshold to less than 100, and the missing-data treatment to breaching. The last setting is the one that catches the silent-stop failure mode.</li>
+            <li><strong>Wire the composite alarm.</strong> Create a second alarm on your application's real-user error rate (for example, ALB <code>HTTPCode_Target_5XX_Count</code> or a Lambda error metric). Then create a composite alarm with the rule <code>ALARM(canaryAlarm) AND ALARM(errorRateAlarm)</code>. Route the composite to your paging channel and route the individual canary alarm to a low-severity channel.</li>
+            <li><strong>Break it deliberately.</strong> Temporarily point the canary at a URL that returns a 500, or block the canary's egress with a security group change. Confirm the canary alarm fires, the composite does not (because real-user error rate is still healthy), and the screenshot artifact shows the failure. Then restore the target and confirm the alarm returns to OK.</li>
+            <li><strong>Write the runbook.</strong> Document the four-step response: open the screenshot, check regional scope, check the last successful run timestamp, and verify the assertion is not stale. Store it where the on-call engineer will find it at 3 a.m.</li>
+          </ol>
+          <p>Clean up by deleting the canary, the alarms, the execution role, and the artifact bucket. The lab's real output is the runbook and the alarm wiring pattern, both of which transfer directly to production.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="quiz">
         <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
-        
+
       <div class="scenario-card">
         <p class="scenario-question"><strong>Q1.</strong> Internal CloudWatch metrics show healthy servers, but customers report the login page is broken. What monitoring gap does this reveal?</p>
-        <div class="scenario-options" id="opts-d30q0">
+        <div class="scenario-options" id="opts-d30q1">
             <div class="scenario-option">A. Missing X-Ray tracing</div>
             <div class="scenario-option">B. No outside-in synthetic monitoring of the actual user flow</div>
             <div class="scenario-option">C. Missing VPC Flow Logs</div>
             <div class="scenario-option">D. Insufficient EC2 instance count</div>
         </div>
-        <button class="scenario-reveal-btn" onclick="revealAnswer('d30q0', 1)">Reveal Answer</button>
-        <div class="scenario-explanation" id="exp-d30q0"><strong>Correct answer: B.</strong> Server-side health metrics don't verify end-to-end user experience; Synthetics canaries probe from outside the infrastructure, catching failures (DNS, CDN, front-end bugs) invisible to internal metrics.</div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d30q1', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d30q1"><strong>Correct answer: B.</strong> Server-side health metrics don't verify end-to-end user experience; Synthetics canaries probe from outside the infrastructure, catching failures (DNS, CDN, front-end bugs) invisible to internal metrics.</div>
       </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q2.</strong> A multi-region active-active application has comprehensive CloudWatch dashboards and X-Ray tracing, but an edge failure in one region went undetected for 20 minutes. What should be added?</p>
+        <div class="scenario-options" id="opts-d30q2">
+            <div class="scenario-option">A. More X-Ray sampling rules</div>
+            <div class="scenario-option">B. Synthetics canaries running from multiple regions against the user-facing endpoints</div>
+            <div class="scenario-option">C. A larger ALB target group</div>
+            <div class="scenario-option">D. CloudTrail data events</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d30q2', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d30q2"><strong>Correct answer: B.</strong> A single-region canary would have reported success while one region's users were down. Multi-region canaries are required to observe per-region user-visible availability.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q3.</strong> A canary alarm is configured with a one-minute period, but the canary runs every five minutes. The alarm flaps between OK and INSUFFICIENT_DATA and never pages. What is the fix?</p>
+        <div class="scenario-options" id="opts-d30q3">
+            <div class="scenario-option">A. Increase the canary frequency to one minute</div>
+            <div class="scenario-option">B. Set the alarm period to five minutes to match the canary frequency, and treat missing data as breaching</div>
+            <div class="scenario-option">C. Remove the alarm and rely on the dashboard</div>
+            <div class="scenario-option">D. Switch the statistic from Average to Sum</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d30q3', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d30q3"><strong>Correct answer: B.</strong> Alarm period should match the metric's publication cadence. Treating missing data as breaching also catches the silent-stop failure mode where the canary stops running entirely.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q4.</strong> A team wants to detect when a third-party payment provider's integration path is degraded, before customers complain. What is the most direct approach?</p>
+        <div class="scenario-options" id="opts-d30q4">
+            <div class="scenario-option">A. Subscribe to the provider's status page RSS feed</div>
+            <div class="scenario-option">B. A Synthetics canary that exercises the integration path and asserts on the response</div>
+            <div class="scenario-option">C. Increase the Lambda timeout on the payment handler</div>
+            <div class="scenario-option">D. Enable VPC Flow Logs on the payment subnet</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d30q4', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d30q4"><strong>Correct answer: B.</strong> A canary against the integration path measures the actual dependency from your perspective, which is what matters. A status page is not an alarm source and may lag or miss your specific path.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q5.</strong> A canary's SuccessPercent drops to 0 while its Duration metric stays normal. What is the most likely cause?</p>
+        <div class="scenario-options" id="opts-d30q5">
+            <div class="scenario-option">A. A genuine availability outage</div>
+            <div class="scenario-option">B. Target drift — the UI changed and the canary's assertion is now stale</div>
+            <div class="scenario-option">C. The canary's runtime was deprecated</div>
+            <div class="scenario-option">D. The artifact bucket was deleted</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d30q5', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d30q5"><strong>Correct answer: B.</strong> A real outage usually degrades both success and duration, because a slow or unreachable target takes longer to fail. Success dropping with duration flat points at an assertion mismatch, and the screenshot artifact will confirm it.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q6.</strong> A canary that logs in with a stored credential starts failing every run on the same day each quarter. What is the most likely cause and the correct fix?</p>
+        <div class="scenario-options" id="opts-d30q6">
+            <div class="scenario-option">A. The canary runtime is deprecated; upgrade it</div>
+            <div class="scenario-option">B. The credential rotated; store it in Secrets Manager and have the canary fetch it at runtime</div>
+            <div class="scenario-option">C. The S3 artifact bucket expired; recreate it</div>
+            <div class="scenario-option">D. The canary frequency is too high; reduce it</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d30q6', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d30q6"><strong>Correct answer: B.</strong> Hard-coded credentials in a canary script fail silently when the credential rotates. Fetching from Secrets Manager at runtime decouples the canary from the rotation schedule.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q7.</strong> A team wants to validate that a new deployment did not break the checkout flow, immediately after the pipeline completes. What is the appropriate use of Synthetics?</p>
+        <div class="scenario-options" id="opts-d30q7">
+            <div class="scenario-option">A. Increase the canary frequency to one minute permanently</div>
+            <div class="scenario-option">B. Invoke the canary on demand as a post-deployment smoke test, and gate the pipeline on its result</div>
+            <div class="scenario-option">C. Replace the canary with a Route 53 health check</div>
+            <div class="scenario-option">D. Disable the canary during deployments</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d30q7', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d30q7"><strong>Correct answer: B.</strong> On-demand invocation is the deployment-gate pattern. Tag the runs so the pipeline-triggered failures do not page the on-call engineer.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q8.</strong> A canary is configured to run inside a VPC to reach a private endpoint, but the application it monitors is public-facing. What is wrong with this configuration?</p>
+        <div class="scenario-options" id="opts-d30q8">
+            <div class="scenario-option">A. Nothing — VPC configuration is always preferred</div>
+            <div class="scenario-option">B. The canary is testing the private path, not the public path users actually take</div>
+            <div class="scenario-option">C. VPC canaries cannot publish metrics</div>
+            <div class="scenario-option">D. VPC canaries cannot use Puppeteer</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d30q8', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d30q8"><strong>Correct answer: B.</strong> A VPC-configured canary bypasses DNS, CDN, and edge layers — exactly the layers most likely to fail for a public-facing application. Run user-facing canaries outside the VPC.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q9.</strong> A canary alarm fires, but the S3 artifact for the failing run is missing. What is the most likely cause?</p>
+        <div class="scenario-options" id="opts-d30q9">
+            <div class="scenario-option">A. The canary's execution role lacks s3:PutObject on the artifact bucket</div>
+            <div class="scenario-option">B. The canary frequency is too low</div>
+            <div class="scenario-option">C. The alarm period is misconfigured</div>
+            <div class="scenario-option">D. The runtime version is too new</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d30q9', 0)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d30q9"><strong>Correct answer: A.</strong> Missing artifacts almost always trace to IAM permissions on the artifact bucket. This failure mode is invisible until you need the evidence, which is why the lab verifies artifacts on the first manual run.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q10.</strong> A team wants to detect a broken link on a marketing site with hundreds of pages. Which Synthetics blueprint fits best?</p>
+        <div class="scenario-options" id="opts-d30q10">
+            <div class="scenario-option">A. Heartbeat Monitoring</div>
+            <div class="scenario-option">B. Broken Link Checker</div>
+            <div class="scenario-option">C. Visual Monitoring</div>
+            <div class="scenario-option">D. API Canary</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d30q10', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d30q10"><strong>Correct answer: B.</strong> The Broken Link Checker blueprint crawls a page and verifies every link, which is exactly the job. Heartbeat only checks one URL; Visual Monitoring compares screenshots; API Canary scripts HTTP requests.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q11.</strong> A canary that drives a full checkout flow every minute from three regions is generating real orders. What is the correct mitigation?</p>
+        <div class="scenario-options" id="opts-d30q11">
+            <div class="scenario-option">A. Increase the frequency to reduce the number of orders</div>
+            <div class="scenario-option">B. Point the canary at a dedicated test account or sandbox path, and make the scripted actions idempotent where possible</div>
+            <div class="scenario-option">C. Disable the canary entirely</div>
+            <div class="scenario-option">D. Switch to a Route 53 health check</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d30q11', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d30q11"><strong>Correct answer: B.</strong> A canary that mutates production state is a business problem, not a monitoring solution. Sandbox paths and idempotent actions keep the canary useful without side effects.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q12.</strong> A canary has stopped running entirely — no failures, no successes, no data points. Which diagnostic step should come first?</p>
+        <div class="scenario-options" id="opts-d30q12">
+            <div class="scenario-option">A. Check the alarm state in CloudWatch</div>
+            <div class="scenario-option">B. Check the canary's last run timestamp in the Synthetics console</div>
+            <div class="scenario-option">C. Increase the canary frequency</div>
+            <div class="scenario-option">D. Recreate the artifact bucket</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d30q12', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d30q12"><strong>Correct answer: B.</strong> The alarm may sit in INSUFFICIENT_DATA without paging. The canary's last run timestamp is the authoritative signal that it has stopped, and it points at the cause (deprecated runtime, revoked role, disabled schedule).</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q13.</strong> A team wants to detect a visual regression — a CSS change that breaks the layout of the homepage — before users notice. Which Synthetics blueprint fits?</p>
+        <div class="scenario-options" id="opts-d30q13">
+            <div class="scenario-option">A. Heartbeat Monitoring</div>
+            <div class="scenario-option">B. Visual Monitoring</div>
+            <div class="scenario-option">C. Broken Link Checker</div>
+            <div class="scenario-option">D. API Canary</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d30q13', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d30q13"><strong>Correct answer: B.</strong> Visual Monitoring compares a screenshot against a baseline and flags pixel differences, which is the only blueprint that can detect a layout regression that leaves the page functional.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q14.</strong> A canary is failing and the team wants to know which internal service is responsible for the slowdown. What is the correct next step?</p>
+        <div class="scenario-options" id="opts-d30q14">
+            <div class="scenario-option">A. Add more canaries</div>
+            <div class="scenario-option">B. Use X-Ray distributed tracing to break the request into per-hop latency</div>
+            <div class="scenario-option">C. Increase the canary timeout</div>
+            <div class="scenario-option">D. Switch the canary to a health check</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d30q14', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d30q14"><strong>Correct answer: B.</strong> A canary measures total time to a successful assertion; it cannot attribute the delay to a specific internal hop. X-Ray is the tool that answers the "which service" question.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q15.</strong> A team wants to validate that the system can handle a 10x traffic spike before a major launch. What is the appropriate tool?</p>
+        <div class="scenario-options" id="opts-d30q15">
+            <div class="scenario-option">A. A Synthetics canary running every minute</div>
+            <div class="scenario-option">B. A distributed load testing tool</div>
+            <div class="scenario-option">C. A Route 53 health check</div>
+            <div class="scenario-option">D. A composite alarm</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d30q15', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d30q15"><strong>Correct answer: B.</strong> A canary is a single synthetic user; it detects availability and functional regressions, not capacity limits. Load testing is the tool for validating that the system holds under concurrent load.</div>
+      </div>
+      </section>
+
+      <section class="doc-section" id="preview">
+        <h2 class="section-heading">Peek into Tomorrow</h2>
+        <div class="card card-purple">
+          <p>Today's canary can tell you that the checkout flow is broken and roughly how long it took to fail, but it cannot tell you why. The canary measures the total time from the first byte of the request to the final assertion, and when that number jumps from 800 milliseconds to 4 seconds, the canary's job is done — it has raised the alarm. The question it leaves entirely unanswered is which of the dozen services the request touched is responsible for the extra 3.2 seconds. That question is the one the on-call engineer actually has to answer at 3 a.m., and it is the question a canary is structurally incapable of answering, because it observes the request from outside the system rather than from within it.</p>
+          <p>Tomorrow's topic, X-Ray distributed tracing, is the inside-out complement. It instruments the request as it flows through each service, producing a service map that shows per-hop latency and error hotspots, and it lets you drill into a specific slow downstream call — the classic example being a slow DynamoDB query inside a Lambda invocation that the canary only sees as a slow checkout. The open question worth carrying forward is how you control the cost of that instrumentation: tracing every request at full fidelity is expensive, and the sampling rules that make it affordable are themselves a design decision with real consequences for what you can and cannot see after an incident.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="sources">
+        <h2 class="section-heading">Sources</h2>
+        <div class="card">
+          <ul class="source-list">
+            <li><a href="https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch_Synthetics_Canaries.html" target="_blank" rel="noopener">AWS documentation — Using synthetic monitoring (CloudWatch Synthetics canaries)</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch_Synthetics_Canaries_Blueprints.html" target="_blank" rel="noopener">AWS documentation — Synthetics canary blueprints</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch_Synthetics_Canaries_WritingCanary.html" target="_blank" rel="noopener">AWS documentation — Writing a canary script</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch_Synthetics_Canaries_S3.html" target="_blank" rel="noopener">AWS documentation — Canary artifacts in S3</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch_Synthetics_Canaries_VPC.html" target="_blank" rel="noopener">AWS documentation — Running canaries in a VPC</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/AlarmThatSendsEmail.html" target="_blank" rel="noopener">AWS documentation — Creating CloudWatch alarms</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch_Alarms_Composite.html" target="_blank" rel="noopener">AWS documentation — Composite alarms</a></li>
+            <li><a href="https://aws.amazon.com/cloudwatch/pricing/" target="_blank" rel="noopener">AWS — CloudWatch pricing (Synthetics canary runs)</a></li>
+            <li><a href="https://docs.aws.amazon.com/wellarchitected/latest/reliability-pillar/welcome.html" target="_blank" rel="noopener">AWS Well-Architected Framework — Reliability pillar</a></li>
+          </ul>
+        </div>
       </section>
       <div class="day-nav">
         <a href="day-029.html">&larr; Day 29: CloudWatch Metrics, Alarms &amp; Composite Alarms</a>

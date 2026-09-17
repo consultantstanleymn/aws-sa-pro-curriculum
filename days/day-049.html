@@ -104,7 +104,7 @@
         <span class="pill pill-green">Phase 4: Migration, Hybrid &amp; Cost Optimization</span>
       </div>
       <h1 class="hero-title">AWS Snow Family — Snowball Edge, Snowcone &amp; Snowmobile</h1>
-      <div class="reading-meta">&#128337; ~3 min read &middot; 4 services covered</div>
+      <div class="reading-meta">&#128337; ~58 min read &middot; 4 services covered</div>
       <div class="services-grid">
         <span class="service-tag">Snowball Edge</span>
         <span class="service-tag">Snowcone</span>
@@ -112,30 +112,347 @@
         <span class="service-tag">OpsHub</span>
       </div>
       <div id="tracker"></div>
-      <section class="doc-section">
-        <h2 class="section-heading">Today's Concept</h2>
+
+      <section class="doc-section" id="recap">
+        <h2 class="section-heading">Recap: Where We Left Off</h2>
         <div class="card card-accent">
-          <p>The Snow Family moves large datasets offline when network transfer would take too long or is unavailable: Snowcone (small, edge/rugged use), Snowball Edge (Storage Optimized up to ~80TB usable, or Compute Optimized with GPU for edge processing), and Snowmobile (exabyte-scale, shipping-container data center on wheels).</p>
-        </div>
-        <h3 class="sub-heading">Hands-on Lab / Practical Action (45 min)</h3>
-        <div class="card">
-          <p>Calculate whether a 500TB one-time transfer over a 100Mbps link (theoretical ~46 days) justifies using Snowball Edge instead, and size the number of devices needed.</p>
+          <p>Day 48 covered Storage Gateway, and the whole lesson turned on a single question: what protocol does the on-prem workload actually speak? A File Gateway presents S3 as an NFS/SMB share with local caching, a Volume Gateway exposes iSCSI block storage backed by S3 in either cached or stored mode, and a Tape Gateway presents a virtual tape library so existing backup software keeps working unchanged. The takeaway was that the three flavors are not interchangeable — you pick based on whether the workload speaks file, block, or tape, and the gateway is a long-lived bridge that stays in the path.</p>
+          <p>Today sits at the same lifecycle stage but addresses a different concern. Storage Gateway assumes a working, persistent network path between on-prem and AWS; it is a bridge you keep. The Snow Family is the opposite posture — it exists precisely for the case where the network path is the bottleneck, absent, or so slow that moving the bytes physically is faster than moving them over the wire. Same migration phase, same "get data from here to there" problem, but the constraint being solved is bandwidth rather than protocol translation.</p>
         </div>
       </section>
-      <section class="doc-section">
-        <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
-        
-      <div class="scenario-card">
-        <p class="scenario-question"><strong>Q1.</strong> A company must migrate 2 PB of data from a facility with no viable network uplink for bulk transfer. What is the appropriate approach?</p>
-        <div class="scenario-options" id="opts-d49q0">
+
+      <section class="doc-section" id="why-on-exam">
+        <h2 class="section-heading">1. Why the Snow Family Is on the Exam</h2>
+        <p>The Snow Family exists because of a hard physical constraint that no amount of AWS service design can route around: the speed of light through fiber, multiplied by the cost of the bandwidth you can actually buy. A 100 Mbps uplink moves roughly 1 TB per day in theory, and considerably less in practice once you account for TCP overhead, competing traffic, and the fact that most enterprise WAN links are shared. At that rate, a 500 TB dataset takes months. The same dataset shipped on physical devices takes days, including transit time. The exam tests whether you recognize when that crossover point has been reached and which device class fits the volume.</p>
+        <p>This maps most directly to SAP-C02 Domain 3, Migration and Modernization, and specifically to the "determine the right migration strategy" task. The exam does not ask you to configure a Snowball in detail. It asks you to read a scenario containing a data volume, a network constraint, and a timeline, and then choose between online transfer (DataSync, Direct Connect, S3 Transfer Acceleration), offline transfer (Snow Family), or a hybrid of both. The distractor pattern is consistent: options that would work in principle but violate the stated constraint, such as "provision a Direct Connect" when the scenario says the facility has no fiber path, or "use DataSync" when the scenario says the link is saturated for months.</p>
+        <p>There is a second, less obvious exam angle. The Snow Family devices are not just data movers — the Compute Optimized variants run EC2 instances and Lambda functions locally, which makes them an edge-computing answer as well as a migration answer. A scenario describing a ship, a mine site, or a factory floor with intermittent connectivity and a need to process data before shipping it back is testing the same service from the edge-compute direction. Recognizing that both angles point at the same product family is worth a question or two.</p>
+        <p>Finally, the exam expects you to know the rough capacity tiers well enough to size an engagement. You do not need exact SKU numbers, but you do need to know that Snowcone is measured in single-digit terabytes, Snowball Edge in tens of terabytes, and Snowmobile in petabytes. A scenario that says "2 PB" and offers Snowball Edge as an option is testing whether you know that Snowmobile exists for that scale, or whether you know that a fleet of Snowball Edge devices is a legitimate alternative answer when the scenario emphasizes cost or timeline over a single shipment.</p>
+      </section>
+
+      <section class="doc-section" id="mechanism">
+        <h2 class="section-heading">2. How the Devices Actually Work</h2>
+        <p>Every Snow Family device is, at its core, a ruggedized server with local storage, a CPU, and a set of network interfaces, shipped to you in a case that survives freight handling. The workflow is deliberately low-tech on the AWS side: you order a job through the console or API, AWS ships the device, you connect it to your local network, copy data onto it using the Snowball client or the OpsHub application, ship it back, and AWS ingests the contents into S3. The device is wiped after ingestion using NIST 800-88 standards, and you receive a job completion report.</p>
+        <p>The security model is worth understanding because it shows up in exam scenarios about regulated data. Data on the device is encrypted at rest with 256-bit encryption, and the keys never leave AWS — they are not stored on the device itself. The device is tamper-resistant and tamper-evident, with a Trusted Platform Module that validates the device's integrity at boot. If the device is opened or the TPM detects tampering, the keys are destroyed and the data is unrecoverable. This is why the Snow Family is acceptable for data that would otherwise be blocked from leaving a facility: the encryption and key custody model is stronger than most on-prem tape workflows.</p>
+        <p>For the Compute Optimized variants, the device is more than a bucket. It runs the AWS IoT Greengrass service and can execute EC2 instances and Lambda functions locally, which means you can run inference, filtering, or aggregation on the device before shipping it back. This matters for the edge scenarios: a ship with a satellite link that costs per megabyte does not want to ship raw sensor data, it wants to run a model locally and ship the results. The same device that moves bulk data can also be the compute node that decides what is worth moving.</p>
+        <p>OpsHub is the piece that makes this usable without a laptop full of scripts. It is a graphical application that runs on a local workstation, connects to the device over the local network, and provides a file-transfer interface, job monitoring, and the ability to launch compute instances on the device. For a data center operator who is not a developer, OpsHub is the difference between a workable migration and a support ticket. The exam rarely asks about OpsHub directly, but it appears as a distractor option and you should know it is the management UI, not a transfer service.</p>
+      </section>
+
+      <section class="doc-section" id="decision-boundary">
+        <h2 class="section-heading">3. The Core Decision Boundary: Online vs. Offline</h2>
+        <p>Almost every Snow Family exam question reduces to one fork: should this data move over the network or physically? The answer is not about volume alone — it is about the ratio of volume to available bandwidth, measured against the timeline the business will tolerate. A 10 TB dataset over a 10 Gbps link is an afternoon's work and should never touch a Snowball. The same 10 TB over a 10 Mbps link is weeks of transfer and is a clear offline case. The exam gives you both numbers and expects you to do the division.</p>
+        <p>The second-order consideration is whether the transfer is one-time or ongoing. Snow devices are inherently one-shot: you ship them, they come back, the job ends. If the scenario describes a continuous stream of new data — daily logs, ongoing replication, a live feed — then offline transfer solves only the historical backlog, and you still need a network path for the delta. This is the hybrid pattern that shows up repeatedly: bulk historical data on Snowball, ongoing changes over Direct Connect or DataSync. Recognizing that the question is asking about the backlog specifically, not the whole pipeline, is often the difference between the right and wrong answer.</p>
+        <p>A third consideration is whether the data can leave the facility at all. Some regulated environments prohibit shipping storage media off-site regardless of encryption. In those cases the Snow Family is disqualified and the answer has to be a network-based option, even if it is slow. The exam occasionally plants this constraint in a single sentence and expects you to notice that it overrides the bandwidth math entirely.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Scenario signal</th><th>Right answer</th><th>Why</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Large volume, adequate bandwidth, ongoing</td><td>DataSync or Direct Connect</td><td>Network path exists and the transfer is continuous</td></tr>
+              <tr><td>Large volume, inadequate bandwidth, one-time</td><td>Snowball Edge</td><td>Physical transfer beats the wire</td></tr>
+              <tr><td>Petabyte-scale, single engagement</td><td>Snowmobile or a Snowball Edge fleet</td><td>Device capacity and shipment logistics</td></tr>
+              <tr><td>Small volume, rugged or remote site</td><td>Snowcone</td><td>Portable, low-capacity, edge-capable</td></tr>
+              <tr><td>Bulk historical plus ongoing delta</td><td>Snowball for bulk, DataSync/DMS for delta</td><td>Offline solves the backlog, network solves the stream</td></tr>
+              <tr><td>Media cannot leave the facility</td><td>Network transfer only</td><td>Regulatory constraint overrides bandwidth math</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="doc-section" id="config-tradeoffs">
+        <h2 class="section-heading">4. Device Classes and What Each Costs You</h2>
+        <p>The Snow Family is not one product with three sizes; it is three products with different design centers, and the tradeoffs between them are about more than capacity. Snowcone is the smallest and most portable, designed for edge locations where you need a small amount of storage and possibly some compute in a device you can carry. It is measured in single-digit terabytes and is the right answer when the scenario emphasizes portability, harsh environments, or a site too small to justify a full Snowball. The tradeoff is capacity: you will not move a data center with a Snowcone.</p>
+        <p>Snowball Edge comes in two flavors that matter for the exam. Storage Optimized is the bulk data mover, with usable capacity in the tens of terabytes per device and a design that prioritizes throughput and storage density. Compute Optimized trades some storage for more CPU and an optional GPU, and is the right answer when the scenario needs local processing — video analysis, ML inference, signal processing — at the edge. Both variants support clustering, which lets you treat multiple devices as a single logical storage pool and increases both capacity and throughput.</p>
+        <p>Snowmobile is the outlier: a shipping container with networking and storage inside, delivered by truck, capable of moving up to 100 PB in a single engagement. It is not a device you order casually. The exam treats it as the answer for exabyte-scale or very-large-petabyte migrations where even a fleet of Snowballs would be operationally absurd. If a scenario says "100 PB" and offers Snowmobile, that is almost certainly the intended answer; if it says "2 PB," Snowmobile is technically capable but a Snowball Edge fleet is usually the more cost-effective framing.</p>
+        <p>The cost model reinforces these distinctions. You pay for the device, for shipping both ways, for the days you hold it, and for the data transfer out of S3 if you later move it. There is no per-gigabyte transfer charge for the ingest itself, which is a meaningful difference from network transfer. For very large datasets, the offline path is often cheaper as well as faster, and the exam sometimes frames the question purely on cost rather than time.</p>
+      </section>
+
+      <section class="doc-section" id="sizing-limits">
+        <h2 class="section-heading">5. Sizing, Limits, and the Bandwidth Math</h2>
+        <p>The single most useful number to internalize is the throughput of a typical WAN link expressed in terabytes per day. A 100 Mbps link moves roughly 1 TB per day under ideal conditions; a 1 Gbps link moves roughly 10 TB per day; a 10 Gbps link moves roughly 100 TB per day. These are order-of-magnitude figures, not guarantees, and real-world throughput is typically 60-80% of theoretical once you account for protocol overhead and competing traffic. The exam expects you to do this arithmetic quickly and compare it against the timeline in the scenario.</p>
+        <p>Against those numbers, the device capacities define the crossover. A Snowball Edge Storage Optimized device holds tens of terabytes, so a 500 TB dataset needs roughly a dozen devices or a clustered set. A Snowcone holds single-digit terabytes, so it is a fit for a few terabytes at a remote site, not for a data center evacuation. Snowmobile holds up to 100 PB, which is the answer for the scenarios that would otherwise require hundreds of Snowballs.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Device</th><th>Rough usable capacity</th><th>Compute</th><th>Typical use</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Snowcone</td><td>Single-digit TB</td><td>Limited, edge-capable</td><td>Remote or rugged sites, small transfers</td></tr>
+              <tr><td>Snowball Edge Storage Optimized</td><td>Tens of TB per device</td><td>Moderate</td><td>Bulk data migration, clustering supported</td></tr>
+              <tr><td>Snowball Edge Compute Optimized</td><td>Tens of TB, less than Storage Optimized</td><td>High, optional GPU</td><td>Edge processing, ML inference, video analysis</td></tr>
+              <tr><td>Snowmobile</td><td>Up to 100 PB</td><td>N/A</td><td>Exabyte-scale single engagements</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>Two operational limits matter beyond raw capacity. First, the device is held for a limited window, and you pay for the days you keep it; a migration that stalls because the local team was not ready costs money and delays the next job. Second, the ingest into S3 is not instantaneous — AWS processes the returned device and the data appears in your bucket over a period of hours to days depending on volume. Neither limit usually changes the exam answer, but both appear in scenario details that distinguish a well-planned migration from a naive one.</p>
+      </section>
+
+      <section class="doc-section" id="failure-modes">
+        <h2 class="section-heading">6. Failure Modes and What They Look Like in Production</h2>
+        <p>The most common failure in a Snow migration is not a hardware fault — it is a planning fault. The device arrives, the local team discovers that the data is spread across a dozen file systems with inconsistent permissions, and the copy takes three times longer than estimated. The symptom is a job that sits in progress well past its expected completion, and the first diagnostic move is to check the Snowball client logs for throughput and error rates rather than assuming the device is faulty. In practice, the bottleneck is almost always the source storage or the local network, not the Snowball.</p>
+        <p>The second failure mode is a mismatch between what was copied and what was expected. The Snowball client copies files, not application state, so a database that was copied while running will produce an inconsistent snapshot. The symptom is a target that looks complete but fails integrity checks or application-level validation. The fix is procedural: quiesce the source, or use a database-aware tool for the database portion and reserve the Snowball for file data. This is the same trap that catches people with raw EBS snapshots of running databases, and it is worth flagging explicitly in a runbook.</p>
+        <p>The third failure mode is a lost or damaged device in transit. This is rare, and the encryption model means the data is not exposed, but the job still has to be restarted. The symptom is a job that never reaches the "received" state, and the first move is to open a support case with the tracking information. The exam does not test this directly, but it is the reason the encryption and key-custody model matters: a lost device is an operational inconvenience, not a breach.</p>
+        <p>Finally, there is the failure mode of choosing the wrong tool. A team that ships a Snowball for a 5 TB transfer over a healthy 1 Gbps link has spent weeks of logistics on an afternoon's work. The symptom is a migration that is slower and more expensive than the network path would have been, and the diagnostic is simply the bandwidth math from the previous section. Recognizing this in a scenario — where the numbers clearly favor the network — is a common exam trap in the other direction.</p>
+      </section>
+
+      <section class="doc-section" id="sre-angle">
+        <h2 class="section-heading">7. The Operational and SRE Angle</h2>
+        <p>From an SRE perspective, a Snow migration is a batch job with a long, mostly opaque middle. You cannot watch the bytes move in real time the way you can watch a DataSync task, because the device is physically in transit for days. What you can monitor is the job state in the AWS console or API, the Snowball client's local logs during the copy phase, and the S3 ingest progress after the device is returned. The runbook should define what "healthy" looks like at each phase and who is responsible for checking it.</p>
+        <p>The SLO implications are unusual. A Snow migration is not a service with an availability target; it is a project with a deadline. The relevant metric is time-to-completion against the business timeline, and the relevant alarm is a job that has not advanced state within its expected window. If the migration is feeding a cutover, the cutover date is the SLO, and every day of slippage is a direct business impact. This is why the planning phase — inventorying the data, estimating throughput, ordering enough devices — matters more than the execution phase.</p>
+        <p>The runbook shape follows the phases. Before the device arrives: confirm the source data is quiesced or that a database-aware tool is handling the live portion, confirm the local network can sustain the copy rate, and confirm someone is on-site to receive and connect the device. During the copy: monitor throughput and error rates, and escalate if the copy is falling behind the estimate. After the copy: verify the checksums, ship the device, and track the ingest into S3. After ingest: validate the target data against the source before decommissioning anything.</p>
+        <p>One operational detail worth building into the runbook is the handling of the encryption keys and the job manifest. The keys are managed by AWS, but the job manifest — what was copied, when, and to which bucket — is your audit trail. For regulated data, that manifest is often the artifact an auditor asks for, and reconstructing it after the fact is painful. Capture it at job creation, not at job completion.</p>
+      </section>
+
+      <section class="doc-section" id="gotchas">
+        <h2 class="section-heading">8. Edge Cases and Exam Gotchas</h2>
+        <p>The first gotcha is conflating the Snow Family with Storage Gateway. They solve opposite problems. Storage Gateway is a persistent bridge for ongoing access; Snow is a one-time physical transfer. A scenario that describes continuous access to on-prem data from AWS is a Storage Gateway question, and a scenario that describes moving a large dataset once is a Snow question. The exam mixes these deliberately, and the distinguishing word is usually "ongoing" versus "migrate."</p>
+        <p>The second gotcha is forgetting that Snow devices can run compute. A scenario about a remote site that needs to process data locally before sending results back is not just a storage question — it is a Compute Optimized Snowball Edge question, or possibly a Snowcone question if the volume is small. The presence of "process," "analyze," or "infer" in the scenario is the signal.</p>
+        <p>The third gotcha is the regulatory constraint. If the scenario says data cannot leave the facility, no Snow device is acceptable regardless of encryption, and the answer must be a network-based option. This constraint is often buried in a subordinate clause, and missing it is a common way to lose a question that otherwise looks straightforward.</p>
+        <p>The fourth gotcha is the hybrid pattern. A scenario that describes a large historical dataset plus ongoing changes is not asking you to choose between Snow and DataSync — it is asking you to combine them. The correct answer names both: Snow for the bulk, a network tool for the delta. Answers that pick only one are usually wrong.</p>
+        <p>The fifth gotcha is Snowmobile sizing. Snowmobile is the answer for exabyte-scale or very-large-petabyte single engagements, not for every large migration. A 2 PB migration can be done with Snowmobile, but a Snowball Edge fleet is often the more cost-effective answer, and the exam sometimes expects you to recognize that. Read the scenario for cost or timeline emphasis before defaulting to the largest device.</p>
+      </section>
+
+      <section class="doc-section" id="vs-comparison">
+        <h2 class="section-heading">9. Snow vs. the Services It Gets Confused With</h2>
+        <p>The Snow Family sits in a crowded space of data-movement services, and the exam expects you to pick the right one from a scenario. The distinguishing questions are always the same: is the transfer one-time or ongoing, is the network path adequate, and does the data need to be processed before it moves? Answer those three and the service choice usually falls out.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Service</th><th>Transfer type</th><th>Network dependency</th><th>Pick it when…</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Snowball Edge</td><td>One-time, physical</td><td>None for the bulk</td><td>Large volume, inadequate bandwidth, one-shot</td></tr>
+              <tr><td>Snowcone</td><td>One-time, physical</td><td>None for the bulk</td><td>Small volume, remote or rugged site</td></tr>
+              <tr><td>Snowmobile</td><td>One-time, physical</td><td>None for the bulk</td><td>Exabyte-scale single engagement</td></tr>
+              <tr><td>DataSync</td><td>Ongoing, online</td><td>Requires adequate link</td><td>Continuous or scheduled file/object sync</td></tr>
+              <tr><td>Storage Gateway</td><td>Ongoing, online</td><td>Requires adequate link</td><td>Persistent on-prem access to AWS storage</td></tr>
+              <tr><td>Direct Connect</td><td>Ongoing, online</td><td>Requires dedicated circuit</td><td>Sustained high-bandwidth hybrid connectivity</td></tr>
+              <tr><td>S3 Transfer Acceleration</td><td>Ongoing, online</td><td>Requires adequate link</td><td>Long-distance internet uploads to S3</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The rule of thumb: if the scenario says "migrate" and gives a large volume with a constrained link, it is Snow. If it says "sync," "replicate," or "ongoing," it is DataSync or Storage Gateway. If it says "dedicated connection" or "consistent bandwidth," it is Direct Connect. If it says "accelerate uploads over the internet," it is Transfer Acceleration. The Snow Family is the only one of these that does not require a working network path, and that is the property the exam is testing.</p>
+      </section>
+
+      <section class="doc-section" id="lab">
+        <h2 class="section-heading">Hands-On Lab: Sizing a Snowball Migration</h2>
+        <div class="card card-green">
+          <p><strong>Scenario.</strong> A media company has 500 TB of archived video in an on-prem data center. The facility has a 100 Mbps internet uplink shared with production traffic. The business wants the archive in S3 within 60 days, and the data cannot be compressed further. Your job is to decide whether to transfer over the network or use Snowball Edge devices, and to size the engagement.</p>
+          <p><strong>Step 1 — Establish the network baseline.</strong> Calculate the theoretical transfer time for 500 TB over 100 Mbps. At 100 Mbps, the link moves roughly 1 TB per day under ideal conditions, so 500 TB is roughly 500 days. Apply a realistic efficiency factor of 60-80% to account for protocol overhead and the fact that the link is shared with production traffic. The practical estimate is 600-800 days. Write this number down; it is the baseline every other option is compared against.</p>
+          <p><strong>Step 2 — Compare against the deadline.</strong> The business wants the data in S3 within 60 days. The network path misses that by more than an order of magnitude. This is the crossover point: the network is not a viable option, and the question becomes which Snow device and how many.</p>
+          <p><strong>Step 3 — Size the device fleet.</strong> Assume a Snowball Edge Storage Optimized device holds roughly 80 TB usable. Divide 500 TB by 80 TB to get approximately 7 devices. Add one for margin, since real-world usable capacity is lower than the nominal figure and you do not want to run a device to 100% full. A fleet of 8 devices is a reasonable plan. Note that the devices can be clustered, which simplifies the copy and increases aggregate throughput.</p>
+          <p><strong>Step 4 — Estimate the copy time.</strong> The copy rate is limited by the local network and the source storage, not the Snowball. If the local network can sustain 1 Gbps to the device, each device takes roughly 80 TB / (1 Gbps) ≈ 7-8 days to fill. Running devices in parallel shortens the wall-clock time; running them serially does not. Plan for the copy phase to take 2-3 weeks with parallel copies, plus shipping time in both directions.</p>
+          <p><strong>Step 5 — Plan the cutover.</strong> The archive is not live data, so there is no delta to sync — this is a clean one-time migration. Confirm that the source data is quiesced (no new writes during the copy), capture the job manifest for audit, and define the validation step: after ingest, compare object counts and checksums between source and S3 before decommissioning the on-prem archive.</p>
+          <p><strong>Step 6 — Document the decision.</strong> Write a one-page decision record: the network baseline, the deadline, the device count, the copy plan, and the validation criteria. This is the artifact that survives the migration and answers the "why did we do it this way" question six months later. It is also the artifact an auditor asks for if the data is regulated.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="quiz">
+        <h2 class="section-heading">Scenario Question Drills</h2>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q1.</strong> A company must migrate 2 PB of data from a facility with no viable network uplink for bulk transfer. What is the appropriate approach?</p>
+          <div class="scenario-options" id="opts-d49q1">
             <div class="scenario-option">A. AWS DataSync over the internet</div>
             <div class="scenario-option">B. Direct Connect provisioned overnight</div>
-            <div class="scenario-option">C. Multiple AWS Snowball Edge Storage Optimized devices (or Snowmobile for the full 2PB in one engagement)</div>
+            <div class="scenario-option">C. Multiple AWS Snowball Edge Storage Optimized devices, or Snowmobile for the full 2 PB in one engagement</div>
             <div class="scenario-option">D. AWS Storage Gateway</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d49q1', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d49q1"><strong>Correct answer: C.</strong> At petabyte scale with no adequate network path, physical offline transfer via Snow Family devices is the standard, cost-effective solution. Snowball Edge in bulk or Snowmobile for a single large engagement both fit.</div>
         </div>
-        <button class="scenario-reveal-btn" onclick="revealAnswer('d49q0', 2)">Reveal Answer</button>
-        <div class="scenario-explanation" id="exp-d49q0"><strong>Correct answer: C.</strong> At petabyte scale with no adequate network path, physical offline transfer via Snow Family devices (Snowball Edge in bulk, or Snowmobile for exabyte-scale single engagements) is the standard, cost-effective solution.</div>
-      </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q2.</strong> A remote research station generates 4 TB of sensor data per month and has only a satellite link. The data must be processed locally before transmission to reduce bandwidth cost. Which device fits best?</p>
+          <div class="scenario-options" id="opts-d49q2">
+            <div class="scenario-option">A. Snowball Edge Storage Optimized</div>
+            <div class="scenario-option">B. Snowcone with local compute</div>
+            <div class="scenario-option">C. Snowmobile</div>
+            <div class="scenario-option">D. AWS Storage Gateway File Gateway</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d49q2', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d49q2"><strong>Correct answer: B.</strong> Snowcone is the small, portable, edge-capable device for remote sites with modest data volumes and a need for local processing. Snowball Edge is overkill for 4 TB, and Snowmobile is for exabyte scale.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q3.</strong> A team needs to move 500 TB of archived data to S3. The facility has a 100 Mbps uplink shared with production traffic, and the business wants the data in S3 within 60 days. What is the right approach?</p>
+          <div class="scenario-options" id="opts-d49q3">
+            <div class="scenario-option">A. DataSync over the existing 100 Mbps link</div>
+            <div class="scenario-option">B. A fleet of Snowball Edge Storage Optimized devices</div>
+            <div class="scenario-option">C. S3 Transfer Acceleration</div>
+            <div class="scenario-option">D. Wait for a Direct Connect circuit to be provisioned</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d49q3', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d49q3"><strong>Correct answer: B.</strong> At roughly 1 TB per day over 100 Mbps, the network path would take well over a year. The deadline makes offline transfer the only viable option, and a Snowball Edge fleet fits the volume.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q4.</strong> A regulated financial institution needs to migrate 200 TB of data to AWS, but policy prohibits shipping storage media off-site. What should the architect recommend?</p>
+          <div class="scenario-options" id="opts-d49q4">
+            <div class="scenario-option">A. Snowball Edge with encryption enabled</div>
+            <div class="scenario-option">B. A network-based transfer such as Direct Connect or DataSync, accepting the longer timeline</div>
+            <div class="scenario-option">C. Snowmobile with a security escort</div>
+            <div class="scenario-option">D. Snowcone with tamper-evident seals</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d49q4', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d49q4"><strong>Correct answer: B.</strong> The regulatory constraint overrides the bandwidth math. If media cannot leave the facility, no Snow device is acceptable regardless of encryption, and the answer must be a network-based option.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q5.</strong> A company has 300 TB of historical data plus 50 GB of new data generated daily. The network link is capped at 500 Mbps. What is the recommended migration pattern?</p>
+          <div class="scenario-options" id="opts-d49q5">
+            <div class="scenario-option">A. Transfer everything over the 500 Mbps link</div>
+            <div class="scenario-option">B. Use Snowball Edge for the 300 TB bulk, then DataSync or DMS CDC over the network for the daily delta</div>
+            <div class="scenario-option">C. Use Snowmobile for the entire migration</div>
+            <div class="scenario-option">D. Wait for the link to be upgraded before starting</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d49q5', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d49q5"><strong>Correct answer: B.</strong> The hybrid pattern — offline bulk transfer for the large historical dataset, network-based incremental sync for the small ongoing delta — is the standard approach for large migrations over constrained links.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q6.</strong> A mining company needs to run machine learning inference on video feeds at a remote site with intermittent connectivity, then ship the results to AWS. Which device is designed for this?</p>
+          <div class="scenario-options" id="opts-d49q6">
+            <div class="scenario-option">A. Snowball Edge Storage Optimized</div>
+            <div class="scenario-option">B. Snowball Edge Compute Optimized with GPU</div>
+            <div class="scenario-option">C. Snowcone</div>
+            <div class="scenario-option">D. AWS Outposts</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d49q6', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d49q6"><strong>Correct answer: B.</strong> Snowball Edge Compute Optimized includes more CPU and an optional GPU for local processing such as ML inference and video analysis, which is exactly the edge-compute use case.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q7.</strong> A team is migrating a large dataset and wants to know how the data on a Snowball is protected if the device is lost in transit. What is the correct description of the security model?</p>
+          <div class="scenario-options" id="opts-d49q7">
+            <div class="scenario-option">A. Data is stored unencrypted but the device is tracked</div>
+            <div class="scenario-option">B. Data is encrypted at rest with 256-bit encryption, and the keys never leave AWS; tampering destroys the keys and renders the data unrecoverable</div>
+            <div class="scenario-option">C. Data is encrypted with a key stored on the device</div>
+            <div class="scenario-option">D. Data is only encrypted in transit</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d49q7', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d49q7"><strong>Correct answer: B.</strong> Snow devices encrypt data at rest with 256-bit encryption, and the keys are held by AWS, not on the device. Tamper detection destroys the keys, making the data unrecoverable.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q8.</strong> A company needs to move 100 PB of data to AWS in a single engagement. Which Snow Family option is designed for this scale?</p>
+          <div class="scenario-options" id="opts-d49q8">
+            <div class="scenario-option">A. A fleet of 1,000 Snowball Edge devices</div>
+            <div class="scenario-option">B. Snowmobile</div>
+            <div class="scenario-option">C. Snowcone</div>
+            <div class="scenario-option">D. DataSync with S3 Transfer Acceleration</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d49q8', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d49q8"><strong>Correct answer: B.</strong> Snowmobile is the exabyte-scale option, capable of moving up to 100 PB in a single engagement. A fleet of 1,000 Snowballs is operationally absurd at that scale.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q9.</strong> A team copies a running database's files onto a Snowball and ships it. After ingest, the target database fails integrity checks. What is the most likely cause?</p>
+          <div class="scenario-options" id="opts-d49q9">
+            <div class="scenario-option">A. The Snowball device was faulty</div>
+            <div class="scenario-option">B. The database was copied while running, producing an inconsistent snapshot</div>
+            <div class="scenario-option">C. The encryption keys were lost</div>
+            <div class="scenario-option">D. S3 rejected the data</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d49q9', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d49q9"><strong>Correct answer: B.</strong> The Snowball client copies files, not application state. Copying a running database produces an inconsistent snapshot. Quiesce the source or use a database-aware tool for the database portion.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q10.</strong> A company needs continuous, scheduled synchronization of an on-prem NFS share to Amazon EFS. Which service is the right fit?</p>
+          <div class="scenario-options" id="opts-d49q10">
+            <div class="scenario-option">A. Snowball Edge</div>
+            <div class="scenario-option">B. AWS DataSync</div>
+            <div class="scenario-option">C. Snowmobile</div>
+            <div class="scenario-option">D. AWS Snowcone</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d49q10', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d49q10"><strong>Correct answer: B.</strong> DataSync is purpose-built for automated, scheduled, validated file transfer between on-prem file systems and AWS storage. Snow devices are one-time physical transfers, not ongoing sync tools.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q11.</strong> A data center operator needs a graphical tool to manage file transfers to a Snowball Edge device without writing scripts. What should they use?</p>
+          <div class="scenario-options" id="opts-d49q11">
+            <div class="scenario-option">A. AWS CLI</div>
+            <div class="scenario-option">B. AWS OpsHub</div>
+            <div class="scenario-option">C. AWS Management Console only</div>
+            <div class="scenario-option">D. Snowball client with a custom wrapper</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d49q11', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d49q11"><strong>Correct answer: B.</strong> OpsHub is the graphical application that runs on a local workstation, connects to the device over the local network, and provides file transfer, job monitoring, and compute instance management.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q12.</strong> A company has 5 TB of data to move to S3 and a healthy 1 Gbps internet link. What is the most cost-effective approach?</p>
+          <div class="scenario-options" id="opts-d49q12">
+            <div class="scenario-option">A. Order a Snowball Edge device</div>
+            <div class="scenario-option">B. Transfer over the network using DataSync or the AWS CLI</div>
+            <div class="scenario-option">C. Order a Snowmobile</div>
+            <div class="scenario-option">D. Provision a Direct Connect circuit</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d49q12', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d49q12"><strong>Correct answer: B.</strong> At 1 Gbps, 5 TB transfers in well under a day. Ordering a Snowball would add weeks of logistics for an afternoon's work. The bandwidth math clearly favors the network.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q13.</strong> A company wants to migrate 2 PB of data and is cost-sensitive. Which approach is likely most cost-effective?</p>
+          <div class="scenario-options" id="opts-d49q13">
+            <div class="scenario-option">A. Snowmobile for the full 2 PB</div>
+            <div class="scenario-option">B. A fleet of Snowball Edge Storage Optimized devices</div>
+            <div class="scenario-option">C. DataSync over the internet</div>
+            <div class="scenario-option">D. S3 Transfer Acceleration</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d49q13', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d49q13"><strong>Correct answer: B.</strong> Snowmobile is technically capable of 2 PB, but a Snowball Edge fleet is usually the more cost-effective framing at that scale. Snowmobile is reserved for exabyte-scale or very-large-petabyte single engagements.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q14.</strong> A team is planning a Snowball migration and wants to know what to monitor during the copy phase. What is the most useful signal?</p>
+          <div class="scenario-options" id="opts-d49q14">
+            <div class="scenario-option">A. CloudWatch metrics from the Snowball device</div>
+            <div class="scenario-option">B. The Snowball client's local logs showing throughput and error rates</div>
+            <div class="scenario-option">C. S3 bucket metrics</div>
+            <div class="scenario-option">D. VPC Flow Logs</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d49q14', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d49q14"><strong>Correct answer: B.</strong> During the copy phase, the Snowball client's local logs are the primary signal for throughput and errors. The device is on-prem and not yet in AWS, so CloudWatch and S3 metrics are not yet relevant.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q15.</strong> A scenario describes a facility that needs persistent, low-latency access to on-prem data from AWS applications, with new data written continuously. Which service is the right fit?</p>
+          <div class="scenario-options" id="opts-d49q15">
+            <div class="scenario-option">A. Snowball Edge</div>
+            <div class="scenario-option">B. AWS Storage Gateway</div>
+            <div class="scenario-option">C. Snowmobile</div>
+            <div class="scenario-option">D. Snowcone</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d49q15', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d49q15"><strong>Correct answer: B.</strong> Storage Gateway is the persistent bridge for ongoing access to on-prem data. Snow devices are one-time physical transfers and cannot provide continuous access.</div>
+        </div>
+      </section>
+
+      <section class="doc-section" id="preview">
+        <h2 class="section-heading">Peek into Tomorrow</h2>
+        <div class="card card-purple">
+          <p>Everything in this lesson assumed the data eventually lands in an AWS Region, and that the only question was how to get it there. But a growing class of workloads cannot accept that assumption at all. If a hospital must keep patient data physically on-premises for regulatory reasons, or a factory floor needs single-digit-millisecond latency to industrial control systems, then shipping data to a Region and back is not a migration problem — it is an architectural disqualifier. The open question is whether AWS infrastructure can be extended to the workload's location rather than the other way around.</p>
+          <p>Tomorrow's topic answers that question with three different mechanisms that all push AWS closer to the workload, but for different reasons. Outposts extends AWS APIs into your own data center, which is the answer when a data residency requirement makes a Region unusable. Local Zones place AWS compute and storage in specific metro areas, which is the answer when latency matters but you do not want to own hardware. Wavelength embeds AWS compute at the telco 5G edge, which is the answer for ultra-low-latency mobile applications. The interesting part is that these three options look similar on a slide but are chosen for entirely different constraints, and the exam tests whether you can tell them apart.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="sources">
+        <h2 class="section-heading">Sources</h2>
+        <div class="card">
+          <ul class="source-list">
+            <li><a href="https://docs.aws.amazon.com/snowball/latest/developer-guide/what-is-snowball.html" target="_blank">AWS Snowball Developer Guide — What Is AWS Snowball?</a></li>
+            <li><a href="https://docs.aws.amazon.com/snowball/latest/developer-guide/snowball-edge.html" target="_blank">AWS Snowball Edge Device Options</a></li>
+            <li><a href="https://docs.aws.amazon.com/snowball/latest/developer-guide/using-ec2.html" target="_blank">Running Compute Instances on Snowball Edge</a></li>
+            <li><a href="https://docs.aws.amazon.com/snowball/latest/developer-guide/security.html" target="_blank">AWS Snowball Security and Encryption</a></li>
+            <li><a href="https://docs.aws.amazon.com/snowball/latest/developer-guide/opshub.html" target="_blank">AWS OpsHub for Snow Family</a></li>
+            <li><a href="https://aws.amazon.com/snowmobile/" target="_blank">AWS Snowmobile Product Page</a></li>
+            <li><a href="https://aws.amazon.com/snowcone/" target="_blank">AWS Snowcone Product Page</a></li>
+            <li><a href="https://docs.aws.amazon.com/whitepapers/latest/migration-best-practices/migration-best-practices.html" target="_blank">AWS Migration Best Practices Whitepaper</a></li>
+          </ul>
+        </div>
       </section>
       <div class="day-nav">
         <a href="day-048.html">&larr; Day 48: AWS Storage Gateway — File, Volume &amp; Tape Gateways</a>

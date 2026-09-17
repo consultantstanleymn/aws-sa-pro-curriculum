@@ -104,24 +104,277 @@
         <span class="pill pill-green">Phase 5: Practice Exams &amp; Exam Technique</span>
       </div>
       <h1 class="hero-title">Mock Exam 2 Distractor Analysis &amp; Weak Domain Review</h1>
-      <div class="reading-meta">&#128337; ~3 min read &middot; 1 services covered</div>
+      <div class="reading-meta">&#128337; ~58 min read &middot; 14 distractor patterns covered</div>
       <div class="services-grid">
         <span class="service-tag">Distractor Analysis</span>
+        <span class="service-tag">Domain 1: Org &amp; Governance</span>
+        <span class="service-tag">Domain 2: Resilient Architectures</span>
+        <span class="service-tag">Domain 3: Migration</span>
+        <span class="service-tag">Domain 4: Cost Control</span>
       </div>
       <div id="tracker"></div>
-      <section class="doc-section">
-        <h2 class="section-heading">Today's Concept</h2>
+      <section class="doc-section" id="recap">
+        <h2 class="section-heading">Recap</h2>
         <div class="card card-accent">
-          <p>Repeat the Day 58 distractor-analysis process for Mock Exam 2, tracking whether previously weak domains have improved or if new gaps emerged.</p>
-        </div>
-        <h3 class="sub-heading">Hands-on Lab / Practical Action (45 min)</h3>
-        <div class="card">
-          <p>For every incorrect answer, write out why the correct option is right and why each distractor is wrong; re-tag domain weak spots.</p>
+          <p>Mock Exam 2 was the same instrument as Mock Exam 1 — 75 questions, 180 minutes, no pausing — but it was not the same test, because the Day 59 and Day 60 deep reviews sat between them. That is the whole point of the score delta: if the targeted review of Domain 1 governance and Domain 2 resilience actually closed the gaps Day 58 flagged, the second score should move, and if it does not move, the review method itself is the suspect rather than the content. The trap here is treating a higher score as proof of understanding. A score can rise because the second exam happened to lean on topics you had just re-read, which is pattern familiarity rather than durable recall, and it can rise because you got faster at eliminating obviously wrong options without ever being able to justify the right one.</p>
+          <p>So the analysis below is deliberately not organized by score. It is organized by the wrong answers that keep surviving elimination, because those are the ones that will reappear on the real exam in a slightly different costume. Where Mock Exam 1's distractors clustered around governance ceilings and DR pattern selection, Mock Exam 2's cluster around service substitution — the option that names a real service doing roughly the right thing, but not the one the constraint actually demands.</p>
         </div>
       </section>
-      <section class="doc-section">
+      <section class="doc-section" id="patterns">
+        <h2 class="section-heading">Distractor Patterns From Mock Exam 2</h2>
+
+        <h3 class="sub-heading">Pattern 1: The SCP That Grants Access</h3>
+        <p>The most persistent wrong answer across both mocks is the one that treats a Service Control Policy as a source of permission. It shows up as an option like "attach an SCP granting s3:GetObject to the workload OU" or "create an SCP that allows the developer role to assume the cross-account role." It is tempting because SCPs are attached to OUs and accounts, they look like policies, and in a scenario where an account is being denied something, attaching a policy to the account feels like the direct fix. The tell that separates it from the correct answer is the word <em>grant</em>. An SCP can only ever subtract from what an identity policy already allows; it is a ceiling, not a floor, and no SCP in existence will make an action succeed that the identity's own IAM policy does not permit.</p>
+        <p>On Mock Exam 2 this appeared in a question about a developer whose s3:DeleteBucket call was failing despite an identity policy containing s3:*. The correct answer was that the OU-level SCP's explicit Deny wins, and the tempting distractor was to remove the SCP and rely on the identity policy. Removing the SCP would indeed make the call succeed, which is why the option is seductive — it is a real fix for the symptom. It is wrong because the scenario's stated requirement was that no one in that OU be able to delete buckets, so the SCP is the control being tested, not the obstacle. When a question describes a guardrail as a requirement, the answer that removes the guardrail is always wrong regardless of whether it resolves the immediate error.</p>
+
+        <h3 class="sub-heading">Pattern 2: The Management Account as a Workload Home</h3>
+        <p>Questions about where a new account or a new workload should live reliably offer the management account as an option, phrased innocuously — "create the account under the root," "deploy the aggregation Lambda in the management account," "run the audit tooling from the payer account." It is tempting because the management account genuinely does have visibility into every account in the organization, it holds the consolidated billing relationship, and it is the one account that can never be locked out by an SCP. That combination reads as convenient, and convenience is what the distractor is selling.</p>
+        <p>The tell is whether the workload touches production data or runs code that could be compromised. The management account is immune to SCPs, which means a compromised principal there has no organizational ceiling at all, and it is the account that holds the organization's root credentials and the ability to leave the organization entirely. Any option that places a workload, a log aggregation pipeline, or a security tool in the management account is wrong on blast-radius grounds even when it is technically feasible. The correct answers in this family put log archives in a dedicated Security OU account and audit tooling in the audit account, both of which Control Tower provisions for exactly this reason.</p>
+
+        <h3 class="sub-heading">Pattern 3: Route Propagation Across TGW Peering</h3>
+        <p>Transit Gateway peering questions almost always include an option that says routes will propagate automatically once the peering attachment is created. It is tempting because every other Transit Gateway attachment type does propagate — VPC attachments, VPN attachments, and Direct Connect gateway attachments all feed routes into the TGW route table without manual intervention, so the mental model "attach it and routing works" is correct everywhere except peering. The tell is the word <em>peering</em> in the attachment type, combined with a symptom of "the attachment is available but traffic does not flow."</p>
+        <p>Mock Exam 2 presented this as a cross-region scenario where spoke VPCs in two regions could not reach each other after a TGW peering attachment was created and verified as available. The tempting distractor was to check security groups, which is the reflexive first move for any connectivity failure and is almost never the answer in a TGW question. The correct answer was that peering attachments require static routes in each TGW route table, because propagation is not supported for that attachment type. If you find yourself reaching for security groups on a question that mentions Transit Gateway route tables, stop — the question is testing route table design, not packet filtering.</p>
+
+        <h3 class="sub-heading">Pattern 4: PrivateLink as a General-Purpose Network Bridge</h3>
+        <p>PrivateLink is the answer to a narrow question and the distractor to a broad one. The narrow question is "expose one specific service to many consumers without merging networks," and the broad question is "connect these VPCs so everything can talk to everything." Mock Exam 2 offered PrivateLink as an option in a scenario requiring bidirectional reachability between a shared-services VPC and three application VPCs, and it is tempting because PrivateLink is the cleanest-sounding option in the list — no CIDR planning, no route tables, no peering mesh. The tell is the scope of the requirement: if the scenario needs more than a specific service endpoint, or needs the consumer to initiate connections to arbitrary ports on arbitrary hosts, PrivateLink cannot express that.</p>
+        <p>The mirror-image distractor is Transit Gateway offered for a scenario that explicitly states overlapping CIDR ranges. TGW, like VPC peering, requires non-overlapping address space because it routes at the IP layer; PrivateLink sidesteps the problem entirely because the consumer only ever talks to an ENI in its own VPC. When a question volunteers that two networks both use 10.0.0.0/16, that detail is not flavor — it is the constraint that eliminates every IP-routing option and leaves exactly one answer.</p>
+
+        <h3 class="sub-heading">Pattern 5: Multi-AZ as a Read-Scaling Answer</h3>
+        <p>RDS Multi-AZ is the most reliably misused option in the database domain. It appears as the answer to any question containing the words "high availability," which is correct, and as the answer to any question containing the words "read traffic," which is not. It is tempting because Multi-AZ does create a second copy of the data in a second Availability Zone, and a second copy sounds like it should be able to serve reads. The tell is whether the scenario describes a standby or a replica: Multi-AZ's standby is not addressable, has no endpoint of its own, and exists solely to be promoted during a failure.</p>
+        <p>On Mock Exam 2 the scenario described a reporting workload saturating a primary database with read queries during business hours. The tempting distractor was to enable Multi-AZ, which would improve durability and failover time while doing nothing for the read contention. The correct answer was read replicas, with the caveat that promotion of a replica is asynchronous and therefore carries a data-loss window that Multi-AZ failover does not. Questions that ask for both read scaling and zero data loss on failover are testing whether you know that no single RDS configuration delivers both — you need replicas for reads and Multi-AZ for the synchronous standby, and the two are complementary rather than alternatives.</p>
+
+        <h3 class="sub-heading">Pattern 6: Aurora Global Database for Multi-Region Writes</h3>
+        <p>Aurora Global Database and DynamoDB Global Tables get swapped constantly, and the swap is always in the same direction: Aurora offered for a scenario that requires writes in more than one region simultaneously. It is tempting because Aurora Global Database is genuinely multi-region, genuinely fast to promote, and genuinely the right answer to a large family of disaster-recovery questions. The tell is the word <em>write</em> applied to more than one region at the same time. Aurora Global Database has a single writer region; secondary regions serve reads and can be promoted, but they do not accept writes while the primary is healthy.</p>
+        <p>Mock Exam 2's version of this described a global application where users in three regions needed low-latency writes to the same logical dataset. The tempting distractor was Aurora Global Database with a note about "multi-writer" — a phrase that exists in Aurora's documentation for a limited single-region multi-writer configuration and does not describe cross-region write capability. The correct answer was DynamoDB Global Tables, which is multi-active by design and resolves conflicts with last-writer-wins. If a scenario needs writes in two regions at once and the data is not relational in a way that forbids key-value modeling, the answer is almost never Aurora.</p>
+
+        <h3 class="sub-heading">Pattern 7: Reserved Instances When Flexibility Is the Requirement</h3>
+        <p>Cost questions in Mock Exam 2 leaned heavily on commitment instruments, and the recurring distractor was a Standard Reserved Instance offered for a workload whose defining characteristic was that its shape would change. It is tempting because RIs carry the largest headline discount and because the scenario usually mentions a steady, predictable baseline — which is exactly the condition under which a commitment is appropriate. The tell is any sentence describing planned change: a migration to Graviton, a move to a different region, a shift from EC2 to Fargate, or an expectation that the instance family will be re-evaluated after right-sizing.</p>
+        <p>Compute Savings Plans apply across instance families, regions, operating systems, and even to Lambda and Fargate usage, which makes them the correct answer whenever the scenario's constraint is flexibility rather than maximum discount. EC2 Instance Savings Plans sit between the two: cheaper than Compute Savings Plans but locked to a family and region. The exam pattern is to describe a workload that is steady today and explicitly expected to change, then offer all three plus Spot. Spot is eliminated by any mention of fault intolerance or stateful long-running work, and the RI is eliminated by the change language, leaving the Savings Plan tier that matches how much change was described.</p>
+
+        <h3 class="sub-heading">Pattern 8: Compute Optimizer and Trusted Advisor as Interchangeable</h3>
+        <p>Both services produce recommendations, and Mock Exam 2 offered them as substitutes for each other. It is tempting because Trusted Advisor does have a cost category and does flag idle resources, so "use Trusted Advisor to find oversized instances" sounds defensible. The tell is the specificity of the ask. Trusted Advisor's cost checks are coarse heuristics — idle load balancers, unassociated Elastic IPs, low-utilization instances against a fixed threshold. Compute Optimizer analyzes historical utilization per resource and returns a specific recommended instance type with a projected savings figure.</p>
+        <p>When a question asks which instances are oversized relative to their actual CPU and memory utilization, that is Compute Optimizer. When a question asks for a broad sweep of best-practice findings across cost, security, performance, and fault tolerance, that is Trusted Advisor. The distractor usually inverts these, offering Trusted Advisor for a right-sizing question or Compute Optimizer for a security-posture question, and the second inversion is the easier one to catch because Compute Optimizer has no security findings at all.</p>
+
+        <h3 class="sub-heading">Pattern 9: Backup and Restore for a Fifteen-Minute RTO</h3>
+        <p>The DR spectrum question is a fixture, and the distractor is always the cheapest pattern offered for a requirement that is too tight for it. Mock Exam 2 described a workload with a fifteen-minute RTO and a five-minute RPO, then offered Backup and Restore, Pilot Light, Warm Standby, and Multi-Site Active-Active. Backup and Restore is tempting because the scenario also mentioned cost sensitivity, and Backup and Restore is unambiguously the cheapest. The tell is the RTO number itself: restoring from backup means provisioning infrastructure, restoring data, and validating the application, which is measured in hours even when the backups are current.</p>
+        <p>Pilot Light is the correct answer at that RTO because core data is continuously replicated and a minimal footprint is already running, so failover is a scale-up rather than a build-out. The distinction between Pilot Light and Warm Standby is the one that trips people: Pilot Light runs a skeleton that must be scaled, Warm Standby runs a scaled-down but fully functional copy of the application that can absorb production traffic immediately. If the scenario says the standby can serve traffic without any scaling step, it is Warm Standby; if it says the standby needs to be scaled up first, it is Pilot Light.</p>
+
+        <h3 class="sub-heading">Pattern 10: Route 53 Failover Without a Readiness Check</h3>
+        <p>Route 53 health-check failover is a real mechanism and a frequent distractor when the scenario's requirement is stronger than DNS can deliver. It is tempting because it is simple, cheap, and genuinely automatic — a health check goes unhealthy, the failover record starts answering, and traffic moves. The tell is any requirement about the failover mechanism itself surviving a regional failure, or any requirement to prove the standby region is actually capable of serving traffic before you depend on it.</p>
+        <p>Route 53 Application Recovery Controller exists precisely because a health check tells you an endpoint is reachable, not that the region behind it has the capacity, configuration, and data currency to take production load. Mock Exam 2's version described a financial system where the failover control plane had to remain operable during a full regional outage, and the tempting distractor was Route 53 failover routing with health checks. The correct answer was ARC's routing control cluster, which is deliberately distributed so the failover mechanism does not share a failure domain with the thing it is failing over from, paired with readiness checks that continuously validate standby capacity.</p>
+
+        <h3 class="sub-heading">Pattern 11: MGN for a Database Migration</h3>
+        <p>Migration questions in Mock Exam 2 mixed server and database tooling freely, and the recurring distractor was Application Migration Service offered for a database workload. It is tempting because MGN does replicate continuously at the block level, which sounds like it should keep a database current, and because a database is technically running on a server. The tell is whether the scenario cares about the database as a database — schema, engine version, transactional consistency, or a change of engine. MGN replicates a machine; it has no concept of a transaction boundary, so a block-level copy of a running database's volumes is not a consistent database.</p>
+        <p>The correct tool depends on what is changing. Same engine, minimal downtime, keep the server: DMS with full load plus change data capture. Different engine, schema and stored procedures must be rewritten: Schema Conversion Tool for the schema and code, then DMS for the data. Files rather than database contents: DataSync. A whole server including its operating system and installed software: MGN. The exam rarely states the tool name; it states the constraint, and the constraint maps to exactly one of these four.</p>
+
+        <h3 class="sub-heading">Pattern 12: Snowball for a Small Ongoing Delta</h3>
+        <p>Offline transfer questions have a characteristic distractor: the physical device offered for a dataset that is small, or that changes continuously. It is tempting because the scenario usually opens with a large historical volume, which legitimately justifies a Snowball, and then the option that says "use Snowball for the migration" sounds like it is honoring that. The tell is the second half of the scenario — the ongoing daily delta, the requirement for near-real-time currency, or a dataset measured in gigabytes rather than terabytes.</p>
+        <p>The pattern the exam rewards is the hybrid one: Snowball Edge for the bulk historical dataset, then a network-based mechanism for the delta. Mock Exam 2 described 300TB of history plus roughly 50GB of daily change over a constrained link, and the tempting distractor was to transfer everything over the link, which would take months at that bandwidth. The correct answer paired Snowball for the history with DMS change data capture for the delta. Note the arithmetic the question is inviting you to do: a link measured in hundreds of megabits per second against a dataset measured in hundreds of terabytes is a mismatch you are expected to notice without being told the answer.</p>
+
+        <h3 class="sub-heading">Pattern 13: Composite Alarms as a Sensitivity Fix</h3>
+        <p>Observability questions in Mock Exam 2 included a family where the symptom was alarm fatigue and the tempting distractor was to raise the threshold or lengthen the evaluation period. It is tempting because it does reduce pages, and reducing pages is what the scenario asked for. The tell is whether the scenario also requires that genuine incidents still be caught. Raising a latency threshold suppresses the false positives and the true positives together, because a single metric cannot distinguish a self-resolving spike from the leading edge of an outage.</p>
+        <p>Composite alarms are the correct answer because they let you require correlated signals — high latency <em>and</em> elevated error rate — before paging, which is a different operation from making the individual alarm less sensitive. The distractor that catches people is deleting the noisy alarm outright, which is offered as "remove the alarm that is generating false positives." That is never correct in a scenario that describes a production system, because it trades noise for blindness. The general rule: when a question asks you to reduce alert volume without losing incident detection, the answer adds a correlation layer rather than moving a threshold.</p>
+
+        <h3 class="sub-heading">Pattern 14: Synthetics as a Replacement for Internal Metrics</h3>
+        <p>The last recurring pattern is a substitution in the opposite direction from the others: synthetic canaries offered as a replacement for server-side metrics rather than a complement to them. It is tempting because canaries are the more impressive-sounding tool and because the scenario usually describes a user-visible failure that internal metrics missed. The tell is whether the question asks you to diagnose <em>why</em> something is slow or merely to detect <em>that</em> it is broken.</p>
+        <p>Canaries probe from outside the infrastructure and will catch a broken login page, a DNS failure, or a CDN misconfiguration that every internal metric reports as healthy — that is their unique value and the reason they are the answer to "customers report a problem but our dashboards are green." They will not tell you which of twelve microservices is contributing the latency, because they see only the end-to-end response. That question belongs to X-Ray's service map. Mock Exam 2 offered canaries for a p99 latency attribution question and X-Ray for an outside-in availability question, and both were wrong for the same reason: the tool was matched to the symptom rather than to the question being asked.</p>
+      </section>
+      <section class="doc-section" id="lab">
+        <h2 class="section-heading">Hands-on Lab / Practical Action (45 min)</h2>
+        <div class="card card-green">
+          <p>Rebuild your Mock Exam 2 error log as a distractor ledger rather than a list of missed questions. The distinction matters because a missed-question list tells you what you got wrong once, while a distractor ledger tells you which wrong answers you are systematically drawn to, and the second is what predicts your real exam score. Open a spreadsheet with five columns: question number, the option you selected, the option that was correct, the specific word or phrase in the question that should have eliminated your selection, and the pattern number from the list above that the miss belongs to.</p>
+          <p>Work through every question you answered incorrectly, then go back and work through every question you answered correctly but flagged for review or arrived at by elimination rather than by knowing the answer. Those near-misses are the highest-value entries in the ledger, because a correct guess and a correct answer look identical in a score report and completely different on the next exam. For each near-miss, write the one sentence you would have needed to know to answer it directly. If you cannot write that sentence, the topic is not learned yet regardless of what the score says.</p>
+          <p>Once the ledger is populated, sort it by pattern number rather than by question order. A cluster of four misses under Pattern 5 is a different remediation than four misses spread across four patterns: the first is a single conceptual gap about what Multi-AZ does and does not do, and the second is a general reading-comprehension problem where you are not extracting the constraint from the scenario before evaluating options. Both are fixable, but only if you can tell them apart.</p>
+          <p>Then compare the pattern distribution against the one you built on Day 58 from Mock Exam 1. The comparison is the actual deliverable of this exercise. Patterns that appeared in both ledgers are the ones the Day 59 and Day 60 deep reviews failed to close, which means re-reading the same material a third time is unlikely to help — those need a different treatment, such as writing your own scenario questions that hinge on the same distinction. Patterns that appear only in the Mock Exam 2 ledger are new gaps, and they are the ones Day 63 and Day 64 should target.</p>
+          <p>Finish by re-tagging each ledger entry with its SAP-C02 domain and writing a one-line summary of your current weak spot per domain. Keep this to a single page. It becomes the input to the next two deep-review days and eventually folds into the personal cheat sheet you will build on Day 68, so write it in a form you will still be able to read in a week without the surrounding context.</p>
+        </div>
+      </section>
+      <section class="doc-section" id="quiz">
         <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
-        <p style="color:var(--text-muted);font-style:italic;">Detailed scenario questions for this day will be added when the curriculum reaches it — see the <a href="day-056.html">Day 56 DMS lesson</a> for the full format this site is building toward.</p>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q1.</strong> A developer in the Workloads/Prod OU has an identity policy granting s3:* but receives AccessDenied when calling DeleteBucket. The OU has an SCP that denies s3:DeleteBucket. A colleague suggests removing the SCP so the call succeeds. Why is that the wrong fix?</p>
+          <div class="scenario-options" id="opts-d62q1">
+            <div class="scenario-option">A. SCPs are evaluated before identity policies, so removing it changes nothing</div>
+            <div class="scenario-option">B. The SCP is the guardrail the scenario requires; removing it resolves the symptom by deleting the control being tested</div>
+            <div class="scenario-option">C. SCPs only apply to the management account, so the OU-level SCP is not the cause</div>
+            <div class="scenario-option">D. The bucket policy is overriding the SCP</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d62q1', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d62q1"><strong>Correct answer: B.</strong> The explicit Deny in the SCP is what is blocking the call, so removing it would work — which is exactly why it is the tempting distractor. It is wrong because the scenario states the guardrail as a requirement, and an answer that removes a required control is never correct.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q2.</strong> A security team wants a single account that aggregates CloudTrail logs from every account in the organization and cannot be modified by workload teams. Which placement is correct?</p>
+          <div class="scenario-options" id="opts-d62q2">
+            <div class="scenario-option">A. In the management account, since it already has visibility into every account</div>
+            <div class="scenario-option">B. In a dedicated Security OU account protected by SCPs that deny modification of logging resources</div>
+            <div class="scenario-option">C. In the Workloads/Prod OU so it is close to the data it audits</div>
+            <div class="scenario-option">D. Directly under the root, alongside the management account</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d62q2', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d62q2"><strong>Correct answer: B.</strong> Log-archive accounts belong in a dedicated Security OU with restrictive SCPs. The management account is tempting because of its visibility, but it is immune to SCPs and holds the organization's root credentials, so placing logging there maximizes blast radius.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q3.</strong> Two VPCs in different regions are attached to Transit Gateways that are peered with each other. The peering attachment shows Available, but the spoke VPCs cannot reach each other. What is the most likely cause?</p>
+          <div class="scenario-options" id="opts-d62q3">
+            <div class="scenario-option">A. Security groups are blocking inter-region traffic</div>
+            <div class="scenario-option">B. Peering attachments do not support route propagation, so static routes must be added to each TGW route table</div>
+            <div class="scenario-option">C. The TGWs are in different Availability Zones</div>
+            <div class="scenario-option">D. Inter-region TGW peering does not support traffic between spoke VPCs</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d62q3', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d62q3"><strong>Correct answer: B.</strong> Every other TGW attachment type propagates routes automatically, which is why the "attach and it works" model is tempting. Peering is the exception and requires manually created static routes in each TGW route table.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q4.</strong> A shared-services VPC must be reachable from three application VPCs, and each application VPC must also be able to initiate connections to arbitrary ports on hosts in the shared-services VPC. Two of the VPCs use overlapping CIDR ranges. Which connectivity option fits?</p>
+          <div class="scenario-options" id="opts-d62q4">
+            <div class="scenario-option">A. AWS PrivateLink interface endpoints for each service</div>
+            <div class="scenario-option">B. VPC peering between each application VPC and the shared-services VPC</div>
+            <div class="scenario-option">C. Transit Gateway with a shared route table</div>
+            <div class="scenario-option">D. None of these work with overlapping CIDRs</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d62q4', 3)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d62q4"><strong>Correct answer: D.</strong> PrivateLink is tempting because it is the one option that tolerates overlapping CIDRs, but it only exposes specific services on specific ports, not arbitrary host and port reachability. Peering and Transit Gateway both route at the IP layer and cannot work with overlapping address space, so the stated requirements are mutually unsatisfiable.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q5.</strong> A reporting workload is saturating a production RDS instance with read queries during business hours. The business also requires that a database failure cause no data loss. What should be configured?</p>
+          <div class="scenario-options" id="opts-d62q5">
+            <div class="scenario-option">A. Enable Multi-AZ, which adds a second copy of the data that can serve reads</div>
+            <div class="scenario-option">B. Add read replicas for the reporting traffic and keep Multi-AZ enabled for the synchronous standby</div>
+            <div class="scenario-option">C. Promote a read replica to primary and point reporting at the old primary</div>
+            <div class="scenario-option">D. Enable Multi-AZ and point reporting at the standby endpoint</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d62q5', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d62q5"><strong>Correct answer: B.</strong> Multi-AZ is tempting because it does create a second copy of the data, but that standby has no endpoint and cannot serve reads. Read replicas scale reads; Multi-AZ provides the synchronous standby. The two requirements need both mechanisms.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q6.</strong> A global application needs users in three regions to write to the same logical dataset with low latency, and the data model is a simple key-value access pattern. Which database configuration fits?</p>
+          <div class="scenario-options" id="opts-d62q6">
+            <div class="scenario-option">A. Aurora Global Database with multi-writer enabled in each region</div>
+            <div class="scenario-option">B. DynamoDB Global Tables</div>
+            <div class="scenario-option">C. RDS with cross-region read replicas</div>
+            <div class="scenario-option">D. Aurora Global Database with a read replica in each secondary region</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d62q6', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d62q6"><strong>Correct answer: B.</strong> Aurora Global Database is tempting because it is genuinely multi-region, but it has a single writer region — secondary regions serve reads only. DynamoDB Global Tables is multi-active by design with last-writer-wins conflict resolution.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q7.</strong> A company runs a steady-state production fleet today but expects to migrate to Graviton instances and consolidate regions within the next year. They want the largest discount that does not lock them out of those changes. What should they purchase?</p>
+          <div class="scenario-options" id="opts-d62q7">
+            <div class="scenario-option">A. Standard Reserved Instances for the current instance family and region</div>
+            <div class="scenario-option">B. Compute Savings Plans</div>
+            <div class="scenario-option">C. EC2 Instance Savings Plans</div>
+            <div class="scenario-option">D. Spot Instances with a mixed-instance Auto Scaling group</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d62q7', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d62q7"><strong>Correct answer: B.</strong> The RI is tempting because it carries the largest headline discount and the workload is steady today, but the stated plan to change instance family and region eliminates it. Compute Savings Plans apply across families, regions, and operating systems.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q8.</strong> A company suspects many EC2 instances are oversized relative to their actual CPU and memory utilization but does not know which ones. Which service returns specific right-sizing recommendations with projected savings?</p>
+          <div class="scenario-options" id="opts-d62q8">
+            <div class="scenario-option">A. AWS Trusted Advisor cost checks</div>
+            <div class="scenario-option">B. AWS Compute Optimizer</div>
+            <div class="scenario-option">C. AWS Config conformance packs</div>
+            <div class="scenario-option">D. CloudWatch anomaly detection alarms</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d62q8', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d62q8"><strong>Correct answer: B.</strong> Trusted Advisor is tempting because it does have a cost category, but its checks are coarse heuristics against fixed thresholds. Compute Optimizer analyzes historical utilization per resource and recommends a specific instance type.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q9.</strong> A workload requires an RTO of 15 minutes and an RPO of 5 minutes, and the business wants to minimize standing infrastructure cost. Which DR pattern fits?</p>
+          <div class="scenario-options" id="opts-d62q9">
+            <div class="scenario-option">A. Backup and Restore</div>
+            <div class="scenario-option">B. Pilot Light</div>
+            <div class="scenario-option">C. Warm Standby</div>
+            <div class="scenario-option">D. Multi-Site Active-Active</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d62q9', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d62q9"><strong>Correct answer: B.</strong> Backup and Restore is tempting because the scenario mentions cost sensitivity and it is the cheapest option, but restoring infrastructure and data is measured in hours, not fifteen minutes. Pilot Light keeps core data replicated and a minimal footprint running.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q10.</strong> A critical financial system needs a failover mechanism that remains operable during a full regional outage, plus continuous proof that the standby region has the capacity to take production traffic. What should be configured?</p>
+          <div class="scenario-options" id="opts-d62q10">
+            <div class="scenario-option">A. Route 53 failover routing with health checks on the primary endpoint</div>
+            <div class="scenario-option">B. Route 53 Application Recovery Controller with readiness checks and a routing control cluster</div>
+            <div class="scenario-option">C. A CloudWatch alarm that invokes a Lambda to update DNS records</div>
+            <div class="scenario-option">D. AWS Global Accelerator with endpoint groups in both regions</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d62q10', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d62q10"><strong>Correct answer: B.</strong> Route 53 health-check failover is tempting because it is simple and automatic, but a health check only proves an endpoint is reachable. ARC's routing control cluster is distributed so the failover mechanism does not share a failure domain with the primary region, and readiness checks validate standby capacity.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q11.</strong> A company must migrate a self-managed Oracle database to Aurora PostgreSQL with minimal downtime. The schema includes stored procedures and functions. Which tool combination is required?</p>
+          <div class="scenario-options" id="opts-d62q11">
+            <div class="scenario-option">A. AWS Application Migration Service for the database server</div>
+            <div class="scenario-option">B. AWS Schema Conversion Tool for schema and code, then AWS DMS for the data</div>
+            <div class="scenario-option">C. AWS DataSync to copy the database files to S3</div>
+            <div class="scenario-option">D. AWS DMS alone, since it handles both schema and data</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d62q11', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d62q11"><strong>Correct answer: B.</strong> MGN is tempting because it replicates continuously at the block level, but it has no concept of a transaction boundary and cannot convert an engine. SCT handles the heterogeneous schema and procedural code; DMS moves the data.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q12.</strong> A migration must move 300TB of historical data plus roughly 50GB of daily change, over a link capped at 500 Mbps. What approach is appropriate?</p>
+          <div class="scenario-options" id="opts-d62q12">
+            <div class="scenario-option">A. Transfer everything over the 500 Mbps link</div>
+            <div class="scenario-option">B. Use Snowball Edge for the historical dataset, then DMS change data capture for the ongoing delta</div>
+            <div class="scenario-option">C. Use Snowball Edge for both the history and the daily delta</div>
+            <div class="scenario-option">D. Wait for the link to be upgraded before starting</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d62q12', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d62q12"><strong>Correct answer: B.</strong> Using Snowball for everything is tempting because the scenario opens with a large historical volume, but a physical device cannot track a continuously changing delta. The hybrid pattern pairs offline bulk transfer with network-based CDC.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q13.</strong> On-call engineers are paged repeatedly by isolated latency spikes that self-resolve, but the team still needs to catch genuine incidents. What should be configured?</p>
+          <div class="scenario-options" id="opts-d62q13">
+            <div class="scenario-option">A. Raise the latency alarm threshold</div>
+            <div class="scenario-option">B. A composite alarm requiring both the latency alarm and the error-rate alarm to be in ALARM</div>
+            <div class="scenario-option">C. Delete the latency alarm and rely on error-rate alarms</div>
+            <div class="scenario-option">D. Extend the alarm evaluation period to 24 hours</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d62q13', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d62q13"><strong>Correct answer: B.</strong> Raising the threshold is tempting because it does reduce pages, but it suppresses true positives along with false ones. Composite alarms add a correlation layer so only multi-symptom incidents page.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q14.</strong> Customers report that the login page is broken, but every internal CloudWatch metric reports healthy servers. Which monitoring capability would have caught this?</p>
+          <div class="scenario-options" id="opts-d62q14">
+            <div class="scenario-option">A. AWS X-Ray distributed tracing</div>
+            <div class="scenario-option">B. CloudWatch Synthetics canaries exercising the login flow from outside the infrastructure</div>
+            <div class="scenario-option">C. VPC Flow Logs</div>
+            <div class="scenario-option">D. CloudWatch Logs Insights queries against application logs</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d62q14', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d62q14"><strong>Correct answer: B.</strong> X-Ray is tempting because it is the more sophisticated tracing tool, but it instruments requests that reach your services. A canary probes from outside and catches DNS, CDN, and front-end failures that internal metrics cannot see.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q15.</strong> A microservices application has rising p99 latency, but it is unclear which of twelve services is responsible. Which tool isolates the bottleneck?</p>
+          <div class="scenario-options" id="opts-d62q15">
+            <div class="scenario-option">A. CloudWatch Synthetics canaries</div>
+            <div class="scenario-option">B. AWS X-Ray, using the service map to identify the slow hop</div>
+            <div class="scenario-option">C. AWS Config rules on the service resources</div>
+            <div class="scenario-option">D. CloudWatch composite alarms across all twelve services</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d62q15', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d62q15"><strong>Correct answer: B.</strong> Canaries are tempting because they are the outside-in tool, but they only see the end-to-end response and cannot attribute latency to a specific hop. X-Ray's service map shows per-hop latency across the full call chain.</div>
+        </div>
+      </section>
+      <section class="doc-section" id="preview">
+        <h2 class="section-heading">Preview</h2>
+        <div class="card card-purple">
+          <p>Everything above is organized by distractor pattern, which is useful for recognizing a wrong answer but says nothing about whether the underlying topic is actually understood. The ledger you built in the lab tells you which patterns you keep falling for; it does not tell you whether the migration tooling behind Pattern 11 and Pattern 12 is solid or whether those two misses were reading errors on questions you could otherwise answer. That distinction is the open question heading into the next review day, and it is not answerable from a score report.</p>
+          <p>Day 63 targets Domain 3 directly — the 7 Rs, Application Migration Service, DMS and Schema Conversion Tool, DataSync, the Snow Family, and the bandwidth planning that connects them. The test there is not whether you can name the tools but whether you can derive the tool from a stated constraint: what is changing, how much data is moving, how much downtime is tolerable, and whether the source is a server, a database, or a file share. If the Pattern 11 and Pattern 12 misses were conceptual, that derivation will still fail under a fresh scenario. If they were reading errors, it will not.</p>
+        </div>
+      </section>
+      <section class="doc-section" id="sources">
+        <h2 class="section-heading">Sources</h2>
+        <div class="card">
+          <ul class="source-list">
+            <li><a href="https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_policies_scps.html" target="_blank">AWS Organizations — Service control policies (SCPs)</a></li>
+            <li><a href="https://docs.aws.amazon.com/vpc/latest/tgw/tgw-peering.html" target="_blank">Amazon VPC — Transit Gateway peering attachments</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Concepts.MultiAZ.html" target="_blank">Amazon RDS — Multi-AZ deployments and read replicas</a></li>
+            <li><a href="https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/recovery-controller.html" target="_blank">Amazon Route 53 — Application Recovery Controller</a></li>
+            <li><a href="https://docs.aws.amazon.com/dms/latest/userguide/CHAP_BestPractices.html" target="_blank">AWS DMS — Migration best practices and CDC</a></li>
+          </ul>
+        </div>
       </section>
       <div class="day-nav">
         <a href="day-061.html">&larr; Day 61: Full-Length Mock Exam 2 — 75 Questions Timed</a>

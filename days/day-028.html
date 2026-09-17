@@ -104,7 +104,7 @@
         <span class="pill pill-green">Phase 2: Compute, Containers &amp; Global Databases</span>
       </div>
       <h1 class="hero-title">Week Synthesis — Database Selection Matrix &amp; Scenario Drills</h1>
-      <div class="reading-meta">&#128337; ~3 min read &middot; 4 services covered</div>
+      <div class="reading-meta">&#128337; ~32 min read &middot; 4 services covered</div>
       <div class="services-grid">
         <span class="service-tag">Aurora</span>
         <span class="service-tag">DynamoDB</span>
@@ -112,30 +112,414 @@
         <span class="service-tag">S3</span>
       </div>
       <div id="tracker"></div>
-      <section class="doc-section">
-        <h2 class="section-heading">Today's Concept</h2>
+      <section class="doc-section" id="recap">
+        <h2 class="section-heading">Week 4 in Review</h2>
         <div class="card card-accent">
-          <p>Consolidate database/storage selection: relational vs key-value vs cache, consistency models, and global replication trade-offs (Aurora Global DB vs DynamoDB Global Tables). This is a heavily tested exam domain.</p>
-        </div>
-        <h3 class="sub-heading">Hands-on Lab / Practical Action (45 min)</h3>
-        <div class="card">
-          <p>Complete 15 scenario questions requiring justification of a database choice against stated latency, consistency, and scale requirements.</p>
+          <p>Week 4 moved through the data tier in the order the exam tends to test it: Aurora's storage-layer replication, RDS Multi-AZ versus read replicas, DynamoDB partitioning and capacity modes, Global Tables and DAX, S3 storage classes and lifecycle, and finally ElastiCache's Redis-versus-Memcached split. The through-line is that every one of these services is a different answer to the same question — where does the authoritative copy of the data live, and how does a second copy get made? Aurora answers it by replicating at the storage layer six ways across three Availability Zones, which is why a Global Database secondary can be promoted in under a minute without replaying binlogs. DynamoDB answers it by hashing the partition key and letting Global Tables replicate multi-active with last-writer-wins conflict resolution. S3 answers it with storage classes that trade retrieval latency for cost, plus CRR and SRR for asynchronous object copies. ElastiCache answers it by not being authoritative at all — Redis replicates and persists, Memcached does neither, and that distinction is the whole reason a session store scenario points at Redis.</p>
+          <p>The week also built a vocabulary of failure modes that recur in scenario questions: hot partitions from low-cardinality keys, read replicas that scale reads but lose data on promotion, and cache nodes that vanish without replication. This synthesis day pulls those threads into decision matrices rather than re-teaching any single service.</p>
         </div>
       </section>
-      <section class="doc-section">
-        <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
-        
-      <div class="scenario-card">
-        <p class="scenario-question"><strong>Q1.</strong> An application needs single-digit-millisecond reads/writes at massive unpredictable scale with a flexible schema, across multiple regions actively writing. What fits best?</p>
-        <div class="scenario-options" id="opts-d28q0">
+
+      <section class="doc-section" id="matrix">
+        <h2 class="section-heading">The Core Selection Matrix</h2>
+        <p>Almost every data-tier scenario on SAP-C02 reduces to a small number of stated constraints: access pattern, consistency requirement, scale shape, and geographic spread. The services in this week's set are not interchangeable, and the exam is designed so that exactly one of them satisfies all four constraints simultaneously while the others fail on at least one. The fastest way to answer these questions is to read the scenario for the constraint that eliminates the most options, then verify the survivor against the remaining constraints rather than evaluating every service against every requirement.</p>
+        <p>The most common eliminator is the access pattern. If the scenario describes joins, multi-row transactions, or an existing relational schema that the team does not want to rewrite, the answer is in the Aurora/RDS family and DynamoDB is out regardless of how the scale language reads. If the scenario describes key-value lookups at very high request rates with a flexible or evolving schema, DynamoDB is the answer and the relational options are distractors. If the scenario describes repeated reads of the same small set of items and explicitly mentions latency in microseconds or offloading read pressure from a database, the answer is a cache — and the cache is never the system of record, which is the trap most of these questions set.</p>
+        <p>The second eliminator is geographic write scope. A scenario that says multiple regions must accept writes simultaneously rules out Aurora Global Database, because Aurora Global DB has a single writer region even in its multi-writer configuration, which is scoped within one region. DynamoDB Global Tables is the only service in this week's set that accepts writes in every replica region by default. A scenario that says one region writes and other regions need low-latency reads is the opposite case, and there Aurora Global Database's sub-second storage-layer replication is the intended answer.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Constraint in the scenario</th><th>Service that satisfies it</th><th>Why the others fail</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Relational schema, joins, ACID transactions</td><td>Aurora or RDS</td><td>DynamoDB has no joins; ElastiCache is not durable; S3 is object storage</td></tr>
+              <tr><td>Key-value access at very high, unpredictable request rates</td><td>DynamoDB (on-demand)</td><td>Relational engines need capacity planning; caches are not authoritative</td></tr>
+              <tr><td>Microsecond reads of a hot, small item set</td><td>DAX or ElastiCache</td><td>DynamoDB itself is single-digit milliseconds; S3 is tens of milliseconds</td></tr>
+              <tr><td>Multi-region simultaneous writes</td><td>DynamoDB Global Tables</td><td>Aurora Global DB has one writer region; RDS replicas are read-only</td></tr>
+              <tr><td>Cross-region reads with sub-second lag, single writer</td><td>Aurora Global Database</td><td>RDS cross-region replicas lag more and are harder to promote</td></tr>
+              <tr><td>Cheap retention of rarely read objects for years</td><td>S3 Glacier Deep Archive</td><td>Database storage classes do not exist; ElastiCache is volatile</td></tr>
+              <tr><td>Session state that must survive a node failure</td><td>ElastiCache for Redis with replicas</td><td>Memcached has no replication; DynamoDB works but is usually overkill</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="doc-section" id="consistency">
+        <h2 class="section-heading">Consistency Models Across the Week</h2>
+        <p>Consistency is the constraint candidates most often skip past, and it is where the week's services diverge most sharply. Aurora and RDS present a single-writer, strongly consistent primary; reads from a read replica are eventually consistent and can lag, which is why a scenario that says "a user updates a record and must immediately see the change" cannot be answered with a read replica. Aurora Global Database keeps the primary strongly consistent and makes the secondary region eventually consistent with typical sub-second lag, so a scenario that requires read-your-writes in the secondary region is a trap — the correct answer is to route that user to the primary region.</p>
+        <p>DynamoDB offers eventually consistent reads by default and strongly consistent reads as an option that costs twice the read capacity units. Global Tables replicate asynchronously and resolve conflicts with last-writer-wins, which means the service is eventually consistent across regions by construction. A scenario that demands a globally consistent counter or a globally unique constraint is not solvable with Global Tables alone, and the exam expects you to recognize that rather than reach for the service because it says "global."</p>
+        <p>S3 provides read-after-write consistency for new object PUTs and eventual consistency for overwrite PUTs and DELETEs in the general case, with strong consistency for list operations. ElastiCache inherits whatever the backing store provides and adds its own staleness window on top, which is why cache invalidation strategy is an application concern rather than a service feature. The practical rule for the exam is that any scenario using the word "immediately" or "must reflect" is testing whether you know which of these layers introduces a lag.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Service</th><th>Default read consistency</th><th>Cross-region behavior</th><th>Scenario phrase that points here</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Aurora / RDS primary</td><td>Strong</td><td>Not applicable (single region)</td><td>"must read its own writes"</td></tr>
+              <tr><td>RDS read replica</td><td>Eventually consistent</td><td>Cross-region replica lags further</td><td>"scale read throughput"</td></tr>
+              <tr><td>Aurora Global Database</td><td>Strong in primary, eventual in secondary</td><td>Sub-second storage-layer replication</td><td>"secondary region readable, fast promotion"</td></tr>
+              <tr><td>DynamoDB</td><td>Eventually consistent (strong optional, 2x RCU)</td><td>Global Tables: last-writer-wins</td><td>"multi-region writes"</td></tr>
+              <tr><td>DAX</td><td>Eventually consistent (item cache TTL)</td><td>Per-region cache</td><td>"microsecond reads of hot items"</td></tr>
+              <tr><td>S3</td><td>Strong for new PUTs and LIST</td><td>CRR/SRR are asynchronous</td><td>"durable object retention"</td></tr>
+              <tr><td>ElastiCache</td><td>Whatever the app writes; TTL-bounded</td><td>Global Datastore for Redis only</td><td>"offload repeated reads"</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="doc-section" id="global">
+        <h2 class="section-heading">Global Replication: Aurora Global DB vs DynamoDB Global Tables</h2>
+        <p>This is the single most-tested comparison in the week, and the two services are frequently offered as the only two plausible answers in the same question. The distinction is not about which is faster or newer; it is about write topology. Aurora Global Database is a single-writer, multi-reader topology. One region owns the primary cluster and accepts all writes; secondary regions hold read-only replicas that receive changes through the storage layer rather than through binlog shipping. That design is what produces the sub-second replication lag and the ability to promote a secondary to primary in under a minute, and it is also what makes the service unsuitable for a scenario where two regions must both accept writes.</p>
+        <p>DynamoDB Global Tables is a multi-active topology. Every replica region accepts writes, and the service reconciles concurrent updates to the same item using last-writer-wins semantics based on the timestamp of the write. That makes it the right answer for active-active applications where users in each region write locally, and the wrong answer for anything that requires a globally consistent invariant. A scenario describing a globally unique username registry or a financial ledger that must never double-count is not a Global Tables scenario, even though the words "global" and "multi-region" appear.</p>
+        <p>The cost and operational profiles differ in ways the exam also probes. Aurora Global Database requires you to manage a primary and at least one secondary cluster, and failover is a deliberate, managed operation — which is why Route 53 Application Recovery Controller and readiness checks pair naturally with it. Global Tables requires no failover operation at all, because there is nothing to fail over to; the tradeoff is that you have accepted eventual consistency and conflict resolution as permanent properties of the system. When a scenario asks for the lowest possible RTO with the least operational ceremony, Global Tables wins. When it asks for a relational schema with a fast, controlled regional failover, Aurora Global Database wins.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Dimension</th><th>Aurora Global Database</th><th>DynamoDB Global Tables</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Write topology</td><td>Single writer region</td><td>Multi-active, all regions write</td></tr>
+              <tr><td>Replication mechanism</td><td>Storage layer, not binlog</td><td>Service-managed item replication</td></tr>
+              <tr><td>Typical replication lag</td><td>Sub-second</td><td>Sub-second, region dependent</td></tr>
+              <tr><td>Conflict resolution</td><td>Not applicable (one writer)</td><td>Last-writer-wins</td></tr>
+              <tr><td>Failover action required</td><td>Yes — managed promotion</td><td>None — writes already local</td></tr>
+              <tr><td>Schema</td><td>Relational, joins, transactions</td><td>Key-value, flexible schema</td></tr>
+              <tr><td>Best-fit scenario phrase</td><td>"relational, fast regional failover"</td><td>"active-active, users write locally"</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="doc-section" id="cache-storage">
+        <h2 class="section-heading">Caching and Object Storage Boundaries</h2>
+        <p>ElastiCache and S3 sit at opposite ends of the data-tier spectrum, and both appear in scenarios as supporting cast rather than as the primary answer. ElastiCache exists to absorb read pressure and reduce latency for repeated access to the same data, and the exam tests two things about it: whether you chose Redis or Memcached, and whether you correctly refused to treat the cache as durable storage. Redis is the answer whenever the scenario mentions replication, persistence, failover, pub/sub, or complex data structures such as sorted sets. Memcached is the answer when the scenario describes a simple, horizontally scaled, stateless cache where losing a node's contents is acceptable and multi-threading matters more than durability.</p>
+        <p>S3 appears in data-tier scenarios as the durable, cheap, effectively unbounded store for objects that do not need to be queried relationally. The exam tests storage class selection against retrieval-time and availability requirements, and lifecycle rules as the mechanism that automates transitions. The recurring trap is One Zone-IA: it is cheaper than Standard-IA, but it does not survive the loss of an Availability Zone, so any scenario that mentions durability across AZs or compliance retention rules it out. Glacier Deep Archive is the correct answer for the lowest-cost class with a retrieval time measured in hours, and it is replicated across multiple AZs, which is exactly why it beats One Zone-IA in those scenarios.</p>
+        <p>The boundary between these two and the databases is worth stating plainly. A cache is never the system of record, and an object store is never a query engine. Scenarios that describe a cache as the authoritative source, or that ask you to run relational queries directly against S3, are testing whether you will reject the premise rather than pick the closest-sounding service.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Requirement</th><th>Pick</th><th>Reject</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Session store surviving node failure</td><td>ElastiCache for Redis with replicas</td><td>Memcached (no replication)</td></tr>
+              <tr><td>Simple stateless cache, multi-threaded</td><td>ElastiCache for Memcached</td><td>Redis (unnecessary complexity)</td></tr>
+              <tr><td>Microsecond reads of hot DynamoDB items</td><td>DAX</td><td>ElastiCache (requires app-level cache logic)</td></tr>
+              <tr><td>Lowest cost, hours-long retrieval, multi-AZ durability</td><td>S3 Glacier Deep Archive</td><td>S3 One Zone-IA (single AZ)</td></tr>
+              <tr><td>Automatic cost optimization across access patterns</td><td>S3 Intelligent-Tiering</td><td>Manual lifecycle rules</td></tr>
+              <tr><td>Cross-region object copies for DR</td><td>S3 Cross-Region Replication</td><td>Lifecycle transitions (same region only)</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="doc-section" id="lab">
+        <h2 class="section-heading">Hands-on Lab / Practical Action (45 min)</h2>
+        <div class="card card-green">
+          <p>The lab for a synthesis day is a decision drill rather than a build. Take the seven-row selection matrix above and, for each row, write a two-sentence scenario that would force that row's answer and a one-sentence distractor that a careless reader would pick instead. The goal is to practice reading constraints rather than recalling service features, because that is the skill the exam actually measures.</p>
+          <p>Start with the multi-region write case, since it is the highest-yield. Write a scenario in which an application serves users in two regions and each region must accept writes locally with sub-second replication. Then write the near-miss version: the same application, but only one region accepts writes while the other serves reads with sub-second lag. The first scenario points at DynamoDB Global Tables; the second points at Aurora Global Database. If you can articulate why the two scenarios differ in one sentence each, you have the comparison locked in.</p>
+          <p>Next, build the cache-versus-database drill. Write a scenario describing a product catalog read thousands of times per second with occasional updates, and decide whether the answer is DAX, ElastiCache for Redis, or DynamoDB with provisioned capacity. Then change one constraint — say, the catalog must support sorted-set queries for a leaderboard — and observe how the answer shifts to Redis. The point is to feel how a single constraint change moves the answer across services.</p>
+          <p>Finally, do the storage-class drill. Write four scenarios that differ only in retrieval-time tolerance and AZ-durability requirements, and map each to a storage class: Standard, Standard-IA, One Zone-IA, and Glacier Deep Archive. Pay attention to the One Zone-IA case, because it is the one where a careless reader picks the cheaper option and misses the durability requirement. Finish by writing the lifecycle rule that would automate the transitions you chose, expressed as day thresholds.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="quiz">
+        <h2 class="section-heading">Mixed Scenario Quiz (25 Questions)</h2>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q1.</strong> An application needs single-digit-millisecond reads and writes at massive, unpredictable scale with a flexible schema, and users in three regions must all be able to write locally. What fits best?</p>
+          <div class="scenario-options" id="opts-d28q1">
             <div class="scenario-option">A. Aurora Global Database</div>
             <div class="scenario-option">B. DynamoDB Global Tables</div>
             <div class="scenario-option">C. RDS with cross-region read replicas</div>
-            <div class="scenario-option">D. ElastiCache alone as the system of record</div>
+            <div class="scenario-option">D. ElastiCache for Redis as the system of record</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d28q1', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d28q1"><strong>Correct answer: B.</strong> DynamoDB Global Tables provide multi-active, multi-region writes at single-digit-millisecond latency with a flexible schema. Aurora Global DB has a single writer region, RDS replicas are read-only, and a cache is never the system of record.</div>
         </div>
-        <button class="scenario-reveal-btn" onclick="revealAnswer('d28q0', 1)">Reveal Answer</button>
-        <div class="scenario-explanation" id="exp-d28q0"><strong>Correct answer: B.</strong> DynamoDB Global Tables provide multi-active, multi-region writes at single-digit-millisecond latency with a flexible schema — a fit that Aurora Global DB (single writer region) and RDS replicas don't match.</div>
-      </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q2.</strong> A relational workload runs on Aurora in us-east-1 and needs a secondary region that serves reads with sub-second lag and can be promoted to primary in under a minute during a regional outage. What should be used?</p>
+          <div class="scenario-options" id="opts-d28q2">
+            <div class="scenario-option">A. RDS Multi-AZ with a cross-region read replica</div>
+            <div class="scenario-option">B. Aurora Global Database</div>
+            <div class="scenario-option">C. DynamoDB Global Tables</div>
+            <div class="scenario-option">D. S3 Cross-Region Replication of database backups</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d28q2', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d28q2"><strong>Correct answer: B.</strong> Aurora Global Database replicates at the storage layer with typical sub-second lag and supports managed promotion of a secondary region in under a minute, which is the specific RTO/RPO profile described.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q3.</strong> A DynamoDB table uses a status attribute with five possible values as its partition key and is throttling under heavy write volume even though the table's provisioned capacity is far from exhausted. What is the cause?</p>
+          <div class="scenario-options" id="opts-d28q3">
+            <div class="scenario-option">A. The table needs Global Tables enabled</div>
+            <div class="scenario-option">B. Low-cardinality partition keys create hot partitions, and each partition has its own throughput ceiling</div>
+            <div class="scenario-option">C. On-demand capacity mode is required for high write volume</div>
+            <div class="scenario-option">D. DynamoDB does not support sustained high write volume</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d28q3', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d28q3"><strong>Correct answer: B.</strong> Partition-level throughput is capped independently of table-level capacity, so a key with only five distinct values concentrates writes onto a handful of partitions and throttles regardless of overall provisioned capacity.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q4.</strong> A gaming leaderboard reads the same small set of top-ranked items thousands of times per second and needs microsecond read latency. What should sit in front of DynamoDB?</p>
+          <div class="scenario-options" id="opts-d28q4">
+            <div class="scenario-option">A. Amazon DAX</div>
+            <div class="scenario-option">B. CloudFront caching of API responses</div>
+            <div class="scenario-option">C. An RDS read replica</div>
+            <div class="scenario-option">D. S3 with Transfer Acceleration</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d28q4', 0)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d28q4"><strong>Correct answer: A.</strong> DAX is a managed, DynamoDB-API-compatible in-memory cache purpose-built to reduce read latency for hot items to microseconds without application-level cache logic.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q5.</strong> A session store must survive the failure of a cache node without losing session data and must fail over automatically. Which configuration fits?</p>
+          <div class="scenario-options" id="opts-d28q5">
+            <div class="scenario-option">A. ElastiCache for Memcached with auto discovery</div>
+            <div class="scenario-option">B. ElastiCache for Redis with cluster mode enabled and replicas per shard</div>
+            <div class="scenario-option">C. ElastiCache for Memcached with multiple nodes</div>
+            <div class="scenario-option">D. ElastiCache for Redis without replicas</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d28q5', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d28q5"><strong>Correct answer: B.</strong> Only Redis supports replication and automatic failover. Memcached has no replication, so a node failure means losing the keys that node held, and Redis without replicas has the same problem.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q6.</strong> An object is rarely accessed, must survive the loss of an entire Availability Zone, and a 12-hour retrieval time is acceptable. Which storage class is the lowest-cost fit?</p>
+          <div class="scenario-options" id="opts-d28q6">
+            <div class="scenario-option">A. S3 One Zone-IA</div>
+            <div class="scenario-option">B. S3 Glacier Deep Archive</div>
+            <div class="scenario-option">C. S3 Glacier Flexible Retrieval (Bulk)</div>
+            <div class="scenario-option">D. S3 Standard-IA</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d28q6', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d28q6"><strong>Correct answer: B.</strong> Glacier Deep Archive is the lowest-cost class and is replicated across multiple AZs, so it survives an AZ loss unlike One Zone-IA, and its retrieval times of up to 12 hours match the stated tolerance.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q7.</strong> A team needs to upgrade an RDS MySQL instance from 5.7 to 8.0 with minimal risk and a fast rollback path. What should they use?</p>
+          <div class="scenario-options" id="opts-d28q7">
+            <div class="scenario-option">A. An in-place major version upgrade during a maintenance window</div>
+            <div class="scenario-option">B. RDS Blue/Green Deployments to validate a synchronized green environment before switchover</div>
+            <div class="scenario-option">C. Promotion of a read replica</div>
+            <div class="scenario-option">D. A Multi-AZ failover</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d28q7', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d28q7"><strong>Correct answer: B.</strong> Blue/Green Deployments create a fully synchronized green environment on the new version that can be validated before a fast switchover, which is the low-risk path with a rollback option.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q8.</strong> A read-heavy reporting workload is saturating the primary Aurora instance. The reports tolerate data that is a few seconds stale. What is the appropriate change?</p>
+          <div class="scenario-options" id="opts-d28q8">
+            <div class="scenario-option">A. Add Aurora read replicas and point the reporting workload at them</div>
+            <div class="scenario-option">B. Convert the cluster to Multi-AZ</div>
+            <div class="scenario-option">C. Enable DynamoDB Accelerator in front of Aurora</div>
+            <div class="scenario-option">D. Move the reports to S3 Select</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d28q8', 0)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d28q8"><strong>Correct answer: A.</strong> Read replicas exist to scale read throughput. Multi-AZ provides HA with a standby that does not serve reads, and DAX is specific to DynamoDB.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q9.</strong> A globally distributed application requires a globally unique username registry where two users can never claim the same name, even if they register in different regions at the same moment. Which approach is correct?</p>
+          <div class="scenario-options" id="opts-d28q9">
+            <div class="scenario-option">A. DynamoDB Global Tables with last-writer-wins conflict resolution</div>
+            <div class="scenario-option">B. A single-region strongly consistent store for the uniqueness check, with regional caches for reads</div>
+            <div class="scenario-option">C. ElastiCache for Redis Global Datastore</div>
+            <div class="scenario-option">D. S3 with cross-region replication and conditional writes</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d28q9', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d28q9"><strong>Correct answer: B.</strong> Global Tables resolves concurrent writes with last-writer-wins, which cannot enforce a global uniqueness invariant. A single strongly consistent authority for the check is required, with caches used only for reads.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q10.</strong> A company stores application logs in S3 and wants to minimize storage cost automatically as access patterns change, without writing lifecycle rules for every possible pattern. What should they use?</p>
+          <div class="scenario-options" id="opts-d28q10">
+            <div class="scenario-option">A. S3 Standard with a 30-day expiration rule</div>
+            <div class="scenario-option">B. S3 Intelligent-Tiering</div>
+            <div class="scenario-option">C. S3 One Zone-IA</div>
+            <div class="scenario-option">D. S3 Glacier Deep Archive for all objects immediately</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d28q10', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d28q10"><strong>Correct answer: B.</strong> Intelligent-Tiering monitors access patterns and moves objects between tiers automatically, which is the fit when access patterns are unknown or changing and manual lifecycle rules would be guesswork.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q11.</strong> A DynamoDB table serves a workload with highly predictable, steady traffic and the team wants the lowest cost per request. Which capacity mode fits?</p>
+          <div class="scenario-options" id="opts-d28q11">
+            <div class="scenario-option">A. On-demand capacity mode</div>
+            <div class="scenario-option">B. Provisioned capacity mode with auto scaling</div>
+            <div class="scenario-option">C. Provisioned capacity mode with no auto scaling</div>
+            <div class="scenario-option">D. Global Tables with on-demand capacity</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d28q11', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d28q11"><strong>Correct answer: B.</strong> Provisioned capacity is cheaper for steady, predictable workloads, and auto scaling adjusts capacity to the traffic pattern without manual intervention. On-demand is the fit for unpredictable traffic.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q12.</strong> An application writes to an Aurora cluster and immediately reads the same row back through a read replica, occasionally seeing stale data. What is the correct fix?</p>
+          <div class="scenario-options" id="opts-d28q12">
+            <div class="scenario-option">A. Increase the replica instance size</div>
+            <div class="scenario-option">B. Route read-your-writes traffic to the primary endpoint and use replicas only for workloads that tolerate lag</div>
+            <div class="scenario-option">C. Enable Multi-AZ on the cluster</div>
+            <div class="scenario-option">D. Convert the replica to a Global Database secondary</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d28q12', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d28q12"><strong>Correct answer: B.</strong> Read replicas are eventually consistent by design. Read-your-writes requirements must be served by the primary; instance size and Multi-AZ do not change replication lag semantics.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q13.</strong> A compliance requirement states that archived objects must be retained for seven years and cannot be deleted by any user, including administrators, before that period ends. What should be configured?</p>
+          <div class="scenario-options" id="opts-d28q13">
+            <div class="scenario-option">A. S3 versioning with a lifecycle expiration rule</div>
+            <div class="scenario-option">B. S3 Object Lock in compliance mode with a seven-year retention period</div>
+            <div class="scenario-option">C. A bucket policy denying s3:DeleteObject</div>
+            <div class="scenario-option">D. Cross-region replication to a second bucket</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d28q13', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d28q13"><strong>Correct answer: B.</strong> Object Lock in compliance mode enforces WORM retention that even the root user cannot override before expiry. A bucket policy can be edited by an administrator, so it does not meet the requirement.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q14.</strong> A team is choosing between ElastiCache for Redis and ElastiCache for Memcached for a simple page-fragment cache where losing a node's contents is acceptable and the workload is CPU-bound on the cache tier. Which fits?</p>
+          <div class="scenario-options" id="opts-d28q14">
+            <div class="scenario-option">A. Redis with cluster mode and replicas</div>
+            <div class="scenario-option">B. Memcached, because it is multi-threaded and horizontally scalable without replication overhead</div>
+            <div class="scenario-option">C. Redis with Global Datastore</div>
+            <div class="scenario-option">D. DAX</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d28q14', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d28q14"><strong>Correct answer: B.</strong> Memcached is the fit for simple, stateless caching where node loss is tolerable, and its multi-threaded architecture suits CPU-bound cache workloads. Redis features would be unused complexity here.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q15.</strong> An application needs to store JSON documents that are queried by a small number of known keys at very high request rates, with no joins and no multi-item transactions. Which service is the best fit?</p>
+          <div class="scenario-options" id="opts-d28q15">
+            <div class="scenario-option">A. Aurora PostgreSQL</div>
+            <div class="scenario-option">B. DynamoDB</div>
+            <div class="scenario-option">C. S3 with S3 Select</div>
+            <div class="scenario-option">D. ElastiCache for Memcached as the system of record</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d28q15', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d28q15"><strong>Correct answer: B.</strong> Key-based access at high request rates with a flexible schema and no relational requirements is the canonical DynamoDB fit. S3 Select is for querying objects, not serving high-rate key lookups.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q16.</strong> A workload requires a relational schema with foreign keys and multi-statement transactions, and must scale reads to several replicas. Which service fits?</p>
+          <div class="scenario-options" id="opts-d28q16">
+            <div class="scenario-option">A. DynamoDB with a global secondary index</div>
+            <div class="scenario-option">B. Aurora with read replicas</div>
+            <div class="scenario-option">C. ElastiCache for Redis</div>
+            <div class="scenario-option">D. S3 with a lifecycle policy</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d28q16', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d28q16"><strong>Correct answer: B.</strong> Foreign keys and multi-statement transactions are relational features, and Aurora read replicas scale read throughput. DynamoDB has no joins or multi-item transactions of this kind.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q17.</strong> A team wants to reduce DynamoDB read costs for a workload that repeatedly reads the same items within a short window, without changing application code to manage a cache. What should they use?</p>
+          <div class="scenario-options" id="opts-d28q17">
+            <div class="scenario-option">A. ElastiCache for Redis with application-level cache logic</div>
+            <div class="scenario-option">B. DAX, which is API-compatible and requires no application cache logic</div>
+            <div class="scenario-option">C. A global secondary index</div>
+            <div class="scenario-option">D. DynamoDB Streams</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d28q17', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d28q17"><strong>Correct answer: B.</strong> DAX is DynamoDB-API-compatible, so it can be introduced without rewriting application cache logic, and it serves repeated reads of hot items from memory.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q18.</strong> An S3 bucket holds objects that are accessed frequently for the first 30 days, occasionally for the next 60, and then never again but must be retained for compliance. What is the appropriate design?</p>
+          <div class="scenario-options" id="opts-d28q18">
+            <div class="scenario-option">A. Store everything in S3 Standard indefinitely</div>
+            <div class="scenario-option">B. A lifecycle policy transitioning to Standard-IA at 30 days and to a Glacier class at 90 days, with retention rather than expiration</div>
+            <div class="scenario-option">C. A lifecycle policy expiring objects at 90 days</div>
+            <div class="scenario-option">D. Store everything in One Zone-IA from day one</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d28q18', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d28q18"><strong>Correct answer: B.</strong> Lifecycle transitions match the access pattern to cost, and because the objects must be retained for compliance, the policy transitions rather than expires them.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q19.</strong> A DynamoDB table is being designed for an IoT workload where each device writes frequently and queries are always by device ID. What partition key design is appropriate?</p>
+          <div class="scenario-options" id="opts-d28q19">
+            <div class="scenario-option">A. A status field with a small number of values</div>
+            <div class="scenario-option">B. The device ID, or a composite key of device ID plus a timestamp for time-ordered queries</div>
+            <div class="scenario-option">C. A random UUID unrelated to the query pattern</div>
+            <div class="scenario-option">D. The region name</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d28q19', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d28q19"><strong>Correct answer: B.</strong> The partition key should have high cardinality and match the dominant query pattern. Device ID spreads writes evenly, and a composite key with a timestamp supports time-ordered range queries within a device.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q20.</strong> A company needs a durable, effectively unbounded store for backup files that are written once and read only during a restore. Cost is the primary concern and restores can take hours. What should they use?</p>
+          <div class="scenario-options" id="opts-d28q20">
+            <div class="scenario-option">A. S3 Standard</div>
+            <div class="scenario-option">B. S3 Glacier Deep Archive</div>
+            <div class="scenario-option">C. ElastiCache for Redis with persistence</div>
+            <div class="scenario-option">D. An Aurora cluster with a large storage volume</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d28q20', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d28q20"><strong>Correct answer: B.</strong> Write-once, rarely read, hours-long restore tolerance, and cost sensitivity are the exact profile Glacier Deep Archive is designed for.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q21.</strong> An application uses Aurora Global Database with a primary in eu-west-1 and a secondary in us-east-1. Users in us-east-1 report that after updating their profile they sometimes see the old value on refresh. What is the cause?</p>
+          <div class="scenario-options" id="opts-d28q21">
+            <div class="scenario-option">A. The secondary region is eventually consistent, so read-your-writes is not guaranteed there</div>
+            <div class="scenario-option">B. The storage layer is corrupted</div>
+            <div class="scenario-option">C. The secondary cluster needs more read replicas</div>
+            <div class="scenario-option">D. Global Database does not support profile data</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d28q21', 0)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d28q21"><strong>Correct answer: A.</strong> Aurora Global Database replicates to the secondary region asynchronously with sub-second lag, so a read immediately after a write in the primary region can return stale data. Read-your-writes traffic must be routed to the primary.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q22.</strong> A team needs to run analytical queries against data currently stored in DynamoDB, joining it with data in Aurora. What is the appropriate approach?</p>
+          <div class="scenario-options" id="opts-d28q22">
+            <div class="scenario-option">A. Run the joins directly in DynamoDB using a global secondary index</div>
+            <div class="scenario-option">B. Export or stream the DynamoDB data into a system that supports joins, such as a data warehouse or Aurora, and query there</div>
+            <div class="scenario-option">C. Enable DAX and run the joins through the cache</div>
+            <div class="scenario-option">D. Convert the DynamoDB table to S3 and use S3 Select</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d28q22', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d28q22"><strong>Correct answer: B.</strong> DynamoDB does not support joins. Analytical joins require moving the data into a system designed for them, typically via export or streams into a warehouse or relational engine.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q23.</strong> A workload requires a cache that supports sorted sets for a real-time leaderboard and must survive a node failure. Which service fits?</p>
+          <div class="scenario-options" id="opts-d28q23">
+            <div class="scenario-option">A. ElastiCache for Memcached</div>
+            <div class="scenario-option">B. ElastiCache for Redis with replicas</div>
+            <div class="scenario-option">C. DAX</div>
+            <div class="scenario-option">D. S3 with an in-memory index</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d28q23', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d28q23"><strong>Correct answer: B.</strong> Sorted sets are a Redis data structure, and replicas provide the failover behavior the scenario requires. Memcached has neither sorted sets nor replication.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q24.</strong> A company wants to replicate S3 objects to a bucket in another region for disaster recovery, with replication completing within minutes of each upload. What should they configure?</p>
+          <div class="scenario-options" id="opts-d28q24">
+            <div class="scenario-option">A. A lifecycle rule transitioning objects to Glacier in the second region</div>
+            <div class="scenario-option">B. S3 Cross-Region Replication with versioning enabled on both buckets</div>
+            <div class="scenario-option">C. S3 Transfer Acceleration</div>
+            <div class="scenario-option">D. A nightly batch copy job using the AWS CLI</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d28q24', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d28q24"><strong>Correct answer: B.</strong> Cross-Region Replication asynchronously copies objects to a bucket in another region and requires versioning on both source and destination. Lifecycle rules do not move objects across regions.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q25.</strong> A scenario states that a workload needs a relational database, must accept writes in two regions simultaneously, and must never lose a committed transaction. Which statement is correct?</p>
+          <div class="scenario-options" id="opts-d28q25">
+            <div class="scenario-option">A. Aurora Global Database satisfies all three requirements</div>
+            <div class="scenario-option">B. DynamoDB Global Tables satisfies all three requirements</div>
+            <div class="scenario-option">C. No single service in this week's set satisfies all three; the requirements are mutually exclusive as stated and one must be relaxed</div>
+            <div class="scenario-option">D. RDS with cross-region read replicas satisfies all three requirements</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d28q25', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d28q25"><strong>Correct answer: C.</strong> Aurora Global Database is relational but has a single writer region; DynamoDB Global Tables is multi-active but not relational and resolves conflicts with last-writer-wins. The exam expects you to recognize when a scenario's constraints cannot all be met by one service.</div>
+        </div>
+      </section>
+
+      <section class="doc-section" id="preview">
+        <h2 class="section-heading">Looking Ahead</h2>
+        <div class="card card-purple">
+          <p>Everything in this week's matrix assumed you could observe the system well enough to know which constraint was actually binding. That assumption is doing a lot of work. A hot partition, a lagging read replica, and a cache that has silently stopped serving hits all present as "the application is slow," and the selection matrix is useless if you cannot tell which of the three you are looking at. The week's services emit different signals — DynamoDB throttling metrics, Aurora replica lag, ElastiCache hit rate — but a single alarm on any one of them will page you constantly without telling you whether the situation is an incident or normal variance.</p>
+          <p>Day 29 turns to that problem directly, starting with CloudWatch alarms and the difference between a static threshold and an anomaly detection band. The open question is how to combine several noisy signals into one page that only fires when the pattern is genuinely bad — high latency and elevated error rate together, rather than either one alone. Composite alarms are the mechanism, and the design question is which signals to correlate so that the alarm is sensitive to real incidents without becoming background noise.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="sources">
+        <h2 class="section-heading">Sources</h2>
+        <div class="card">
+          <ul class="source-list">
+            <li><a href="https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/aurora-global-database.html" target="_blank">Amazon Aurora Global Database</a></li>
+            <li><a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/GlobalTables.html" target="_blank">DynamoDB Global Tables</a></li>
+            <li><a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/DAX.html" target="_blank">DynamoDB Accelerator (DAX)</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/storage-class-intro.html" target="_blank">Amazon S3 Storage Classes</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonElastiCache/latest/red-ug/WhatIs.html" target="_blank">Amazon ElastiCache for Redis</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/replication.html" target="_blank">S3 Replication (CRR and SRR)</a></li>
+          </ul>
+        </div>
       </section>
       <div class="day-nav">
         <a href="day-027.html">&larr; Day 27: Amazon ElastiCache — Redis vs Memcached Architectures</a>

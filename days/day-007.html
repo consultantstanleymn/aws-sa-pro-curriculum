@@ -104,7 +104,7 @@
         <span class="pill pill-green">Phase 1: Multi-Account Governance &amp; Networking</span>
       </div>
       <h1 class="hero-title">Week 1 Synthesis &amp; Multi-Account Drill</h1>
-      <div class="reading-meta">&#128337; ~3 min read &middot; 5 services covered</div>
+      <div class="reading-meta">&#128337; ~32 min read &middot; 5 services covered</div>
       <div class="services-grid">
         <span class="service-tag">Organizations</span>
         <span class="service-tag">SCP</span>
@@ -113,30 +113,399 @@
         <span class="service-tag">RAM</span>
       </div>
       <div id="tracker"></div>
-      <section class="doc-section">
-        <h2 class="section-heading">Today's Concept</h2>
+      <section class="doc-section" id="recap">
+        <h2 class="section-heading">Week 1 Recap</h2>
         <div class="card card-accent">
-          <p>Consolidate the week: multi-account landing zone design, SCP guardrails, Control Tower automation, centralized SSO, and shared networking. Focus on how these pieces compose into a single enterprise governance model.</p>
-        </div>
-        <h3 class="sub-heading">Hands-on Lab / Practical Action (45 min)</h3>
-        <div class="card">
-          <p>Complete 15 scenario questions spanning AWS Organizations, SCPs, Control Tower, and IAM Identity Center.</p>
+          <p>Week 1 built a single governance model out of five services that are easy to learn separately and hard to combine correctly. AWS Organizations gave us the account as the unit of isolation, with Organizational Units mirroring the business and a management account deliberately kept workload-free because SCPs cannot constrain it. SCPs then supplied the permission ceiling — the FullAWSAccess default that permits everything until an explicit Deny narrows it, and the region-restriction pattern that has to exempt global services or it breaks account operations. Control Tower automated the landing zone we would otherwise assemble by hand, provisioning the management, log-archive, and audit accounts and enforcing guardrails as SCPs and Config rules, with Account Factory for Terraform extending that to pipeline-driven provisioning.</p>
+          <p>On top of that foundation, IAM Identity Center replaced per-account IAM users with permission sets mapped to SAML federation, auto-provisioning a role into each assigned account, while permission boundaries capped what a delegated admin could ever create and STS issued the short-lived credentials underneath. AWS RAM closed the week by inverting ownership: a central network account shares subnets, Transit Gateways, and Resolver rules so application teams launch into a VPC they do not own. The point of the synthesis is that these are not five independent choices — each one assumes the others. Guardrails without account separation have nothing to scope to; SSO without a landing zone has no accounts to assign into; shared networking without SCPs has no way to stop a workload account from re-plumbing the shared VPC.</p>
         </div>
       </section>
-      <section class="doc-section">
-        <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
-        
-      <div class="scenario-card">
-        <p class="scenario-question"><strong>Q1.</strong> Which combination best represents a mature multi-account governance baseline?</p>
-        <div class="scenario-options" id="opts-d7q0">
+      <section class="doc-section" id="identity-layer">
+        <h2 class="section-heading">Identity: Who Gets In, and Who Decides</h2>
+        <p>The first decision boundary in any multi-account design is not which services to use but who holds authority over identity. There are three distinct layers here and scenario questions routinely collapse them into one. The first layer is the human authentication layer: where does a person's credential actually live, and what proves they are who they claim to be. The second is the authorization layer: once authenticated, which role do they assume in which account, and what does that role permit. The third is the ceiling layer: what is the maximum any identity in that account could ever do, regardless of what its policies say. IAM Identity Center, IAM policies, and SCPs each own exactly one of these layers, and a design that puts the wrong service in the wrong layer is the single most common Week 1 mistake.</p>
+        <p>IAM Identity Center owns authentication and role assignment. It federates from an external IdP — Entra ID, Okta — or uses its own built-in directory, and it maps groups to permission sets. A permission set is not a policy you attach to a user; it is a template that Identity Center materializes as an IAM role inside every account you assign it to. That distinction matters because it means there are no long-lived per-account IAM users to rotate, audit, or accidentally leave behind when someone changes teams. When a scenario says "engineers should log in once and land in the right role across forty accounts," Identity Center is the answer, and any option that proposes creating IAM users per engineer per account is a distractor built on the assumption that identity is per-account rather than per-organization.</p>
+        <p>SCPs own the ceiling, and they are frequently misread as a grant. They are not. An SCP sets the maximum available permissions for the accounts it is attached to, and an identity still needs an allow from IAM or a resource policy to do anything at all. The practical consequence is that the default FullAWSAccess SCP permits everything until you attach an explicit Deny, which is why a region-restriction SCP has to be written as a Deny with a NotAction exemption list rather than as an Allow of two regions. Permission boundaries occupy a third, narrower position: they cap a single IAM entity rather than a whole account, which is what makes them the right tool for delegated administration.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Requirement</th><th>Service</th><th>Why not the others</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Central login across many accounts, no per-account users</td><td>IAM Identity Center</td><td>SCPs cannot authenticate anyone; permission boundaries cap an entity, they do not federate</td></tr>
+              <tr><td>Prevent any account in an OU from using unapproved regions</td><td>SCP on the OU</td><td>Identity Center assigns roles, it does not restrict API surface; a boundary is per-entity, not per-OU</td></tr>
+              <tr><td>Let a platform team create roles without letting them create admins</td><td>Permission boundary required on CreateRole</td><td>An SCP would block the platform team's own account too; Identity Center has no notion of "roles they create"</td></tr>
+              <tr><td>Keep the org's billing and policy root out of blast radius</td><td>Organizations management account, kept empty</td><td>SCPs do not apply to the management account, so no policy can protect it — only emptiness can</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+      <section class="doc-section" id="guardrail-layer">
+        <h2 class="section-heading">Guardrails: Hand-Built SCPs vs. Control Tower</h2>
+        <p>Once identity is settled, the next fork is how the guardrails themselves get created and maintained. You can write SCPs by hand, attach them to OUs, and manage the whole thing in Terraform or CloudFormation. Or you can let Control Tower provision the landing zone and express your intent as guardrails, which it implements underneath as SCPs and AWS Config rules. These are not mutually exclusive — Control Tower's guardrails are SCPs — but they represent very different operating models, and the exam tests whether you can tell which one a scenario is actually asking for.</p>
+        <p>The hand-built path gives you total control and no dependency on a service that owns parts of your organization. It also means you own the account vending process, the log-archive and audit account setup, the baseline Config rules, and the drift detection that tells you when someone has detached a policy. Control Tower gives you all of that as a managed baseline, plus Account Factory for teams that want account creation to be a pipeline operation rather than a ticket. The tradeoff is that Control Tower takes ownership of certain resources in enrolled accounts and imposes its own update cadence, which is a real constraint for organizations with unusual networking or logging requirements.</p>
+        <p>The guardrail taxonomy is where most scenario questions actually live. Mandatory guardrails cannot be disabled and are always enforced — the classic example being disallow root user access keys. Elective and strongly recommended guardrails are optional best practices you enable per OU based on your governance posture. A question that asks whether a specific control "can be turned off" is testing exactly this distinction, and the answer hinges on whether the control is described as mandatory or elective, not on how important it sounds.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Signal in the scenario</th><th>Pick</th><th>Reasoning</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>"We need a landing zone in days, not months"</td><td>Control Tower</td><td>It provisions management, log-archive, and audit accounts plus baseline guardrails automatically</td></tr>
+              <tr><td>"Account creation must be self-service via our Terraform pipeline"</td><td>Control Tower + AFT</td><td>Account Factory for Terraform layers pipeline-driven provisioning on the Control Tower baseline</td></tr>
+              <tr><td>"We have unusual logging requirements Control Tower cannot express"</td><td>Hand-built SCPs and Config rules</td><td>Control Tower owns certain resources in enrolled accounts and constrains customization</td></tr>
+              <tr><td>"A control must never be disableable by an OU admin"</td><td>Mandatory guardrail</td><td>Mandatory guardrails are always enforced; elective ones can be toggled per OU</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+      <section class="doc-section" id="network-ownership">
+        <h2 class="section-heading">Network Ownership: Central VPC vs. Per-Account VPC</h2>
+        <p>The third fork is who owns the network. The traditional model gives every account its own VPC, which means every account owns its own CIDR allocation, its own subnet design, and its own peering or Transit Gateway attachments. The centralized model puts the VPC in a network account and shares subnets outward with AWS RAM, so application accounts launch resources into infrastructure they do not own and cannot reconfigure. Both are legitimate, and the choice is driven by how much network consistency you need versus how much autonomy the application teams need.</p>
+        <p>RAM subnet sharing is the mechanism that makes the centralized model work, and it is worth being precise about what it does and does not share. The participant account can create resources in the shared subnet — EC2 instances, RDS instances, load balancer nodes — and those resources get IP addresses from the owner's CIDR. The participant cannot modify the subnet, the route tables, the NACLs, or the VPC itself. That asymmetry is the entire value proposition: the network account retains control of routing and security at the network layer while application teams retain control of their own resources. It also means IP address management becomes a single-owner problem instead of a negotiation across dozens of accounts.</p>
+        <p>The same sharing model extends beyond subnets. Transit Gateways can be shared so that spoke accounts attach to a centrally owned TGW without owning it, and Route 53 Resolver rules can be shared so that every account resolves on-prem names through the same forwarding configuration. When a scenario describes a company that wants "a common, centrally managed network without each account owning its own VPC," RAM is the answer, and VPC peering between every pair of accounts is the distractor that ignores the operational cost of an N-squared mesh.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Requirement</th><th>Approach</th><th>Tradeoff</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Uniform routing and IP management across many accounts</td><td>Central VPC in a network account, subnets shared via RAM</td><td>Application teams cannot change network-layer configuration</td></tr>
+              <tr><td>Application teams need full control of their own network</td><td>Per-account VPCs, connected via Transit Gateway</td><td>CIDR planning and route management become distributed problems</td></tr>
+              <tr><td>Centralized egress inspection for all accounts</td><td>Inspection VPC owned centrally, spokes route 0.0.0.0/0 to a shared TGW</td><td>Requires TGW route table segmentation to avoid unintended spoke-to-spoke paths</td></tr>
+              <tr><td>Consistent hybrid DNS resolution everywhere</td><td>Resolver rules shared via RAM from the network account</td><td>Every account inherits the same forwarding behavior, including its failure modes</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+      <section class="doc-section" id="composing">
+        <h2 class="section-heading">Composing the Five Services Into One Model</h2>
+        <p>The reason Week 1 is a synthesis day rather than five separate topic days is that the exam rarely asks about one of these services in isolation. It asks about a situation — a company with forty accounts, a compliance requirement, a deadline — and expects you to assemble the right combination. The assembly has a natural order, and getting the order wrong produces designs that look plausible but fail on a specific constraint.</p>
+        <p>Start with the account structure, because everything else scopes to it. Organizations and OUs define the blast-radius boundaries, and the management account stays empty because no SCP can protect it. Then layer the guardrails: SCPs for the permission ceiling, Control Tower if you want the landing zone and account vending automated, Config rules for the detective controls that SCPs cannot express. Then identity: IAM Identity Center for human access, permission boundaries for delegated administration, STS for the machine credentials underneath. Then networking: a central network account owning the VPC and TGW, sharing subnets and Resolver rules via RAM so application accounts consume rather than construct. Each layer assumes the one before it, and a scenario that skips a layer usually has a distractor that fills the gap with the wrong service.</p>
+        <p>The failure signature to watch for is a design that solves the stated problem but violates an unstated constraint. A single flat account with IAM users per team solves access; it fails isolation. SCPs alone with no account separation solve policy; they fail blast radius, because an SCP cannot protect the account it is attached to from a compromised credential inside it. Control Tower without Identity Center solves provisioning; it leaves human access as per-account IAM users. Reading the scenario for the constraint that is not stated is the skill this week is building.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Layer</th><th>Service</th><th>What breaks if you skip it</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Account structure</td><td>AWS Organizations + OUs</td><td>No scope for guardrails; blast radius is the whole org</td></tr>
+              <tr><td>Permission ceiling</td><td>SCPs on OUs</td><td>Any identity with a broad policy can act org-wide</td></tr>
+              <tr><td>Landing zone automation</td><td>Control Tower (+ AFT)</td><td>Account vending and baseline Config become manual and drift-prone</td></tr>
+              <tr><td>Human identity</td><td>IAM Identity Center</td><td>Per-account IAM users proliferate; offboarding becomes unreliable</td></tr>
+              <tr><td>Delegated admin safety</td><td>Permission boundaries</td><td>A delegated admin can escalate to AdministratorAccess</td></tr>
+              <tr><td>Network ownership</td><td>Central VPC + RAM</td><td>CIDR sprawl, N-squared peering, inconsistent egress inspection</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+      <section class="doc-section" id="lab">
+        <h2 class="section-heading">Hands-On Lab: Assemble and Break a Week 1 Landing Zone (60 min)</h2>
+        <div class="card card-green">
+          <p>The goal of this lab is to build the smallest possible version of the Week 1 model and then deliberately break each layer to see what the failure looks like. You will need an AWS Organization with at least four member accounts, or a sandbox where you can create them. Do not run this in an organization that carries production workloads.</p>
+          <p>Begin by creating the OU structure. Under the root, create a Security OU, an Infrastructure OU, and a Workloads OU with Dev and Prod children. Move your log-archive and audit accounts into Security, and confirm that the management account holds no workloads. This is the structure every later step scopes to, and if you get it wrong here you will be re-doing the SCP attachments later.</p>
+          <p>Next, attach a region-restriction SCP to the Workloads OU. Write it as a Deny on all actions with a StringNotEquals condition on aws:RequestedRegion for your two approved regions, and a NotAction list exempting IAM, Route 53, CloudFront, and Support. Attach it, then immediately try to create an S3 bucket in an unapproved region from a Dev account and confirm the denial. Then try to create an IAM role from the same account and confirm it still succeeds — that is the global-services exemption working, and it is the single most common way a hand-written region SCP breaks an account.</p>
+          <p>Now configure IAM Identity Center. Create two permission sets, one granting ReadOnlyAccess and one granting PowerUserAccess, and assign them to a test group with ReadOnlyAccess in Prod and PowerUserAccess in Dev. Sign in as a user in that group and verify that the roles appear in the account chooser and that the Prod role genuinely cannot write. The thing to notice is that no IAM user was created in either account — Identity Center provisioned a role, and when you remove the assignment the role disappears.</p>
+          <p>Finally, test the ceiling and the boundary. From a Dev account, attach AdministratorAccess to a test role and confirm that the region-restriction SCP still blocks actions outside your approved regions — the intersection of IAM and SCP is what applies, and the explicit Deny wins. Then create a permission boundary that denies iam:* and organizations:*, and create a role with that boundary attached plus AdministratorAccess. Confirm the role cannot modify IAM despite its policy. That is the delegated-admin pattern in miniature.</p>
+          <p>To close the lab, break things on purpose. Detach the region SCP and observe that the previously denied call now succeeds. Remove the permission boundary from the test role and confirm it can now escalate. Delete the Identity Center assignment and confirm the role vanishes from the account. Each of these is a failure mode you should be able to predict from the design, and being able to predict them is what the exam is measuring.</p>
+        </div>
+      </section>
+      <section class="doc-section" id="quiz">
+        <h2 class="section-heading">Mixed Scenario Drill (25 questions)</h2>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q1.</strong> A company wants a dedicated account that only aggregates CloudTrail logs from every other account and cannot be modified by workload teams. Where should this account live?</p>
+          <div class="scenario-options" id="opts-d7q1">
+            <div class="scenario-option">A. Directly under the root, alongside Production</div>
+            <div class="scenario-option">B. In a dedicated Security OU with a restrictive SCP</div>
+            <div class="scenario-option">C. Inside the Workloads/Prod OU for proximity to the data it audits</div>
+            <div class="scenario-option">D. In the management account itself</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d7q1', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d7q1"><strong>Correct answer: B.</strong> Log-archive and audit accounts belong in a dedicated Security OU protected by SCPs that deny deletion or modification of logging resources, isolated from workload OUs.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q2.</strong> Why should the AWS Organizations management account never run workloads?</p>
+          <div class="scenario-options" id="opts-d7q2">
+            <div class="scenario-option">A. It has a lower service quota by default</div>
+            <div class="scenario-option">B. SCPs cannot be applied to it, so it should be kept empty to reduce blast radius and support least privilege</div>
+            <div class="scenario-option">C. It is billed at a premium rate</div>
+            <div class="scenario-option">D. It cannot host EC2 instances</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d7q2', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d7q2"><strong>Correct answer: B.</strong> The management account is immune to SCPs, so best practice keeps it workload-free to minimize risk — it should only handle billing, Organizations, and org-wide services like IAM Identity Center.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q3.</strong> A developer has an IAM policy granting s3:*, but an SCP on their OU denies s3:DeleteBucket. What happens if they call DeleteBucket?</p>
+          <div class="scenario-options" id="opts-d7q3">
+            <div class="scenario-option">A. It succeeds because IAM policies take precedence</div>
+            <div class="scenario-option">B. It is denied — SCPs set the ceiling and an explicit Deny always wins</div>
+            <div class="scenario-option">C. It succeeds only in the management account</div>
+            <div class="scenario-option">D. It depends on the S3 bucket policy</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d7q3', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d7q3"><strong>Correct answer: B.</strong> The effective permission is the intersection of IAM and SCP; an explicit Deny in either always overrides an Allow.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q4.</strong> A region-restriction SCP is attached to an OU and engineers immediately report that they can no longer create IAM roles or update Route 53 records. What is the most likely cause?</p>
+          <div class="scenario-options" id="opts-d7q4">
+            <div class="scenario-option">A. The SCP was attached to the wrong OU</div>
+            <div class="scenario-option">B. The SCP denies all actions outside the approved regions without exempting global services such as IAM, Route 53, CloudFront, and Support</div>
+            <div class="scenario-option">C. IAM roles cannot be created in accounts with SCPs attached</div>
+            <div class="scenario-option">D. The SCP needs to be attached to the management account instead</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d7q4', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d7q4"><strong>Correct answer: B.</strong> Global services are not region-scoped, so a region-restriction SCP must exempt them via NotAction or the account's own operations break.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q5.</strong> What is the key difference between a mandatory and an elective Control Tower guardrail?</p>
+          <div class="scenario-options" id="opts-d7q5">
+            <div class="scenario-option">A. Mandatory guardrails cost extra</div>
+            <div class="scenario-option">B. Mandatory guardrails cannot be disabled and are always enforced; elective guardrails are optional best practices you can turn on or off</div>
+            <div class="scenario-option">C. Elective guardrails only apply to the management account</div>
+            <div class="scenario-option">D. There is no functional difference</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d7q5', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d7q5"><strong>Correct answer: B.</strong> Mandatory guardrails (for example, disallow root user access keys) are always active; elective and strongly recommended guardrails can be enabled per OU based on your governance needs.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q6.</strong> A company wants to provision new AWS accounts through its existing Terraform pipelines rather than a manual request process, while keeping Control Tower's baseline guardrails. What should they use?</p>
+          <div class="scenario-options" id="opts-d7q6">
+            <div class="scenario-option">A. AWS Organizations CreateAccount API called from a Lambda function</div>
+            <div class="scenario-option">B. Account Factory for Terraform (AFT), which layers pipeline-driven account provisioning on the Control Tower baseline</div>
+            <div class="scenario-option">C. AWS Service Catalog alone</div>
+            <div class="scenario-option">D. Manually enrolling accounts in Control Tower after creating them</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d7q6', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d7q6"><strong>Correct answer: B.</strong> AFT is purpose-built for teams standardized on Terraform that want account vending as a pipeline operation on top of Control Tower's guardrails.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q7.</strong> An enterprise wants engineers to log in once via their corporate Okta and assume the correct role in any of 40 AWS accounts without individual IAM users. What is the best-practice solution?</p>
+          <div class="scenario-options" id="opts-d7q7">
+            <div class="scenario-option">A. Create an IAM user per engineer per account</div>
+            <div class="scenario-option">B. IAM Identity Center with SAML federation from Okta and permission sets</div>
+            <div class="scenario-option">C. Share a single root-account access key</div>
+            <div class="scenario-option">D. Use AWS Organizations SCPs alone</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d7q7', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d7q7"><strong>Correct answer: B.</strong> IAM Identity Center is purpose-built for centralized SSO across an Organization, provisioning short-lived federated roles instead of long-lived IAM users.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q8.</strong> What does IAM Identity Center actually create inside each assigned account when you assign a permission set?</p>
+          <div class="scenario-options" id="opts-d7q8">
+            <div class="scenario-option">A. An IAM user with a generated password</div>
+            <div class="scenario-option">B. An IAM role that the federated user assumes, provisioned automatically into the account</div>
+            <div class="scenario-option">C. A new AWS account</div>
+            <div class="scenario-option">D. An SCP scoped to that user</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d7q8', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d7q8"><strong>Correct answer: B.</strong> A permission set translates into an IAM role provisioned into each assigned account, which is why removing the assignment removes the role and no long-lived credentials remain.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q9.</strong> A delegated admin role can create IAM roles for developers. How do you prevent them from creating a role with AdministratorAccess?</p>
+          <div class="scenario-options" id="opts-d7q9">
+            <div class="scenario-option">A. Attach a Deny statement to every developer role individually</div>
+            <div class="scenario-option">B. Require the delegated admin to set a permission boundary on every role they create, capping maximum permissions</div>
+            <div class="scenario-option">C. Remove iam:CreateRole entirely</div>
+            <div class="scenario-option">D. Use MFA enforcement only</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d7q9', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d7q9"><strong>Correct answer: B.</strong> Enforcing a mandatory permission boundary via a condition requiring iam:PermissionsBoundary on CreateRole is the standard pattern to prevent privilege escalation by delegated admins.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q10.</strong> Which STS operation would an EKS pod use to obtain AWS credentials through its service account, without any long-lived secret?</p>
+          <div class="scenario-options" id="opts-d7q10">
+            <div class="scenario-option">A. AssumeRole</div>
+            <div class="scenario-option">B. AssumeRoleWithWebIdentity</div>
+            <div class="scenario-option">C. AssumeRoleWithSAML</div>
+            <div class="scenario-option">D. GetSessionToken</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d7q10', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d7q10"><strong>Correct answer: B.</strong> EKS IRSA federates the cluster's OIDC provider through AssumeRoleWithWebIdentity, issuing short-lived credentials to the pod's service account.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q11.</strong> A company wants every application account to use a common, centrally managed VPC without each account owning its own VPC. What is the mechanism?</p>
+          <div class="scenario-options" id="opts-d7q11">
+            <div class="scenario-option">A. VPC Peering between every pair of accounts</div>
+            <div class="scenario-option">B. Share subnets from a central VPC using AWS RAM</div>
+            <div class="scenario-option">C. Transit Gateway alone, with each account keeping its own VPC</div>
+            <div class="scenario-option">D. Copy the VPC configuration manually into every account</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d7q11', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d7q11"><strong>Correct answer: B.</strong> RAM subnet sharing lets many accounts launch resources into subnets owned by a single central VPC, reducing IP management and networking overhead versus peering or per-account VPCs.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q12.</strong> An application account has been given a shared subnet via AWS RAM. Which of the following can that account do?</p>
+          <div class="scenario-options" id="opts-d7q12">
+            <div class="scenario-option">A. Modify the subnet's route table</div>
+            <div class="scenario-option">B. Launch EC2 instances into the shared subnet, receiving IPs from the owner's CIDR</div>
+            <div class="scenario-option">C. Change the subnet's CIDR block</div>
+            <div class="scenario-option">D. Delete the VPC that owns the subnet</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d7q12', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d7q12"><strong>Correct answer: B.</strong> Participants can create resources in the shared subnet but cannot modify the subnet, its route tables, its NACLs, or the owning VPC — that asymmetry is the point of the sharing model.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q13.</strong> Beyond subnets, which two resources are most commonly shared with AWS RAM in a multi-account landing zone?</p>
+          <div class="scenario-options" id="opts-d7q13">
+            <div class="scenario-option">A. IAM roles and SCPs</div>
+            <div class="scenario-option">B. Transit Gateways and Route 53 Resolver rules</div>
+            <div class="scenario-option">C. CloudTrail trails and Config recorders</div>
+            <div class="scenario-option">D. KMS keys and Secrets Manager secrets</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d7q13', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d7q13"><strong>Correct answer: B.</strong> RAM most commonly shares VPC subnets, Transit Gateways, and Route 53 Resolver rules, letting spoke accounts consume centrally owned network plumbing.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q14.</strong> A security team wants to guarantee that no account in the Workloads OU can disable CloudTrail, even if an account administrator has full IAM permissions. What enforces this?</p>
+          <div class="scenario-options" id="opts-d7q14">
+            <div class="scenario-option">A. An IAM policy attached to every role in the OU</div>
+            <div class="scenario-option">B. An SCP on the Workloads OU with an explicit Deny on CloudTrail stop/delete actions</div>
+            <div class="scenario-option">C. A permission boundary on the account root user</div>
+            <div class="scenario-option">D. AWS Config alone</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d7q14', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d7q14"><strong>Correct answer: B.</strong> Only an SCP sets a ceiling that applies to every identity in the account, including account administrators; Config detects but does not prevent.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q15.</strong> Which combination best represents a mature multi-account governance baseline?</p>
+          <div class="scenario-options" id="opts-d7q15">
             <div class="scenario-option">A. A single flat account with IAM users per team</div>
             <div class="scenario-option">B. Control Tower landing zone + OU-based SCPs + IAM Identity Center SSO + RAM-shared networking</div>
             <div class="scenario-option">C. One AWS account per employee</div>
             <div class="scenario-option">D. SCPs only, with no account separation</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d7q15', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d7q15"><strong>Correct answer: B.</strong> Enterprise governance combines automated account provisioning (Control Tower), policy guardrails (SCPs), centralized identity (Identity Center), and shared network plumbing (RAM/Transit Gateway).</div>
         </div>
-        <button class="scenario-reveal-btn" onclick="revealAnswer('d7q0', 1)">Reveal Answer</button>
-        <div class="scenario-explanation" id="exp-d7q0"><strong>Correct answer: B.</strong> Enterprise governance combines automated account provisioning (Control Tower), policy guardrails (SCPs), centralized identity (Identity Center), and shared network plumbing (RAM/Transit Gateway).</div>
-      </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q16.</strong> A company has 60 accounts and wants a single place to see which accounts exist, which OU each belongs to, and consolidated billing. Which service provides this?</p>
+          <div class="scenario-options" id="opts-d7q16">
+            <div class="scenario-option">A. AWS Control Tower</div>
+            <div class="scenario-option">B. AWS Organizations</div>
+            <div class="scenario-option">C. AWS IAM Identity Center</div>
+            <div class="scenario-option">D. AWS Resource Access Manager</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d7q16', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d7q16"><strong>Correct answer: B.</strong> Organizations is the underlying service that owns account membership, OU structure, and consolidated billing; Control Tower builds a landing zone on top of it.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q17.</strong> A team wants to enforce that all new S3 buckets in the Workloads OU are encrypted, and to be alerted when one is not. Which pairing fits?</p>
+          <div class="scenario-options" id="opts-d7q17">
+            <div class="scenario-option">A. An SCP that denies s3:CreateBucket</div>
+            <div class="scenario-option">B. An SCP that denies s3:PutBucketEncryption with a condition, plus an AWS Config rule for detection</div>
+            <div class="scenario-option">C. IAM Identity Center permission sets</div>
+            <div class="scenario-option">D. A permission boundary on the S3 service role</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d7q17', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d7q17"><strong>Correct answer: B.</strong> SCPs provide the preventive ceiling and Config provides detective evaluation; Control Tower guardrails are implemented as exactly this pairing.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q18.</strong> An organization wants a central network account to own the VPC and Transit Gateway, with application accounts attaching to the TGW without owning it. What enables the attachment?</p>
+          <div class="scenario-options" id="opts-d7q18">
+            <div class="scenario-option">A. VPC peering from each application account to the network account</div>
+            <div class="scenario-option">B. Sharing the Transit Gateway from the network account via AWS RAM</div>
+            <div class="scenario-option">C. Attaching an SCP that permits tgw:CreateAttachment</div>
+            <div class="scenario-option">D. Creating a duplicate TGW in each application account</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d7q18', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d7q18"><strong>Correct answer: B.</strong> RAM sharing lets spoke accounts create attachments to a centrally owned Transit Gateway, keeping ownership and route table control in the network account.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q19.</strong> Which statement about SCPs is correct?</p>
+          <div class="scenario-options" id="opts-d7q19">
+            <div class="scenario-option">A. SCPs grant permissions to identities in the accounts they are attached to</div>
+            <div class="scenario-option">B. SCPs set the maximum available permissions; an identity still needs an allow from IAM or a resource policy</div>
+            <div class="scenario-option">C. SCPs apply to the management account as well as member accounts</div>
+            <div class="scenario-option">D. SCPs replace the need for IAM policies entirely</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d7q19', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d7q19"><strong>Correct answer: B.</strong> SCPs are a ceiling, not a grant, and they do not apply to the management account — which is precisely why that account should stay empty.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q20.</strong> A company is required by regulation to keep all audit logs in an account that workload administrators cannot access, and to prove the logs are retained. Which combination satisfies this?</p>
+          <div class="scenario-options" id="opts-d7q20">
+            <div class="scenario-option">A. CloudTrail in each account with a 90-day retention setting</div>
+            <div class="scenario-option">B. A dedicated log-archive account in a Security OU, an organization trail delivering to it, and an SCP preventing workload accounts from modifying the destination</div>
+            <div class="scenario-option">C. CloudWatch Logs in the management account</div>
+            <div class="scenario-option">D. S3 bucket policies in each workload account</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d7q20', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d7q20"><strong>Correct answer: B.</strong> Centralized log archival in a Security OU account, fed by an organization trail and protected by SCPs, is the standard pattern Control Tower provisions automatically.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q21.</strong> A developer needs temporary credentials to call AWS APIs from a CI/CD pipeline running outside AWS. Which approach avoids long-lived access keys?</p>
+          <div class="scenario-options" id="opts-d7q21">
+            <div class="scenario-option">A. Create an IAM user with an access key and rotate it quarterly</div>
+            <div class="scenario-option">B. Configure OIDC federation from the CI/CD provider and use AssumeRoleWithWebIdentity</div>
+            <div class="scenario-option">C. Store the root account credentials in the pipeline's secret store</div>
+            <div class="scenario-option">D. Use an SCP to allow only the pipeline's IP range</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d7q21', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d7q21"><strong>Correct answer: B.</strong> OIDC federation with AssumeRoleWithWebIdentity issues short-lived credentials to the pipeline without any stored long-lived secret.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q22.</strong> Which of these is a legitimate reason to choose a per-account VPC over RAM-shared subnets from a central VPC?</p>
+          <div class="scenario-options" id="opts-d7q22">
+            <div class="scenario-option">A. The application team needs to control its own route tables and NACLs</div>
+            <div class="scenario-option">B. The company wants to reduce IP address management overhead</div>
+            <div class="scenario-option">C. The company wants uniform egress inspection across all accounts</div>
+            <div class="scenario-option">D. The company wants a single owner for all CIDR allocation</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d7q22', 0)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d7q22"><strong>Correct answer: A.</strong> Per-account VPCs preserve network-layer autonomy for the application team; the other three options are arguments for centralizing the network instead.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q23.</strong> A company wants to prevent any account in the organization from leaving the organization or changing its own SCP attachments. What should they configure?</p>
+          <div class="scenario-options" id="opts-d7q23">
+            <div class="scenario-option">A. An IAM policy on each account's root user</div>
+            <div class="scenario-option">B. An SCP denying organizations:LeaveOrganization and organizations:DetachPolicy, applied at the root or OU level</div>
+            <div class="scenario-option">C. A permission boundary on the Organizations service role</div>
+            <div class="scenario-option">D. AWS Config rules only</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d7q23', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d7q23"><strong>Correct answer: B.</strong> SCPs applied at the root or OU level are the mechanism for denying organization-level actions across all member accounts.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q24.</strong> Which service should you use to give a partner company access to a single API hosted in your VPC, when your CIDR ranges overlap?</p>
+          <div class="scenario-options" id="opts-d7q24">
+            <div class="scenario-option">A. VPC peering</div>
+            <div class="scenario-option">B. AWS RAM subnet sharing</div>
+            <div class="scenario-option">C. AWS PrivateLink with an endpoint service and interface endpoint</div>
+            <div class="scenario-option">D. Transit Gateway attachment</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d7q24', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d7q24"><strong>Correct answer: C.</strong> PrivateLink exposes a single service at the ENI level without merging route tables or CIDRs, so it works even with fully overlapping IP ranges — unlike peering, RAM subnet sharing, or TGW.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q25.</strong> A company has built a landing zone with Control Tower, SCPs, Identity Center, and RAM-shared networking. A new workload account is created and immediately launches resources in an unapproved region. Which layer failed?</p>
+          <div class="scenario-options" id="opts-d7q25">
+            <div class="scenario-option">A. Identity Center, because the account had no permission set assigned</div>
+            <div class="scenario-option">B. The guardrail layer — the new account was not enrolled in the OU carrying the region-restriction SCP</div>
+            <div class="scenario-option">C. RAM, because the account did not receive a shared subnet</div>
+            <div class="scenario-option">D. Control Tower, because it cannot enforce region restrictions</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d7q25', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d7q25"><strong>Correct answer: B.</strong> SCPs only apply to the OU they are attached to; a newly created account that is not placed in the governed OU inherits no ceiling, which is why account vending must include OU placement.</div>
+        </div>
+      </section>
+      <section class="doc-section" id="preview">
+        <h2 class="section-heading">Preview: Day 8</h2>
+        <div class="card card-purple">
+          <p>Everything in Week 1 assumed that accounts need to talk to each other, and the answer we kept reaching for was Transit Gateway — shared via RAM, attached by spokes, segmented by route tables. What we have not done is look at how that segmentation actually works. The open question is what happens when three VPCs all attach to one Transit Gateway and you need Dev and Prod to both reach a shared-services VPC but never reach each other. A single flat TGW route table with everything propagated gives you full mesh connectivity, which is exactly the outcome you were trying to avoid, and no amount of security group configuration fixes a routing decision that was already made at the network layer.</p>
+          <p>Day 8 takes the Transit Gateway apart: how an attachment associates with one route table and propagates routes into others, why that association-versus-propagation distinction is the whole mechanism, and how to build a hub-and-spoke topology that replaces an unmanageable full mesh of VPC peering. The governance model from this week is the constraint set; the TGW route table is where those constraints become actual packet paths.</p>
+        </div>
+      </section>
+      <section class="doc-section" id="sources">
+        <h2 class="section-heading">Sources</h2>
+        <div class="card">
+          <ul class="source-list">
+            <li><a href="https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_policies_scps.html" target="_blank">AWS Organizations — Service control policies (SCPs)</a></li>
+            <li><a href="https://docs.aws.amazon.com/controltower/latest/userguide/what-is-control-tower.html" target="_blank">AWS Control Tower — What is AWS Control Tower?</a></li>
+            <li><a href="https://docs.aws.amazon.com/singlesignon/latest/userguide/what-is.html" target="_blank">IAM Identity Center — What is IAM Identity Center?</a></li>
+            <li><a href="https://docs.aws.amazon.com/ram/latest/userguide/what-is.html" target="_blank">AWS Resource Access Manager — What is AWS RAM?</a></li>
+            <li><a href="https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies_boundaries.html" target="_blank">IAM — Permissions boundaries for IAM entities</a></li>
+            <li><a href="https://docs.aws.amazon.com/whitepapers/latest/organizing-your-aws-environment/organizing-your-aws-environment.html" target="_blank">AWS Whitepaper — Organizing Your AWS Environment Using Multiple Accounts</a></li>
+          </ul>
+        </div>
       </section>
       <div class="day-nav">
         <a href="day-006.html">&larr; Day 6: Resource Access Manager (RAM) &amp; VPC Sharing</a>

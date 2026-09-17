@@ -104,37 +104,351 @@
         <span class="pill pill-green">Phase 2: Compute, Containers &amp; Global Databases</span>
       </div>
       <h1 class="hero-title">Serverless Architectures — Step Functions &amp; API Gateway</h1>
-      <div class="reading-meta">&#128337; ~3 min read &middot; 3 services covered</div>
+      <div class="reading-meta">&#128337; ~58 min read &middot; 3 services covered</div>
       <div class="services-grid">
         <span class="service-tag">Step Functions</span>
         <span class="service-tag">API Gateway</span>
         <span class="service-tag">EventBridge</span>
       </div>
       <div id="tracker"></div>
-      <section class="doc-section">
-        <h2 class="section-heading">Today's Concept</h2>
+
+      <section class="doc-section" id="recap">
+        <h2 class="section-heading">Recap: Where We Left Off</h2>
         <div class="card card-accent">
-          <p>Step Functions orchestrates multi-step workflows (Lambda, ECS tasks, human approval waits) with built-in retry/catch and Standard (exactly-once, long-running, auditable) vs Express (high-throughput, at-least-once, cheaper) workflow types. API Gateway fronts these with REST/HTTP APIs, request validation, and native service integrations that bypass Lambda entirely for simple pass-through.</p>
-        </div>
-        <h3 class="sub-heading">Hands-on Lab / Practical Action (45 min)</h3>
-        <div class="card">
-          <p>Design a Step Functions Standard workflow with a human-approval wait state and automatic retry/catch on a downstream Lambda failure.</p>
+          <p>Day 19 ended on the two concurrency controls that decide whether a Lambda-based system stays up under load: reserved concurrency, which caps and guarantees a function's maximum simultaneous executions, and provisioned concurrency, which pre-warms execution environments so cold starts stop showing up in your p99. It also covered event source mapping, the polling layer that batches records from Kinesis, DynamoDB Streams, and SQS into Lambda invocations, along with the per-source concurrency limits and the partial batch failure and DLQ handling that keeps a single poisoned record from stalling an entire shard.</p>
+          <p>Today extends that material rather than replacing it. Reserved concurrency answers "how many copies of this function may run at once," but it says nothing about what those copies are doing or in what order. The moment a business process spans more than one function — validate, reserve inventory, charge a card, wait for a human approval, notify — the concurrency knobs stop being the interesting part of the design. Step Functions and API Gateway are the layer that sits above the individual function and owns sequencing, retries, and the request contract. The same reserved-concurrency reasoning still applies underneath; it just becomes one input to a larger orchestration decision.</p>
         </div>
       </section>
-      <section class="doc-section">
-        <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
-        
-      <div class="scenario-card">
-        <p class="scenario-question"><strong>Q1.</strong> A high-volume IoT pipeline needs to run millions of short workflow executions per day as cheaply as possible, and can tolerate at-least-once execution. Which Step Functions type fits?</p>
-        <div class="scenario-options" id="opts-d20q0">
+
+      <section class="doc-section" id="why-on-exam">
+        <h2 class="section-heading">1. Why This Is on the Exam</h2>
+        <p>SAP-C02 scenario questions rarely ask you to define Step Functions or API Gateway. They ask you to choose between them and something else — a chain of Lambda functions calling each other directly, an SQS queue with a consumer, an Application Load Balancer in front of Fargate, or a single monolithic function that does everything. The exam is testing whether you can recognize the architectural smell of a workflow that has outgrown ad-hoc function-to-function invocation, and whether you know which of the two serverless front-door services actually fits a given requirement.</p>
+        <p>The reason this shows up so often is that the failure mode is subtle and expensive. A team builds a three-step process as three Lambdas where each one invokes the next. It works in development. In production, a transient failure in step two means step one has already committed its side effect, and there is no record anywhere of which executions are half-finished. Retries get bolted on inside each function, and now the retry logic is duplicated three times with three different backoff strategies. The exam presents this as a scenario — "the team needs visibility into which orders are stuck and the ability to retry a failed step without re-running the whole process" — and the correct answer is almost always to move the sequencing into a state machine.</p>
+        <p>This maps most directly to Domain 2 (Design Resilient Architectures) and Domain 3 (Design High-Performing Architectures), with a recurring cost angle from Domain 4. Resilience because orchestration is how you get idempotent retries and durable execution state. Performance because API Gateway's integration types and caching decisions determine whether a request costs you a Lambda invocation at all. Cost because Standard versus Express workflow pricing, and REST versus HTTP API pricing, differ by enough to change the answer on a high-volume scenario. When a question mentions millions of executions, sub-second latency requirements, or a need for exactly-once semantics, it is pointing at one of these forks.</p>
+      </section>
+
+      <section class="doc-section" id="mechanism">
+        <h2 class="section-heading">2. How the Orchestration Layer Actually Works</h2>
+        <p>A Step Functions state machine is a JSON document — the Amazon States Language definition — that describes a set of states and the transitions between them. The service maintains the execution history for every run, and that history is the whole point. Each state transition is recorded, so when an execution fails you can see exactly which state it died in, what the input to that state was, and what the error was. The state machine itself is not a running process; it is a durable coordinator that invokes other things and waits. That distinction matters because it means an execution can pause for hours or days without consuming compute, which is what makes human-approval steps practical.</p>
+        <p>States come in a handful of types that cover most orchestration needs. A Task state does work — invoke a Lambda, run an ECS task, call an API Gateway endpoint, publish to SNS, start a nested state machine, or call almost any AWS API directly through the optimized integrations. A Choice state branches on the input. A Wait state pauses for a duration or until a timestamp. A Parallel state fans out and waits for all branches. A Map state iterates over an array, either inline or in Distributed mode for large-scale parallel processing. A Pass state transforms data without doing work. Fail and Succeed terminate the execution. The retry and catch fields on a Task state are where the resilience story lives: Retry defines which error names to retry, how many times, with what interval and backoff rate, and Catch defines where to transition when retries are exhausted.</p>
+        <p>API Gateway sits at the other end of the request path. It is a managed front door that terminates TLS, authenticates the caller, validates and transforms the request, and routes it to a backend. The backend can be a Lambda function, but it does not have to be — API Gateway has direct integrations to other AWS services, which means a request that only needs to write an item to DynamoDB can be served without ever invoking a function. That is the detail most candidates miss. When a scenario describes a simple pass-through endpoint with no business logic, the cheapest and lowest-latency answer is often a direct service integration rather than a Lambda proxy. EventBridge is the third piece: an event bus that routes events from AWS services and your own applications to targets based on rules, which is how you decouple a producer from an unknown number of consumers without the producer knowing any of them exist.</p>
+      </section>
+
+      <section class="doc-section" id="core-decision-boundary">
+        <h2 class="section-heading">3. The Core Decision Boundary: Standard vs. Express</h2>
+        <p>The single fork that most Step Functions scenario questions hinge on is the workflow type, and it is a genuine tradeoff rather than a strict upgrade in either direction. Standard Workflows are built for long-running, auditable, exactly-once processes. They keep a full execution history in the console and API for up to 90 days, they support the full set of state types including the synchronous callback pattern used for human approvals, and they are priced per state transition. Express Workflows are built for high-volume, short-duration, event-processing workloads. They are priced by number of executions and by duration, they can run at very high request rates, and they emit logs and metrics to CloudWatch rather than maintaining a queryable execution history. The semantics are at-least-once, which means your downstream operations need to be idempotent.</p>
+        <p>The exam phrasing that selects Standard is almost always about durability or human interaction: "the process may wait several days for approval," "the team needs to audit every step of each execution," "the workflow must not run a step twice." The phrasing that selects Express is about volume and cost: "millions of executions per day," "short-lived event processing," "the workload can tolerate at-least-once delivery." A useful mental check is whether you would ever need to open the console and look at one specific execution from last week. If yes, that is Standard. If the answer is "we only care about aggregate success rates," Express is the cheaper fit.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Dimension</th><th>Standard Workflows</th><th>Express Workflows</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Execution semantics</td><td>Exactly-once</td><td>At-least-once</td></tr>
+              <tr><td>Max duration</td><td>Up to one year</td><td>Up to five minutes</td></tr>
+              <tr><td>Execution history</td><td>Queryable via console and API</td><td>CloudWatch Logs only</td></tr>
+              <tr><td>Pricing model</td><td>Per state transition</td><td>Per execution plus duration</td></tr>
+              <tr><td>Request rate</td><td>Moderate, rate-limited</td><td>Very high throughput</td></tr>
+              <tr><td>Callback pattern (human approval)</td><td>Supported</td><td>Not supported</td></tr>
+              <tr><td>Best fit</td><td>Business processes, approvals, audits</td><td>Event processing, streaming, IoT</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="doc-section" id="config-tradeoffs">
+        <h2 class="section-heading">4. Configuration Modes and Their Tradeoffs</h2>
+        <p>On the API Gateway side, the first configuration decision is REST API versus HTTP API, and the naming is genuinely unhelpful because both serve HTTP traffic. REST APIs are the older, feature-complete product. They support API keys and usage plans, request and response validation against JSON Schema models, AWS WAF integration, private endpoints, response caching, and the full set of request/response transformation mapping templates. HTTP APIs are the newer, leaner product built for lower latency and lower cost. They support JWT authorizers and Lambda authorizers, but they drop API keys, usage plans, per-method caching, and request validation. The tradeoff is roughly "features versus price and latency," and the exam will describe a requirement for usage plans or WAF and expect you to land on REST.</p>
+        <p>The second decision is the integration type, and this is where cost savings hide. A Lambda proxy integration passes the entire request to a function and expects a specific response shape back. A Lambda custom integration lets you use mapping templates to reshape both directions. An AWS service integration calls another AWS service directly — SQS, SNS, DynamoDB, Kinesis, Step Functions — with no function in the path. A mock integration returns a static response without touching any backend, which is useful for health checks and for stubbing endpoints during development. An HTTP integration proxies to an arbitrary HTTP endpoint, which is how you put API Gateway in front of an existing on-premises service or a third-party API.</p>
+        <p>Step Functions has its own set of configuration knobs worth knowing. The Map state has two modes: Inline, which runs up to 40 concurrent iterations within the parent execution and shares its history, and Distributed, which launches child executions and can process very large datasets with high concurrency. Distributed Map is the answer when a scenario describes processing a large S3 manifest or millions of items. The callback pattern — where a Task state passes a task token to an external system and waits for that system to call SendTaskSuccess or SendTaskFailure — is the mechanism behind human approval workflows and long-running external integrations. It is also the reason those workflows must be Standard: Express has a five-minute ceiling and no callback support.</p>
+      </section>
+
+      <section class="doc-section" id="sizing-limits">
+        <h2 class="section-heading">5. Sizing, Limits and Quotas</h2>
+        <p>Quotas matter here because several of them are the actual constraint in a scenario rather than a footnote. Step Functions Standard executions can run for up to one year, which is what makes multi-day approval workflows viable. Express executions are capped at five minutes, so any scenario describing a long-running process rules Express out immediately. The state machine definition itself has a size limit, and the execution history for a Standard workflow is capped at 25,000 events — a limit that long-running Map-heavy workflows can genuinely hit, which is one reason Distributed Map exists. The Map state's Inline mode allows up to 40 concurrent iterations, while Distributed Map scales far higher and is the correct answer for large-scale fan-out.</p>
+        <p>API Gateway quotas shape the front door. REST APIs have a default steady-state limit of 10,000 requests per second per region with a burst capacity, and this is adjustable through a support request. HTTP APIs have a higher default request rate. Payload size is capped at 10 MB for REST APIs, which is a hard limit that shows up in scenarios about file uploads — the standard answer is to have the client upload directly to S3 using a presigned URL and pass only the object key through the API. Integration timeout is 29 seconds for REST APIs, which is the number that kills any design where API Gateway synchronously waits on a long-running backend process. The correct pattern in that case is to return immediately and hand the work to Step Functions or a queue.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Limit</th><th>Value</th><th>Why it matters in a scenario</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Standard execution duration</td><td>Up to 1 year</td><td>Enables multi-day human approval waits</td></tr>
+              <tr><td>Express execution duration</td><td>Up to 5 minutes</td><td>Rules out long-running processes</td></tr>
+              <tr><td>Standard execution history</td><td>25,000 events</td><td>Long Map-heavy workflows can exhaust it</td></tr>
+              <tr><td>Map state, Inline mode</td><td>Up to 40 concurrent iterations</td><td>Large fan-out needs Distributed Map</td></tr>
+              <tr><td>REST API payload</td><td>10 MB</td><td>Large uploads go direct to S3 via presigned URL</td></tr>
+              <tr><td>REST API integration timeout</td><td>29 seconds</td><td>Long backends must be asynchronous</td></tr>
+              <tr><td>REST API default rate</td><td>10,000 RPS per region</td><td>Adjustable; HTTP APIs default higher</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="doc-section" id="failure-modes">
+        <h2 class="section-heading">6. Failure Modes and What They Look Like in Production</h2>
+        <p>The most common production failure in a Step Functions workflow is a Task state that fails in a way the state machine does not handle, leaving the execution in a Failed state with no automatic recovery. The symptom is a growing count of failed executions in CloudWatch and a business process that has silently stopped for a subset of customers. The first diagnostic move is to open the execution history and read the failed state's error and cause fields, which usually name the downstream service and the specific error. The fix is almost always to add a Catch block that routes to a compensating action or a dead-letter path, rather than letting the execution terminate.</p>
+        <p>The second failure mode is the non-idempotent retry. A Task state invokes a Lambda that charges a credit card, the Lambda succeeds but the response is lost to a network timeout, Step Functions retries, and the customer is charged twice. This is not a Step Functions bug — it is a design gap, and the exam tests it. The mitigation is to make the downstream operation idempotent, typically by passing a deterministic idempotency key derived from the execution ID and having the downstream service deduplicate on it. Any scenario that mentions retries and a payment or provisioning step is probing whether you know this.</p>
+        <p>On the API Gateway side, the classic failure is the 504 integration timeout. A backend that takes longer than 29 seconds to respond produces a gateway timeout, and the client sees a failure even though the backend may eventually complete. The symptom is a spike in 5xx responses correlated with a specific endpoint, while the backend's own metrics look healthy. The fix is architectural: return a 202 with a job identifier, do the work asynchronously, and let the client poll or receive a notification. The other common failure is throttling — 429 responses when request volume exceeds the account or stage limit — which is diagnosed by looking at the ThrottleCount and 4XXError metrics together. A third, quieter failure is a Lambda authorizer that caches a decision for longer than intended, so a revoked token keeps working until the cache TTL expires.</p>
+      </section>
+
+      <section class="doc-section" id="sre-angle">
+        <h2 class="section-heading">7. The Operational and SRE Angle</h2>
+        <p>Step Functions emits metrics that map cleanly onto an SLO. ExecutionsStarted, ExecutionsSucceeded, ExecutionsFailed, ExecutionsTimedOut, and ExecutionsAborted are the core set, and the ratio of failed to started is the natural error-rate signal. For a business process, the more useful SLO is often expressed in terms of completion latency rather than raw error rate — "95% of orders reach a terminal state within ten minutes" — which you can approximate by alarming on ExecutionTime. The operational discipline that matters most is alerting on failed executions rather than waiting for a customer to report a stuck order, because a failed execution is silent by default.</p>
+        <p>API Gateway's operational surface is the standard four golden signals applied to the front door. Count is the request volume per stage and method. Latency is reported as IntegrationLatency (time spent in the backend) and Latency (total time including API Gateway overhead), and the gap between them tells you whether a slowdown is yours or the gateway's. Errors split into 4XXError (client-side, including throttling) and 5XXError (server-side, including integration timeouts). Saturation shows up as ThrottleCount. The runbook shape for a 5xx spike is: check whether IntegrationLatency rose first (backend problem) or whether 5XXError rose with flat latency (a backend returning errors quickly), then check whether the backend's own concurrency limits were hit.</p>
+        <p>For EventBridge, the operational concern is different again. EventBridge is a routing layer, and a rule that matches nothing fails silently — the event is simply dropped. The metrics to watch are Invocations, FailedInvocations, and ThrottledRules, and the discipline is to have a catch-all rule or a dead-letter queue on every rule that matters, so that an event which fails to reach its target is recoverable rather than lost. Because EventBridge is asynchronous and decoupled by design, the producer has no idea whether the consumer succeeded, which is exactly the property that makes it useful and exactly the property that makes silent loss possible.</p>
+      </section>
+
+      <section class="doc-section" id="gotchas">
+        <h2 class="section-heading">8. Edge Cases and Exam Gotchas</h2>
+        <p>The gotcha that catches the most candidates is assuming Express Workflows are simply a cheaper Standard. They are not a drop-in replacement: Express cannot do the callback pattern, cannot run longer than five minutes, and does not retain a queryable execution history. A scenario that mentions a human approval step is a Standard scenario, full stop, regardless of volume. Conversely, a scenario that mentions millions of short executions and a tight cost target is an Express scenario, and answering Standard because "it's more reliable" is the trap.</p>
+        <p>The second cluster of gotchas is about API Gateway's limits being hard rather than soft. The 10 MB payload limit and the 29-second integration timeout are not adjustable, so any design that depends on exceeding them is wrong by construction. The correct patterns — presigned S3 uploads for large payloads, asynchronous job submission for long-running work — are the answers the exam is looking for. A related trap is choosing REST when HTTP API would do, or vice versa: if the scenario needs API keys, usage plans, request validation, or WAF, it needs REST; if it only needs JWT authorization and low latency at high volume, HTTP API is the cheaper correct answer.</p>
+        <p>Finally, be precise about what EventBridge is for. It is not a queue and it does not guarantee ordering. It is a content-based router for events, and its value is that a producer can publish without knowing its consumers. If a scenario requires strict ordering or exactly-once processing of messages, that is SQS FIFO or Kinesis, not EventBridge. If a scenario requires that a new consumer be added without changing the producer, that is EventBridge. And if a scenario describes a scheduled job, EventBridge Scheduler is the modern answer rather than a CloudWatch Events cron rule, though both appear in older material.</p>
+      </section>
+
+      <section class="doc-section" id="vs-comparison">
+        <h2 class="section-heading">9. This vs. the Services It Gets Confused With</h2>
+        <p>The most frequent confusion is Step Functions versus a chain of Lambda functions invoking each other. Direct invocation is simpler to build and has lower per-step latency, but it has no durable execution state, no built-in retry with backoff, no visibility into which step failed, and no way to pause. Step Functions adds a coordination layer and a small amount of latency per transition in exchange for all of those properties. The rule of thumb: if the process has more than two or three steps, involves a wait, or needs an audit trail, use a state machine. If it is a single transformation with no branching, a plain Lambda is fine and cheaper.</p>
+        <p>The second confusion is API Gateway versus an Application Load Balancer. Both are front doors, but they serve different backends. ALB is the right choice for containerized or EC2 backends, for WebSocket-style long-lived connections at the load balancer level, and when you need the richer health-check and target-group semantics. API Gateway is the right choice when the backend is Lambda or another AWS service, when you need per-request authorization and throttling at the API level, or when you want usage plans and API keys. A useful discriminator: if the scenario mentions Fargate or EC2 targets, ALB; if it mentions Lambda functions or direct service integrations, API Gateway.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Requirement</th><th>Pick</th><th>Why</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Multi-step process with retries and audit trail</td><td>Step Functions</td><td>Durable execution history and built-in Retry/Catch</td></tr>
+              <tr><td>Single transformation, no branching</td><td>Lambda</td><td>Lower latency, no orchestration overhead</td></tr>
+              <tr><td>Human approval that may wait days</td><td>Step Functions Standard</td><td>Callback pattern plus one-year execution limit</td></tr>
+              <tr><td>Millions of short event executions, cost-sensitive</td><td>Step Functions Express</td><td>Per-execution pricing, high throughput</td></tr>
+              <tr><td>HTTP front door for Lambda or AWS services</td><td>API Gateway</td><td>Native integrations, auth, throttling, usage plans</td></tr>
+              <tr><td>HTTP front door for Fargate or EC2</td><td>Application Load Balancer</td><td>Target groups, health checks, container-native</td></tr>
+              <tr><td>Fan out one event to unknown consumers</td><td>EventBridge</td><td>Content-based routing, producer decoupled from consumers</td></tr>
+              <tr><td>Strict ordering, exactly-once message processing</td><td>SQS FIFO or Kinesis</td><td>EventBridge does not guarantee ordering</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="doc-section" id="lab">
+        <h2 class="section-heading">Hands-on Lab: A Standard Workflow with Human Approval and Retry/Catch</h2>
+        <div class="card card-green">
+          <p>The goal of this lab is to build a Step Functions Standard state machine that models an order-approval process: it validates an order, attempts a downstream charge, retries transient failures with backoff, catches permanent failures into a compensation path, and pauses for a human approval before fulfilment. You will wire the approval using the callback pattern with a task token, and you will verify the retry and catch behavior by deliberately failing the charge step.</p>
+          <p><strong>1. Create the downstream functions.</strong> Write three small Lambda functions. <code>validateOrder</code> takes an order object and returns it with a <code>validated: true</code> flag, or throws a <code>ValidationError</code> if the amount is missing. <code>chargeCard</code> simulates a payment call: it should throw a <code>TransientError</code> on roughly the first invocation for a given order ID (store a counter in a DynamoDB table or use an environment variable to force the failure) and succeed on retry. <code>notifyCustomer</code> writes a message to an SNS topic. Give each function an IAM role scoped to only what it needs.</p>
+          <p><strong>2. Define the state machine.</strong> In the Step Functions console, author a state machine in Amazon States Language. Start with a Task state that invokes <code>validateOrder</code>. Add a Choice state after it that branches to a Fail state if <code>validated</code> is false. The next Task state invokes <code>chargeCard</code> and carries a <code>Retry</code> block with <code>ErrorEquals: ["TransientError"]</code>, <code>IntervalSeconds: 2</code>, <code>MaxAttempts: 3</code>, and <code>BackoffRate: 2.0</code>. Add a <code>Catch</code> block on the same state with <code>ErrorEquals: ["States.ALL"]</code> that transitions to a compensation Task state which marks the order as failed.</p>
+          <p><strong>3. Add the human approval wait.</strong> After a successful charge, add a Task state that uses the <code>.waitForTaskToken</code> integration pattern. The state should invoke a Lambda that publishes the task token and the order details to an SNS topic or writes them to a DynamoDB table for an approver to pick up. The state machine will pause here indefinitely — this is the behavior that requires Standard Workflows. Set a <code>TimeoutSeconds</code> on the state so that an unanswered approval eventually fails rather than hanging forever.</p>
+          <p><strong>4. Complete the approval loop.</strong> Build a second small Lambda, <code>submitApproval</code>, that takes a task token and a decision and calls <code>SendTaskSuccess</code> or <code>SendTaskFailure</code> on the Step Functions API. Invoke it manually from the console or via a test API Gateway endpoint to simulate an approver clicking approve or reject. On success, the workflow should proceed to <code>notifyCustomer</code> and then a Succeed state; on failure, it should route to the compensation path.</p>
+          <p><strong>5. Verify the failure paths.</strong> Start an execution and confirm the charge step retries three times with increasing intervals before either succeeding or catching. Start a second execution with an invalid order and confirm it fails at the Choice state without ever reaching the charge step. Start a third and let the approval timeout expire, then inspect the execution history to see the timeout recorded as a distinct event.</p>
+          <p><strong>6. Inspect and instrument.</strong> Open the execution history for each run and identify the exact state where each one terminated. Then create a CloudWatch alarm on the <code>ExecutionsFailed</code> metric for this state machine and confirm it fires when you deliberately trigger the compensation path. Finally, add a Catch block that publishes the failed execution's input to a dead-letter SQS queue so that a stuck order can be replayed manually.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="quiz">
+        <h2 class="section-heading">Scenario Question Drills</h2>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q1.</strong> A high-volume IoT pipeline needs to run millions of short workflow executions per day as cheaply as possible, and can tolerate at-least-once execution. Which Step Functions type fits?</p>
+          <div class="scenario-options" id="opts-d20q1">
             <div class="scenario-option">A. Standard Workflows</div>
             <div class="scenario-option">B. Express Workflows</div>
             <div class="scenario-option">C. Both are identical in cost</div>
             <div class="scenario-option">D. Neither — use SQS only</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d20q1', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d20q1"><strong>Correct answer: B.</strong> Express Workflows are priced per execution and duration for high-volume, short-duration workloads and provide at-least-once semantics, versus Standard's exactly-once but costlier per-transition pricing.</div>
         </div>
-        <button class="scenario-reveal-btn" onclick="revealAnswer('d20q0', 1)">Reveal Answer</button>
-        <div class="scenario-explanation" id="exp-d20q0"><strong>Correct answer: B.</strong> Express Workflows are priced per execution/duration for high-volume, short-duration workloads and provide at-least-once semantics, versus Standard's exactly-once but costlier per-transition pricing.</div>
-      </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q2.</strong> An insurance claims process must pause for up to five days while a human adjuster reviews a claim, and every step of every claim must be auditable for compliance. Which configuration is required?</p>
+          <div class="scenario-options" id="opts-d20q2">
+            <div class="scenario-option">A. Express Workflow with a Wait state</div>
+            <div class="scenario-option">B. Standard Workflow using the callback pattern with a task token</div>
+            <div class="scenario-option">C. A Lambda function that polls a database every minute</div>
+            <div class="scenario-option">D. An SQS queue with a five-day visibility timeout</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d20q2', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d20q2"><strong>Correct answer: B.</strong> Only Standard Workflows support the callback pattern and long execution durations, and they retain a queryable execution history for audit. Express is capped at five minutes and has no callback support.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q3.</strong> A REST API in API Gateway must enforce per-customer request quotas and reject requests that do not match a defined JSON schema before they reach the backend. Which API type is required?</p>
+          <div class="scenario-options" id="opts-d20q3">
+            <div class="scenario-option">A. HTTP API, because it is cheaper and lower latency</div>
+            <div class="scenario-option">B. REST API, because usage plans and request validation are REST-only features</div>
+            <div class="scenario-option">C. Either works identically</div>
+            <div class="scenario-option">D. A WebSocket API</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d20q3', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d20q3"><strong>Correct answer: B.</strong> Usage plans with API keys and request validation against JSON Schema models are features of REST APIs. HTTP APIs support JWT and Lambda authorizers but not usage plans or request validation.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q4.</strong> A client needs to upload a 200 MB video through an API. The current design posts the file to an API Gateway endpoint backed by Lambda, and uploads fail. What is the correct fix?</p>
+          <div class="scenario-options" id="opts-d20q4">
+            <div class="scenario-option">A. Increase the Lambda memory allocation</div>
+            <div class="scenario-option">B. Switch to an HTTP API, which has a larger payload limit</div>
+            <div class="scenario-option">C. Have the client request a presigned S3 URL and upload directly to S3, passing only the object key through the API</div>
+            <div class="scenario-option">D. Enable API Gateway response caching</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d20q4', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d20q4"><strong>Correct answer: C.</strong> API Gateway has a hard 10 MB payload limit that is not adjustable. Large uploads must bypass the API entirely and go directly to S3 via a presigned URL.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q5.</strong> A Step Functions workflow charges a customer's credit card, and the team has configured a Retry block on the charge state. During a network blip, a customer is charged twice. What is the root cause?</p>
+          <div class="scenario-options" id="opts-d20q5">
+            <div class="scenario-option">A. Step Functions retries are not guaranteed to be exactly-once at the task level</div>
+            <div class="scenario-option">B. The charge operation is not idempotent, so a retry after a lost response duplicates the charge</div>
+            <div class="scenario-option">C. The Retry block should have MaxAttempts set to 0</div>
+            <div class="scenario-option">D. The workflow should have been an Express Workflow</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d20q5', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d20q5"><strong>Correct answer: B.</strong> Retries are a design feature, not a bug. Any retried operation with a side effect must be idempotent, typically by passing a deterministic idempotency key derived from the execution ID so the downstream service can deduplicate.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q6.</strong> An endpoint backed by a Lambda function consistently returns 504 errors under load, while the Lambda's own error rate and duration metrics look normal. What is the most likely cause?</p>
+          <div class="scenario-options" id="opts-d20q6">
+            <div class="scenario-option">A. The Lambda function is running out of memory</div>
+            <div class="scenario-option">B. The backend is exceeding the API Gateway integration timeout, so the gateway gives up before the function responds</div>
+            <div class="scenario-option">C. The API stage has no usage plan attached</div>
+            <div class="scenario-option">D. CloudWatch Logs retention is too short</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d20q6', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d20q6"><strong>Correct answer: B.</strong> REST APIs have a 29-second integration timeout. A backend that takes longer produces a 504 even though it may eventually complete. The fix is to return a job identifier immediately and process asynchronously.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q7.</strong> A team needs to process a manifest of 5 million S3 objects, applying the same transformation to each, with high concurrency and per-item error isolation. Which Step Functions feature fits?</p>
+          <div class="scenario-options" id="opts-d20q7">
+            <div class="scenario-option">A. A Parallel state with two branches</div>
+            <div class="scenario-option">B. A Map state in Inline mode</div>
+            <div class="scenario-option">C. A Map state in Distributed mode</div>
+            <div class="scenario-option">D. A Choice state inside a loop</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d20q7', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d20q7"><strong>Correct answer: C.</strong> Distributed Map launches child executions and scales to very large datasets with high concurrency, whereas Inline mode is limited to 40 concurrent iterations and shares the parent's execution history.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q8.</strong> A producer application publishes order events, and the team wants to add a new analytics consumer next quarter without modifying or redeploying the producer. What should route the events?</p>
+          <div class="scenario-options" id="opts-d20q8">
+            <div class="scenario-option">A. An SQS queue that the producer writes to directly</div>
+            <div class="scenario-option">B. An EventBridge event bus with rules that route to each consumer</div>
+            <div class="scenario-option">C. A Step Functions state machine invoked by the producer</div>
+            <div class="scenario-option">D. A Lambda function that the producer invokes synchronously</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d20q8', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d20q8"><strong>Correct answer: B.</strong> EventBridge decouples producers from consumers: the producer publishes to the bus, and new consumers are added by creating new rules, with no change to the producer.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q9.</strong> A simple endpoint needs to write an item to DynamoDB and return a 200. There is no business logic, no transformation, and no other backend call. What is the most cost-effective design?</p>
+          <div class="scenario-options" id="opts-d20q9">
+            <div class="scenario-option">A. API Gateway with a Lambda proxy integration that writes to DynamoDB</div>
+            <div class="scenario-option">B. API Gateway with a direct AWS service integration to DynamoDB</div>
+            <div class="scenario-option">C. An Application Load Balancer in front of a Fargate task</div>
+            <div class="scenario-option">D. A Step Functions Express workflow</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d20q9', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d20q9"><strong>Correct answer: B.</strong> API Gateway can integrate directly with AWS services. When there is no logic to run, a direct integration avoids the cost and latency of a Lambda invocation entirely.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q10.</strong> A workflow's execution history shows it terminated in a Failed state, and the team wants to know which step failed and why. Where is that information?</p>
+          <div class="scenario-options" id="opts-d20q10">
+            <div class="scenario-option">A. In the Lambda function's CloudWatch log group only</div>
+            <div class="scenario-option">B. In the Step Functions execution history, which records each state transition with its input, error, and cause</div>
+            <div class="scenario-option">C. In AWS CloudTrail, which logs every state transition</div>
+            <div class="scenario-option">D. It is not recoverable after the execution ends</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d20q10', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d20q10"><strong>Correct answer: B.</strong> Standard Workflow execution history records every state transition along with the input, error name, and cause, which is exactly what makes it useful for diagnosing a failed process.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q11.</strong> An EventBridge rule that should forward critical security events to a Lambda function appears to be dropping some events, and no errors are visible. What is the most likely explanation?</p>
+          <div class="scenario-options" id="opts-d20q11">
+            <div class="scenario-option">A. EventBridge guarantees delivery, so the events must be reaching the function</div>
+            <div class="scenario-option">B. The rule's event pattern does not match those events, so they are silently not routed</div>
+            <div class="scenario-option">C. The Lambda function's reserved concurrency is too high</div>
+            <div class="scenario-option">D. EventBridge requires a VPC endpoint to route events</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d20q11', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d20q11"><strong>Correct answer: B.</strong> EventBridge routes by content-based pattern matching. An event that matches no rule is dropped without error, which is why a catch-all rule or a dead-letter queue on important rules is standard practice.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q12.</strong> A team wants to expose an existing on-premises HTTP service through API Gateway without rewriting it as a Lambda function. Which integration type should they use?</p>
+          <div class="scenario-options" id="opts-d20q12">
+            <div class="scenario-option">A. Lambda proxy integration</div>
+            <div class="scenario-option">B. Mock integration</div>
+            <div class="scenario-option">C. HTTP integration</div>
+            <div class="scenario-option">D. AWS service integration</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d20q12', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d20q12"><strong>Correct answer: C.</strong> An HTTP integration proxies requests to an arbitrary HTTP endpoint, which is how API Gateway fronts existing on-premises or third-party services without a Lambda in the path.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q13.</strong> A Step Functions workflow invokes a Lambda that occasionally throws a throttling error. The team wants the workflow to retry with increasing intervals and, after three attempts, route to a notification path rather than failing. Which two state machine fields accomplish this?</p>
+          <div class="scenario-options" id="opts-d20q13">
+            <div class="scenario-option">A. TimeoutSeconds and HeartbeatSeconds</div>
+            <div class="scenario-option">B. Retry with a BackoffRate, and Catch to transition on exhausted retries</div>
+            <div class="scenario-option">C. Parallel and Map</div>
+            <div class="scenario-option">D. InputPath and ResultPath</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d20q13', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d20q13"><strong>Correct answer: B.</strong> Retry defines which errors to retry, how many times, and the backoff rate; Catch defines where to transition once retries are exhausted, which is how you route to a notification or compensation path instead of failing the execution.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q14.</strong> A scenario requires strict ordering of messages and exactly-once processing for financial transactions. Which service should handle the messages?</p>
+          <div class="scenario-options" id="opts-d20q14">
+            <div class="scenario-option">A. EventBridge, because it supports content-based routing</div>
+            <div class="scenario-option">B. SQS FIFO or Kinesis, because EventBridge does not guarantee ordering</div>
+            <div class="scenario-option">C. Step Functions Express Workflows</div>
+            <div class="scenario-option">D. API Gateway with a mock integration</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d20q14', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d20q14"><strong>Correct answer: B.</strong> EventBridge is a router, not a queue, and does not guarantee ordering. Strict ordering and exactly-once processing require SQS FIFO or Kinesis.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q15.</strong> A team is choosing between an Application Load Balancer and API Gateway for a new service. The backend will be a Fargate task that needs health checks and target-group-based routing. Which should they choose?</p>
+          <div class="scenario-options" id="opts-d20q15">
+            <div class="scenario-option">A. API Gateway, because it supports Lambda and AWS service integrations</div>
+            <div class="scenario-option">B. Application Load Balancer, because it is the right front door for containerized backends with health checks and target groups</div>
+            <div class="scenario-option">C. Either, since both terminate TLS</div>
+            <div class="scenario-option">D. Neither — use a Network Load Balancer</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d20q15', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d20q15"><strong>Correct answer: B.</strong> ALB is the correct front door for Fargate and EC2 backends, with target groups and health checks. API Gateway is the right choice when the backend is Lambda or another AWS service.</div>
+        </div>
+      </section>
+
+      <section class="doc-section" id="preview">
+        <h2 class="section-heading">Peek into Tomorrow</h2>
+        <div class="card card-purple">
+          <p>Everything covered today assumed you had already decided that the workload belongs on a serverless orchestration layer. That assumption is doing a lot of work, and it is exactly the assumption tomorrow's synthesis is designed to stress. Step Functions and API Gateway are one point in a much larger compute decision space that also includes ECS on Fargate, EKS with managed node groups, plain Lambda invoked directly, and EC2 Auto Scaling groups. Each of those has a different answer to the same three questions: how much operational overhead does the team absorb, what does it cost at the expected volume, and how much control do you give up in exchange for the managed layer.</p>
+          <p>The unresolved question is where the boundary actually sits. A team with deep Kubernetes experience and existing manifests will make a different call than a team of three developers with no container platform experience, even for the same workload. Cost curves cross at different volumes — a Fargate service that is cheap at low traffic can become more expensive than a right-sized EC2 fleet at steady high traffic, while a Lambda-based design inverts that relationship. Tomorrow consolidates those tradeoffs into a decision matrix and drills them with scenario questions, which is the point at which the individual service knowledge from this week has to become a repeatable judgment call.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="sources">
+        <h2 class="section-heading">Sources</h2>
+        <div class="card">
+          <ul class="source-list">
+            <li><a href="https://docs.aws.amazon.com/step-functions/latest/dg/welcome.html" target="_blank">AWS Step Functions Developer Guide — What Is AWS Step Functions?</a></li>
+            <li><a href="https://docs.aws.amazon.com/step-functions/latest/dg/concepts-standard-vs-express.html" target="_blank">AWS Step Functions — Standard vs. Express Workflows</a></li>
+            <li><a href="https://docs.aws.amazon.com/step-functions/latest/dg/connect-to-resource.html" target="_blank">AWS Step Functions — Service Integration Patterns (including callback with task token)</a></li>
+            <li><a href="https://docs.aws.amazon.com/step-functions/latest/dg/concepts-error-handling.html" target="_blank">AWS Step Functions — Error Handling (Retry and Catch)</a></li>
+            <li><a href="https://docs.aws.amazon.com/apigateway/latest/developerguide/welcome.html" target="_blank">Amazon API Gateway Developer Guide — What Is Amazon API Gateway?</a></li>
+            <li><a href="https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-vs-rest.html" target="_blank">Amazon API Gateway — Choosing Between HTTP APIs and REST APIs</a></li>
+            <li><a href="https://docs.aws.amazon.com/apigateway/latest/developerguide/limits.html" target="_blank">Amazon API Gateway — Quotas and Important Notes</a></li>
+            <li><a href="https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-what-is.html" target="_blank">Amazon EventBridge User Guide — What Is Amazon EventBridge?</a></li>
+            <li><a href="https://docs.aws.amazon.com/wellarchitected/latest/reliability-pillar/welcome.html" target="_blank">AWS Well-Architected Framework — Reliability Pillar</a></li>
+          </ul>
+        </div>
       </section>
       <div class="day-nav">
         <a href="day-019.html">&larr; Day 19: AWS Lambda Advanced — Concurrency, VPC Networking &amp; Event Source Mapping</a>
