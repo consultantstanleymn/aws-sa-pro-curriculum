@@ -104,38 +104,342 @@
         <span class="pill pill-green">Phase 3: SRE Observability, Resilience &amp; DR</span>
       </div>
       <h1 class="hero-title">Multi-Region Active-Passive &amp; Pilot Light Patterns</h1>
-      <div class="reading-meta">&#128337; ~3 min read &middot; 3 services covered</div>
+      <div class="reading-meta">&#128337; ~58 min read &middot; 3 services covered</div>
       <div class="services-grid">
         <span class="service-tag">Pilot Light</span>
         <span class="service-tag">Warm Standby</span>
         <span class="service-tag">Backup &amp; Restore</span>
       </div>
       <div id="tracker"></div>
-      <section class="doc-section">
-        <h2 class="section-heading">Today's Concept</h2>
+
+      <section class="doc-section" id="recap">
+        <h2 class="section-heading">Recap: Where We Left Off</h2>
         <div class="card card-accent">
-          <p>DR strategies form a cost/RTO spectrum: Backup &amp; Restore (cheapest, highest RTO/RPO, hours-days), Pilot Light (core data replicated, minimal standby infra, RTO ~10s of minutes), Warm Standby (scaled-down full replica running, RTO minutes), and Multi-Site Active-Active (lowest RTO/RPO, highest cost).</p>
-        </div>
-        <h3 class="sub-heading">Hands-on Lab / Practical Action (45 min)</h3>
-        <div class="card">
-          <p>Map a workload's business RTO/RPO requirement to the cheapest DR strategy on the spectrum that satisfies it, and justify the choice.</p>
+          <p>Day 35 pushed the multi-region conversation to its logical extreme: serving live traffic from two or more regions simultaneously, with Global Accelerator anycast IPs or Route 53 geoproximity routing steering users to the nearest healthy endpoint and a multi-writer data tier underneath. That architecture buys the lowest possible RTO and RPO, but it also demands that every write path be conflict-aware — either through last-writer-wins semantics in DynamoDB Global Tables or through deliberate partitioning so that two regions never contend for the same key. The cost of that guarantee is real: you pay for full production capacity in every region, all the time, and you accept a permanent increase in operational complexity.</p>
+          <p>Today's material contrasts with that posture rather than extending it. Active-passive patterns accept a period of degraded or absent service in exchange for dramatically lower standing cost, and the engineering problem shifts from conflict resolution to failover orchestration. The question is no longer "how do two live regions agree on state" but "how quickly and reliably can a dormant region be brought to life, and how much data do we lose in the gap." That reframing is what makes Pilot Light, Warm Standby, and Backup &amp; Restore a distinct family of designs rather than just cheaper versions of active-active.</p>
         </div>
       </section>
-      <section class="doc-section">
+
+      <section class="doc-section" id="why-on-exam">
+        <h2 class="section-heading">1. Why This Is on the Exam</h2>
+        <p>Disaster recovery design is one of the most heavily weighted topics in the SAP-C02 blueprint, and it sits squarely inside the Resilient Architectures domain. The reason it appears so often is that DR is where cost, reliability, and business requirements collide most visibly. A question that asks you to choose between four architectures is almost always really asking whether you can read a stated RTO and RPO, translate them into a required recovery mechanism, and then pick the cheapest design that satisfies both constraints. Candidates who answer by picking the most resilient option fail these questions constantly, because the exam rewards the cheapest sufficient answer, not the strongest possible one.</p>
+        <p>The second reason this topic is exam-dense is that it forces you to reason about what "recovery" actually means for each layer of a stack. Compute can be recreated from an AMI or a container image in minutes. Data cannot be recreated at all if it was never replicated. Configuration, DNS, certificates, and IAM roles sit somewhere in between — reproducible in principle, but only if they were codified. A scenario that says "the primary region is unavailable" is testing whether you understand which of those layers is the actual bottleneck, because the DR strategy you choose is determined by the slowest layer to recover, not the fastest.</p>
+        <p>Finally, the exam uses DR scenarios to probe whether you understand the difference between a backup and a replica. A backup is a point-in-time artifact you restore from, and restoring it takes time proportional to its size. A replica is a continuously updated copy you can promote, and promoting it takes time proportional to detection and cutover, not data volume. Backup &amp; Restore strategies are bounded by restore time; Pilot Light and Warm Standby strategies are bounded by detection and scaling time. Recognizing which bound applies to a given scenario is usually enough to eliminate two of the four answer choices immediately.</p>
+      </section>
+
+      <section class="doc-section" id="mechanism">
+        <h2 class="section-heading">2. How the Spectrum Actually Works</h2>
+        <p>The four canonical DR strategies are not four separate products. They are four points on a single continuum defined by how much of the standby environment is kept running before a disaster occurs. At one end, Backup &amp; Restore keeps nothing running in the standby region except storage for the backups themselves. At the other end, Multi-Site Active-Active keeps a full production footprint running in every region and serves traffic from all of them. Pilot Light and Warm Standby occupy the middle, and the difference between them is precisely how much of the compute layer is pre-provisioned.</p>
+        <p>Pilot Light takes its name from the small flame that keeps a gas furnace ready to ignite. In AWS terms, the pilot light is the data tier. You replicate your databases, object storage, and configuration into the standby region continuously, so that the data is current to within seconds or minutes. But you do not run application servers there. The standby region holds AMIs, launch templates, Auto Scaling group definitions, and infrastructure-as-code that can be deployed on demand, but no running compute. When a disaster is declared, you launch the compute layer against the already-current data, attach it to the network, and cut DNS over. The recovery time is dominated by how long it takes to boot and warm the application tier, which is why Pilot Light RTOs are typically measured in tens of minutes rather than hours.</p>
+        <p>Warm Standby keeps a scaled-down but fully functional copy of the entire stack running in the standby region. The application servers exist, the load balancer exists, the Auto Scaling group exists — it is simply sized to handle a small fraction of production traffic, often the minimum capacity needed to keep the deployment healthy. On failover, you scale that group up to production size and shift traffic. Because the compute is already running and already warm, the recovery time is dominated by the scaling event and the DNS or traffic-shift propagation, which is why Warm Standby RTOs land in the single-digit-minutes range. The tradeoff is that you are paying for that idle capacity every hour of every day.</p>
+        <p>Backup &amp; Restore is the simplest and cheapest strategy and the one most often misapplied. You take backups — snapshots, database dumps, object replication — and store them in the standby region or a dedicated backup account. Nothing else exists there. On disaster, you provision the entire environment from infrastructure-as-code, restore the data from the most recent backup, and cut over. The RTO here is genuinely hours to days, because it includes provisioning time plus restore time, and the RPO is whatever your backup interval was. This is the correct answer whenever the business genuinely tolerates that window, and the exam will sometimes present exactly that scenario to see whether you resist the urge to over-engineer.</p>
+      </section>
+
+      <section class="doc-section" id="decision-boundary">
+        <h2 class="section-heading">3. The Core Decision Boundary</h2>
+        <p>Every DR scenario question reduces to a single fork: what are the stated RTO and RPO, and which is the cheapest strategy on the spectrum that satisfies both? The trap is that candidates tend to optimize for one of the two numbers and ignore the other. A scenario that specifies an RPO of five minutes but an RTO of four hours is not asking for Warm Standby — it is asking for a strategy with frequent replication but slow recovery, which is Backup &amp; Restore with a short backup interval, or Pilot Light with a deliberately unhurried cutover process. Conversely, a scenario with a generous RPO but a tight RTO is asking for pre-warmed compute with infrequent data replication.</p>
+        <p>The second half of the decision boundary is the cost constraint, which the exam usually states explicitly with phrases like "minimize cost" or "the business wants to avoid paying for idle capacity." When that phrase appears, it is a strong signal that the answer is the cheapest strategy that still meets the stated RTO and RPO, and that any answer involving always-on standby compute is a distractor. When the phrase is absent and the RTO is aggressive, the cost constraint is implicitly subordinate to the recovery requirement.</p>
+        <p>The table below is the one to internalize. Note that the RTO and RPO columns are ranges, not guarantees — the actual numbers depend on your replication frequency, your instance boot times, and how much of the recovery you have automated. The exam treats these as characteristic ranges rather than precise figures, and so should you.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Strategy</th><th>Standby compute</th><th>Typical RTO</th><th>Typical RPO</th><th>Relative cost</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Backup &amp; Restore</td><td>None</td><td>Hours to days</td><td>Hours (backup interval)</td><td>Lowest</td></tr>
+              <tr><td>Pilot Light</td><td>None (data only)</td><td>Tens of minutes</td><td>Seconds to minutes</td><td>Low</td></tr>
+              <tr><td>Warm Standby</td><td>Scaled-down, running</td><td>Minutes</td><td>Seconds</td><td>Moderate</td></tr>
+              <tr><td>Multi-Site Active-Active</td><td>Full, in every region</td><td>Near zero</td><td>Near zero</td><td>Highest</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="doc-section" id="config-tradeoffs">
+        <h2 class="section-heading">4. Configuration Modes and Their Tradeoffs</h2>
+        <p>Within each strategy there are configuration choices that move the RTO and RPO numbers, and understanding those knobs is what separates a memorized answer from a defensible one. For Backup &amp; Restore, the dominant knob is backup frequency and retention. AWS Backup lets you define schedules as often as hourly, and cross-region copy jobs replicate those recovery points into the standby region. Shortening the interval improves RPO linearly and increases storage cost and API activity linearly. The RTO knob is separate: it is how much of the rebuild is automated. A runbook that requires a human to click through the console has an RTO floor set by human response time, which is why the exam favors answers that describe infrastructure-as-code and automated restore.</p>
+        <p>For Pilot Light, the knobs are replication lag and launch automation. Data replication is typically continuous — Aurora Global Database for relational workloads, DynamoDB Global Tables or cross-region replication for key-value, S3 Cross-Region Replication for objects — so RPO is governed by the replication mechanism's lag rather than by a schedule. The RTO knob is how quickly the compute layer can be brought up. Pre-baked AMIs, pre-created launch templates, and pre-provisioned networking reduce that to a scaling event. If the launch template references an AMI that only exists in the primary region, you have silently added an AMI copy step to your RTO, which is a classic exam gotcha.</p>
+        <p>For Warm Standby, the knobs are the standby fleet size and the scaling policy that grows it. A standby sized at ten percent of production will scale to full capacity faster than one sized at two percent, because fewer instances need to be added, but it costs more to keep running. The scaling policy itself matters: a target-tracking policy that reacts to CPU will lag behind a sudden traffic shift, whereas a scheduled or manual scaling action triggered by the failover runbook responds immediately. The exam tends to favor the explicit scaling action in failover scenarios, because it is deterministic.</p>
+        <p>Across all three, the traffic-shift mechanism is a shared knob with its own tradeoffs. Route 53 failover routing with health checks is the standard approach, but DNS TTL and client-side caching mean the shift is not instantaneous — a low TTL reduces propagation delay at the cost of more query volume. Global Accelerator avoids the DNS caching problem entirely by using static anycast IPs and shifting traffic at the network edge, which is why it appears in scenarios that demand fast, deterministic failover. The choice between them is a recurring exam decision point and is covered in more depth in the comparison section below.</p>
+      </section>
+
+      <section class="doc-section" id="sizing-limits">
+        <h2 class="section-heading">5. Sizing, Limits and Quotas</h2>
+        <p>DR designs fail on quotas more often than on architecture. The most common cause is that a standby region has never run at production scale, so its service quotas were never raised. EC2 On-Demand vCPU limits, Elastic IP quotas, load balancer counts, and RDS instance class availability all differ by region and by account history. A Pilot Light design that assumes it can launch two hundred instances in the standby region on demand will discover at the worst possible moment that the account's vCPU quota there is set to the default. The mitigation is to request quota increases in the standby region ahead of time and to verify them periodically, which is exactly the kind of readiness validation that Route 53 ARC formalizes.</p>
+        <p>Data transfer is the second sizing dimension. Cross-region replication of a large dataset is billed as data transfer out of the source region, and for continuous replication that cost accrues every hour. Aurora Global Database replication, S3 Cross-Region Replication, and DynamoDB global table replication all carry this cost, and it scales with write volume rather than with dataset size. A workload that writes heavily will pay substantially more for cross-region replication than one that is read-heavy, and that asymmetry sometimes makes Backup &amp; Restore the economically correct choice even when a tighter RPO is technically achievable.</p>
+        <p>Restore throughput is the third dimension and the one most often underestimated. Restoring an RDS snapshot is not instantaneous; the time scales with the size of the snapshot and the storage type, and a multi-terabyte restore can take hours. S3 restores from Glacier classes have their own retrieval times, which range from milliseconds for Glacier Instant Retrieval to hours for Glacier Flexible Retrieval and up to twelve hours for Deep Archive. If your backup strategy stores recovery points in an archival class, your effective RTO includes that retrieval time, and the exam will sometimes present exactly that mismatch as the flaw in an otherwise reasonable design.</p>
+        <p>Finally, consider the limits on the failover mechanism itself. Route 53 health checks have a minimum evaluation interval and a required number of consecutive failures before an endpoint is marked unhealthy, which sets a floor on detection time. Auto Scaling group scaling activities are rate-limited by how quickly instances can launch and pass health checks. Every one of these contributes to the real RTO, and the sum is always larger than the individual pieces suggest.</p>
+      </section>
+
+      <section class="doc-section" id="failure-modes">
+        <h2 class="section-heading">6. Failure Modes and What They Look Like in Production</h2>
+        <p>The most common failure mode in active-passive designs is not the disaster itself but the discovery, during the disaster, that the standby environment does not work. This manifests as a failover that succeeds at the infrastructure layer and fails at the application layer: instances launch, the load balancer reports healthy targets, and the application returns errors because a configuration value, a secret, a certificate, or a database credential was never replicated. The symptom is a green infrastructure dashboard alongside a red application error rate, and the first diagnostic move is to compare the standby environment's configuration against the primary's, ideally by diffing the infrastructure-as-code rather than by inspecting running resources.</p>
+        <p>The second failure mode is replication lag that is larger than assumed. Aurora Global Database replication is typically sub-second, but it degrades under heavy write load or network congestion, and the lag is visible in the <code>AuroraGlobalDBReplicationLag</code> metric. DynamoDB global table replication lag is visible in <code>ReplicationLatency</code>. If your stated RPO is five minutes and your actual lag during peak load is fifteen, your design does not meet its requirement, and you will only find out by monitoring the lag metric continuously rather than assuming the documented typical value holds. The first diagnostic move when a failover produces unexpected data loss is to pull the replication lag metric for the window preceding the event.</p>
+        <p>The third failure mode is a failover that works but never fails back. Failing back to the primary region is a separate, often harder operation than failing over, because the primary's data is now stale and must be resynchronized before it can resume serving. Teams that rehearse failover but not failback discover this during the incident. The symptom is a prolonged period of running in the standby region at higher cost and higher latency for the user base, and the diagnostic move is to check whether the failback runbook exists at all.</p>
+        <p>The fourth is the silent partial failure, where the primary region is degraded rather than down. Health checks may still pass, so automated failover never triggers, and the system limps along at reduced capacity. This is the hardest case to handle because it requires a human judgment call, and it is the reason the exam favors designs that include both automated health-check-based failover and a manual override.</p>
+      </section>
+
+      <section class="doc-section" id="sre-angle">
+        <h2 class="section-heading">7. The Operational and SRE Angle</h2>
+        <p>From an SRE perspective, a DR strategy is a promise about recovery time, and an untested promise is not a promise at all. The operational discipline that makes active-passive designs trustworthy is regular, scheduled failover testing — a Game Day in which the primary region is deliberately taken out of service and the standby is required to carry production traffic. The value of the exercise is not that it proves the design works; it is that it finds the configuration drift, the expired certificate, and the quota that was never raised, while the stakes are low. Teams that run these exercises quarterly tend to have failovers that work; teams that run them never tend to have failovers that almost work.</p>
+        <p>The monitoring that supports this is specific. You need a replication lag alarm in every region, not just the primary, because lag is the leading indicator of RPO breach. You need a synthetic canary in the standby region that exercises the application end to end, because infrastructure health checks do not prove the application can serve traffic. You need an alarm on the standby environment's capacity and quota headroom, because a standby that cannot scale to production size is not a standby. And you need a dashboard that shows the current replication lag, the standby's readiness state, and the time since the last successful failover test, because that last number is the one that predicts whether the next failover will work.</p>
+        <p>The runbook shape follows from the strategy. A Pilot Light runbook has an explicit launch phase, a validation phase, and a traffic-shift phase, and each phase should have a defined success criterion and a defined abort path. A Warm Standby runbook is shorter — scale, validate, shift — but the validation phase is more important because the environment was already running and may have drifted. In both cases the runbook should be executable by someone who did not write it, at three in the morning, without access to the person who did. That is the operational test that matters.</p>
+        <p>Finally, the SLO implications are worth stating plainly. A DR strategy with a fifteen-minute RTO means that a regional failure consumes your entire monthly error budget for availability if your SLO is measured in nines. That is not necessarily wrong — regional failures are rare — but it should be a conscious decision rather than a surprise, and it should be reflected in how the SLO is defined and reported.</p>
+      </section>
+
+      <section class="doc-section" id="gotchas">
+        <h2 class="section-heading">8. Edge Cases and Exam Gotchas</h2>
+        <p>The single most common exam trap in this topic is the AMI and snapshot region scoping problem. AMIs, EBS snapshots, and RDS snapshots are regional resources. A launch template in the standby region that references an AMI ID from the primary region will fail, and the fix is to copy the AMI or snapshot into the standby region as part of the replication pipeline. Scenarios that describe a Pilot Light design and then mention that the standby launch fails are testing exactly this.</p>
+        <p>The second trap is confusing Multi-AZ with multi-region. Multi-AZ is a high-availability mechanism within a single region; it protects against an Availability Zone failure and does nothing for a regional failure. A scenario that says "the application must survive the loss of an entire AWS region" cannot be satisfied by Multi-AZ alone, no matter how many AZs are configured. This distinction appears in some form on nearly every practice exam.</p>
+        <p>The third trap is the assumption that a read replica is a DR solution. A cross-region read replica can be promoted, but promotion is a manual operation, the replica is asynchronous so there is data loss on promotion, and the promoted instance does not automatically inherit the primary's configuration, parameter groups, or security group associations in all cases. It is a component of a DR strategy, not a strategy by itself.</p>
+        <p>The fourth trap is the cost of the standby region's data transfer, which is easy to overlook when comparing strategies on compute cost alone. A Pilot Light design with continuous cross-region replication of a high-write database can cost more in transfer than a Warm Standby design costs in idle compute, which inverts the intuitive cost ordering. When a scenario emphasizes cost, check whether the write volume makes replication the dominant expense.</p>
+        <p>The fifth trap is the assumption that failover is automatic. Route 53 failover routing with health checks can automate the DNS shift, but the compute layer still has to be launched or scaled, and that step is often manual or triggered by a separate mechanism. A scenario that describes a fully automated failover needs both halves to be automated, and the exam will sometimes present a design where only the DNS half is.</p>
+      </section>
+
+      <section class="doc-section" id="vs-comparison">
+        <h2 class="section-heading">9. This vs. the Strategies It Gets Confused With</h2>
+        <p>The strategies in this family are most often confused with each other, and the distinguishing question is always the same: what is already running in the standby region before the disaster? If the answer is "nothing but backups," it is Backup &amp; Restore. If it is "the data, but not the compute," it is Pilot Light. If it is "a scaled-down version of everything," it is Warm Standby. If it is "a full production footprint serving live traffic," it is Active-Active. Answering that question first collapses most scenario questions to a single candidate.</p>
+        <p>The second confusion is between Pilot Light and Warm Standby specifically, because both involve continuous data replication and both have RTOs measured in minutes rather than hours. The discriminator is whether the application tier is running. A scenario that mentions "a small Auto Scaling group running in the standby region" is describing Warm Standby. A scenario that mentions "AMIs and launch templates ready to deploy" is describing Pilot Light. The cost difference between them is the cost of that idle compute, and the RTO difference is the time it takes to launch and warm it.</p>
+        <p>The third confusion is between these strategies and the availability mechanisms that operate within a region. Multi-AZ, Auto Scaling, and load balancer health checks all improve availability without providing disaster recovery. They are complementary, not alternative, and a complete design uses both: Multi-AZ within each region for zone-level resilience, and one of these four strategies across regions for regional resilience.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Scenario signal</th><th>Pick</th><th>Why</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>RTO hours, RPO hours, minimize cost</td><td>Backup &amp; Restore</td><td>Nothing needs to be running; restore time is acceptable</td></tr>
+              <tr><td>RTO tens of minutes, RPO seconds, cost-sensitive</td><td>Pilot Light</td><td>Data replicated continuously, compute launched on demand</td></tr>
+              <tr><td>RTO minutes, RPO seconds, some idle budget</td><td>Warm Standby</td><td>Compute already running, only needs scaling</td></tr>
+              <tr><td>RTO near zero, RPO near zero, cost secondary</td><td>Multi-Site Active-Active</td><td>Both regions serve live traffic continuously</td></tr>
+              <tr><td>Survive loss of one AZ only</td><td>Multi-AZ (not a DR strategy)</td><td>Zone-level HA, not regional DR</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="doc-section" id="lab">
+        <h2 class="section-heading">Hands-on Lab: Mapping RTO/RPO to the Cheapest Sufficient Strategy (45 min)</h2>
+        <div class="card card-green">
+          <p>The goal of this lab is to build the reflex the exam rewards: read a set of business requirements, derive the RTO and RPO they imply, and select the cheapest strategy that satisfies both. You will work through five workload profiles, justify each choice in writing, and then verify one of them by actually building a Pilot Light data replication path.</p>
+          <p><strong>Step 1 — Build the requirement table.</strong> Create a table with five rows, one per workload profile below, and columns for stated business requirement, derived RTO, derived RPO, chosen strategy, and justification. The five profiles are: (a) an internal HR system used during business hours, where a day of downtime is tolerable and losing a day of data is acceptable; (b) a customer-facing e-commerce checkout service where the business has stated that four hours of downtime is the maximum tolerable and losing more than five minutes of orders is unacceptable; (c) a real-time bidding platform where any downtime directly loses revenue and the business has approved budget for full redundancy; (d) a batch analytics pipeline that runs nightly and can be re-run from source data if a region is lost; (e) a regulatory archive that must be retained for seven years and is queried a few times a month.</p>
+          <p><strong>Step 2 — Derive, don't assume.</strong> For each profile, write the RTO and RPO as explicit numbers before choosing a strategy. The discipline here is to resist jumping to a strategy based on the workload's perceived importance. Profile (d) sounds important but has a naturally generous RTO because the pipeline can be re-run; profile (b) sounds routine but has a tight RPO because orders are money. The exam tests exactly this inversion.</p>
+          <p><strong>Step 3 — Choose and justify.</strong> For each profile, select the cheapest strategy on the spectrum that meets both numbers, and write two sentences of justification. If your chosen strategy is Pilot Light or Warm Standby, state explicitly what is running in the standby region and what is not. If your chosen strategy is Backup &amp; Restore, state the backup interval that satisfies the RPO and the automation that satisfies the RTO.</p>
+          <p><strong>Step 4 — Build one Pilot Light replication path.</strong> Take profile (b) and implement the data half of a Pilot Light design. Create an S3 bucket in a primary region and enable Cross-Region Replication to a bucket in a standby region, with replication metrics enabled. Write a small script or use the console to upload a set of objects, then confirm that they appear in the standby bucket and that the replication metrics show zero lag once the transfer completes. This is the pilot light: the data is current, and nothing else exists in the standby region.</p>
+          <p><strong>Step 5 — Identify the missing compute half.</strong> Now write down, as a numbered list, everything that would have to happen to serve traffic from the standby region for profile (b). Include the AMI or container image availability, the launch template, the network configuration, the load balancer, the DNS change, and the database promotion. For each item, note whether it is already replicated or would have to be created at failover time. The length of that list is your real RTO, and the items that are not replicated are the ones that will break during an actual incident.</p>
+          <p><strong>Step 6 — Add the readiness check.</strong> Finally, write a single CloudWatch alarm or synthetic canary that would tell you, before a disaster, whether the standby region is actually ready. For the S3 replication path you built, that is a replication lag alarm. For the compute half, it would be a canary that exercises the application in the standby region. Note in your write-up which of these you could implement today and which would require the compute layer to exist first — that gap is precisely the problem the next day's material addresses.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="quiz">
         <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
-        
-      <div class="scenario-card">
-        <p class="scenario-question"><strong>Q1.</strong> A workload can tolerate an RTO of 15 minutes and RPO of 5 minutes, but the business wants to minimize standing infrastructure cost. Which DR pattern fits best?</p>
-        <div class="scenario-options" id="opts-d36q0">
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q1.</strong> A workload can tolerate an RTO of 15 minutes and an RPO of 5 minutes, but the business wants to minimize standing infrastructure cost. Which DR pattern fits best?</p>
+          <div class="scenario-options" id="opts-d36q1">
             <div class="scenario-option">A. Backup and Restore</div>
             <div class="scenario-option">B. Pilot Light</div>
             <div class="scenario-option">C. Multi-Site Active-Active</div>
-            <div class="scenario-option">D. No DR strategy needed</div>
+            <div class="scenario-option">D. Multi-AZ within a single region</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d36q1', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d36q1"><strong>Correct answer: B.</strong> Pilot Light keeps only core data continuously replicated and minimal infrastructure running, scaling up the rest on failover — matching a ~15-minute RTO at much lower cost than warm standby or active-active.</div>
         </div>
-        <button class="scenario-reveal-btn" onclick="revealAnswer('d36q0', 1)">Reveal Answer</button>
-        <div class="scenario-explanation" id="exp-d36q0"><strong>Correct answer: B.</strong> Pilot Light keeps only core data continuously replicated and minimal infrastructure running, scaling up the rest on failover — matching a ~15-minute RTO at much lower cost than warm standby or active-active.</div>
-      </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q2.</strong> A Pilot Light design has been built for a three-tier application. During a failover test, instances launch successfully in the standby region but the application fails to start. What is the most likely cause?</p>
+          <div class="scenario-options" id="opts-d36q2">
+            <div class="scenario-option">A. The standby region does not support the instance type</div>
+            <div class="scenario-option">B. The launch template references an AMI ID that exists only in the primary region, because AMIs are regional resources</div>
+            <div class="scenario-option">C. Route 53 health checks have not yet marked the primary unhealthy</div>
+            <div class="scenario-option">D. The Auto Scaling group has no scaling policy attached</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d36q2', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d36q2"><strong>Correct answer: B.</strong> AMIs and EBS snapshots are regional. A launch template in the standby region referencing a primary-region AMI ID will fail, and the fix is to copy the AMI into the standby region as part of the replication pipeline.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q3.</strong> Which statement best distinguishes Warm Standby from Pilot Light?</p>
+          <div class="scenario-options" id="opts-d36q3">
+            <div class="scenario-option">A. Warm Standby replicates data; Pilot Light does not</div>
+            <div class="scenario-option">B. Warm Standby keeps a scaled-down but running copy of the application tier; Pilot Light keeps only the data tier current and launches compute on demand</div>
+            <div class="scenario-option">C. Warm Standby is cheaper than Pilot Light</div>
+            <div class="scenario-option">D. Pilot Light has a lower RTO than Warm Standby</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d36q3', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d36q3"><strong>Correct answer: B.</strong> Both replicate data continuously. The discriminator is whether the application tier is already running in the standby region — Warm Standby yes, Pilot Light no.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q4.</strong> A company states that its application must survive the loss of an entire AWS region. The current architecture runs across three Availability Zones in a single region with an RDS Multi-AZ instance. What is the gap?</p>
+          <div class="scenario-options" id="opts-d36q4">
+            <div class="scenario-option">A. Three AZs is insufficient; a fourth is required</div>
+            <div class="scenario-option">B. Multi-AZ provides zone-level HA only and does nothing for a regional failure; a cross-region strategy is required</div>
+            <div class="scenario-option">C. RDS Multi-AZ must be replaced with read replicas</div>
+            <div class="scenario-option">D. Nothing — Multi-AZ across three AZs already survives a regional failure</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d36q4', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d36q4"><strong>Correct answer: B.</strong> Multi-AZ is a within-region high-availability mechanism. Surviving a regional failure requires one of the cross-region DR strategies, and Multi-AZ is complementary to it rather than a substitute.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q5.</strong> A team's stated RPO is five minutes, but during peak write load the Aurora Global Database replication lag metric shows fifteen minutes. What does this mean for the design?</p>
+          <div class="scenario-options" id="opts-d36q5">
+            <div class="scenario-option">A. Nothing — the documented typical lag is sub-second, so the metric is wrong</div>
+            <div class="scenario-option">B. The design does not meet its RPO requirement under peak load, and the lag metric must be monitored continuously rather than assumed</div>
+            <div class="scenario-option">C. The RPO should be redefined as fifteen minutes</div>
+            <div class="scenario-option">D. Aurora Global Database cannot be used for DR</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d36q5', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d36q5"><strong>Correct answer: B.</strong> Replication lag degrades under heavy write load. A design's real RPO is its worst observed lag, not the documented typical value, which is why a lag alarm is a required part of the monitoring.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q6.</strong> A Pilot Light design assumes it can launch 200 EC2 instances in the standby region during failover. The failover test fails partway through with an instance launch error. What is the most likely cause?</p>
+          <div class="scenario-options" id="opts-d36q6">
+            <div class="scenario-option">A. The instances are in the wrong subnet</div>
+            <div class="scenario-option">B. The standby region's EC2 On-Demand vCPU quota was never raised, because the region has never run at production scale</div>
+            <div class="scenario-option">C. The AMI is encrypted</div>
+            <div class="scenario-option">D. The security group does not allow outbound traffic</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d36q6', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d36q6"><strong>Correct answer: B.</strong> Service quotas are per-region and per-account. A standby region that has never run at production scale will have default quotas, and they must be raised ahead of time and verified periodically.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q7.</strong> A Backup &amp; Restore strategy stores recovery points in S3 Glacier Deep Archive to minimize cost. The business requires an RTO of four hours. What is the flaw?</p>
+          <div class="scenario-options" id="opts-d36q7">
+            <div class="scenario-option">A. Deep Archive cannot be used for backups</div>
+            <div class="scenario-option">B. Deep Archive retrieval can take up to twelve hours, so the effective RTO exceeds the four-hour requirement</div>
+            <div class="scenario-option">C. Deep Archive does not support cross-region replication</div>
+            <div class="scenario-option">D. There is no flaw; retrieval time is not part of RTO</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d36q7', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d36q7"><strong>Correct answer: B.</strong> Retrieval time is part of the RTO. Storing recovery points in an archival class with multi-hour retrieval adds that time to the recovery window, which can silently violate the stated requirement.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q8.</strong> A team has a documented DR runbook that has never been executed. What is the recommended next step before relying on it?</p>
+          <div class="scenario-options" id="opts-d36q8">
+            <div class="scenario-option">A. Trust the documentation as-is, since it was written by the architects</div>
+            <div class="scenario-option">B. Run a scheduled failover exercise (Game Day) to validate that the runbook and automated recovery actually work, and to surface configuration drift and quota gaps</div>
+            <div class="scenario-option">C. Increase backup frequency only</div>
+            <div class="scenario-option">D. Skip testing to avoid production risk</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d36q8', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d36q8"><strong>Correct answer: B.</strong> Untested runbooks are unverified assumptions. A Game Day exercises the real failure mode against real infrastructure and finds the drift, expired certificates, and quota gaps while the stakes are low.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q9.</strong> A scenario requires sub-minute failover that is not subject to client-side DNS caching delays. Which traffic-shift mechanism fits?</p>
+          <div class="scenario-options" id="opts-d36q9">
+            <div class="scenario-option">A. Route 53 failover routing with a 60-second TTL</div>
+            <div class="scenario-option">B. AWS Global Accelerator, which uses static anycast IPs and shifts traffic at the AWS network edge</div>
+            <div class="scenario-option">C. A single-region Network Load Balancer</div>
+            <div class="scenario-option">D. CloudFront with a long cache TTL</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d36q9', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d36q9"><strong>Correct answer: B.</strong> Global Accelerator avoids DNS caching entirely by using static anycast IPs and rerouting at the AWS network edge, giving deterministic failover independent of client resolver behavior.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q10.</strong> A cross-region read replica is promoted to primary during a regional failure. Which statement about this approach is accurate?</p>
+          <div class="scenario-options" id="opts-d36q10">
+            <div class="scenario-option">A. It provides zero data loss because replication is synchronous</div>
+            <div class="scenario-option">B. It is a component of a DR strategy, not a complete strategy: promotion is manual, replication is asynchronous so some data is lost, and the promoted instance may not inherit all primary configuration</div>
+            <div class="scenario-option">C. It automatically updates Route 53 to point at the new primary</div>
+            <div class="scenario-option">D. It is equivalent to Multi-AZ failover</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d36q10', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d36q10"><strong>Correct answer: B.</strong> A read replica can be promoted, but promotion is manual, replication is asynchronous so there is data loss on promotion, and configuration inheritance is not guaranteed. It is one piece of a DR design.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q11.</strong> A Pilot Light design replicates a high-write database continuously across regions. When comparing total cost against a Warm Standby design, what is often overlooked?</p>
+          <div class="scenario-options" id="opts-d36q11">
+            <div class="scenario-option">A. Cross-region data transfer cost, which scales with write volume and can exceed the cost of idle standby compute</div>
+            <div class="scenario-option">B. The cost of the AMI copies</div>
+            <div class="scenario-option">C. The cost of Route 53 health checks</div>
+            <div class="scenario-option">D. Nothing; Pilot Light is always cheaper</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d36q11', 0)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d36q11"><strong>Correct answer: A.</strong> Continuous cross-region replication is billed as data transfer out of the source region and scales with write volume. For a high-write workload this can invert the intuitive cost ordering between Pilot Light and Warm Standby.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q12.</strong> A scenario describes a fully automated failover for a Pilot Light design. Which two halves must both be automated for that claim to be true?</p>
+          <div class="scenario-options" id="opts-d36q12">
+            <div class="scenario-option">A. Backup creation and backup retention</div>
+            <div class="scenario-option">B. The traffic shift (DNS or Global Accelerator) and the compute launch or scaling in the standby region</div>
+            <div class="scenario-option">C. The AMI copy and the security group rules</div>
+            <div class="scenario-option">D. Only the DNS shift needs to be automated</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d36q12', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d36q12"><strong>Correct answer: B.</strong> Route 53 failover routing can automate the DNS shift, but the compute layer still has to be launched or scaled. A design that automates only the DNS half is not fully automated.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q13.</strong> A nightly batch analytics pipeline can be re-run from source data if a region is lost. Which DR strategy is the cheapest sufficient choice?</p>
+          <div class="scenario-options" id="opts-d36q13">
+            <div class="scenario-option">A. Multi-Site Active-Active</div>
+            <div class="scenario-option">B. Warm Standby</div>
+            <div class="scenario-option">C. Backup &amp; Restore, because the workload can be re-run and therefore tolerates a long RTO</div>
+            <div class="scenario-option">D. Pilot Light with continuous replication</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d36q13', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d36q13"><strong>Correct answer: C.</strong> The ability to re-run the pipeline from source gives a naturally generous RTO, which makes Backup &amp; Restore the cheapest sufficient strategy. The exam tests whether you resist over-engineering based on perceived importance.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q14.</strong> The primary region is degraded but not down: latency is elevated and error rates are climbing, yet health checks still pass. What is the operational implication?</p>
+          <div class="scenario-options" id="opts-d36q14">
+            <div class="scenario-option">A. Automated failover will trigger correctly and no action is needed</div>
+            <div class="scenario-option">B. Automated health-check-based failover will not trigger, so the design needs a manual override and a human judgment path</div>
+            <div class="scenario-option">C. The health check interval should be increased</div>
+            <div class="scenario-option">D. This situation cannot occur in AWS</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d36q14', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d36q14"><strong>Correct answer: B.</strong> Silent partial failure is the hardest case because health checks still pass. The design must include a manual failover override, and the decision to use it is a human judgment call.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q15.</strong> A team fails over to the standby region successfully but then struggles for days to return to the primary. What was missing from their preparation?</p>
+          <div class="scenario-options" id="opts-d36q15">
+            <div class="scenario-option">A. A larger standby fleet</div>
+            <div class="scenario-option">B. A rehearsed failback runbook, including resynchronizing the primary's now-stale data before it can resume serving</div>
+            <div class="scenario-option">C. A second standby region</div>
+            <div class="scenario-option">D. More frequent backups</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d36q15', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d36q15"><strong>Correct answer: B.</strong> Failback is a separate and often harder operation than failover, because the primary's data is stale and must be resynchronized. Teams that rehearse failover but not failback discover this during the incident.</div>
+        </div>
       </section>
+
+      <section class="doc-section" id="preview">
+        <h2 class="section-heading">Peek into Tomorrow</h2>
+        <div class="card card-purple">
+          <p>Everything in today's material rests on an assumption we have not yet examined: that the standby region is actually capable of taking over. Pilot Light and Warm Standby both describe what should be running in the standby region, but neither describes how you would know, before a disaster, whether that description is still true. Configuration drifts. Quotas get consumed by other workloads. An AMI gets deregistered. A certificate expires. The standby environment that passed its last failover test six months ago may be quietly broken today, and the first time you find out is the moment you need it.</p>
+          <p>There is also a subtler problem with the failover mechanism itself. Route 53 health-check-based failover depends on the Route 53 control plane, which is a global service but still a dependency. If the failover decision and the failover execution both live in the same place as the thing that failed, you have a circular dependency. Tomorrow's material addresses both gaps directly: readiness checks that continuously validate a standby region can actually take over, and routing controls that live on a control plane independent of any single region, giving deterministic and auditable failover rather than ad hoc health-check behavior. The question today leaves open is what "ready" should mean operationally — and how you make that judgment without a human in the loop.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="sources">
+        <h2 class="section-heading">Sources</h2>
+        <div class="card">
+          <ul class="source-list">
+            <li><a href="https://docs.aws.amazon.com/whitepapers/latest/disaster-recovery-workloads-on-aws/disaster-recovery-options-in-the-cloud.html" target="_blank" rel="noopener">AWS Whitepaper: Disaster Recovery Options in the Cloud</a></li>
+            <li><a href="https://docs.aws.amazon.com/whitepapers/latest/disaster-recovery-workloads-on-aws/disaster-recovery-strategies-for-your-workload.html" target="_blank" rel="noopener">AWS Whitepaper: Disaster Recovery Strategies for Your Workload</a></li>
+            <li><a href="https://docs.aws.amazon.com/wellarchitected/latest/reliability-pillar/plan-for-disaster-recovery-dr.html" target="_blank" rel="noopener">Well-Architected Reliability Pillar: Plan for Disaster Recovery</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_ReadRepl.html" target="_blank" rel="noopener">Amazon RDS: Working with Read Replicas</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/aurora-global-database.html" target="_blank" rel="noopener">Amazon Aurora: Global Database</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/replication.html" target="_blank" rel="noopener">Amazon S3: Replicating Objects (CRR/SRR)</a></li>
+            <li><a href="https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/dns-failover.html" target="_blank" rel="noopener">Amazon Route 53: Configuring Failover Routing</a></li>
+            <li><a href="https://docs.aws.amazon.com/global-accelerator/latest/dg/introduction-how-it-works.html" target="_blank" rel="noopener">AWS Global Accelerator: How It Works</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/storage-class-intro.html" target="_blank" rel="noopener">Amazon S3: Storage Classes and Retrieval Times</a></li>
+            <li><a href="https://docs.aws.amazon.com/aws-backup/latest/devguide/whatisbackup.html" target="_blank" rel="noopener">AWS Backup: What Is AWS Backup?</a></li>
+          </ul>
+        </div>
+      </section>
+
       <div class="day-nav">
         <a href="day-035.html">&larr; Day 35: Multi-Region Active-Active Architectures</a>
         <button class="btn btn-green" onclick="markComplete(36, 'day-037.html')">Mark Day 36 Complete &rarr;</button>

@@ -104,37 +104,348 @@
         <span class="pill pill-green">Phase 4: Migration, Hybrid &amp; Cost Optimization</span>
       </div>
       <h1 class="hero-title">Cost Optimization — Savings Plans, RIs &amp; Spot Fleet Strategy</h1>
-      <div class="reading-meta">&#128337; ~3 min read &middot; 3 services covered</div>
+      <div class="reading-meta">&#128337; ~58 min read &middot; 3 services covered</div>
       <div class="services-grid">
         <span class="service-tag">Savings Plans</span>
         <span class="service-tag">Reserved Instances</span>
         <span class="service-tag">Spot Instances/Fleet</span>
       </div>
       <div id="tracker"></div>
-      <section class="doc-section">
-        <h2 class="section-heading">Today's Concept</h2>
+
+      <section class="doc-section" id="recap">
+        <h2 class="section-heading">Recap: Day 52</h2>
         <div class="card card-accent">
-          <p>Compute Savings Plans offer the most flexibility (any instance family/region/OS) for a 1-3yr commitment; EC2 Instance Savings Plans are cheaper but locked to an instance family/region. Reserved Instances add capacity reservation options. Spot Instances (up to ~90% discount) suit fault-tolerant, interruptible workloads, paired with Spot Fleet/mixed-instance ASGs for diversified capacity and graceful 2-minute interruption handling.</p>
-        </div>
-        <h3 class="sub-heading">Hands-on Lab / Practical Action (45 min)</h3>
-        <div class="card">
-          <p>Design a mixed-instance Auto Scaling Group combining On-Demand baseline capacity with Spot Fleet for burst capacity, using a Spot interruption handler.</p>
+          <p>Day 52 was about provisioning capacity ahead of a migration window — Link Aggregation Groups (LAG) to bundle Direct Connect connections, Snowball for the bulk historical dataset, and DX/DMS CDC for the ongoing delta. The lesson there was that a migration plan which only accounts for the steady-state network path will fail on the day the bulk copy actually runs, because the transfer itself is a temporary, enormous, and entirely predictable load that nobody sized for.</p>
+          <p>Today sets up the same trap in a different service. The commitment instruments — Savings Plans, Reserved Instances, and Spot — are all capacity and pricing decisions made in advance of the workload that consumes them, and each one has a failure mode that only appears when the workload's actual shape diverges from the shape you assumed at purchase time. A LAG sized for average throughput and a Compute Savings Plan sized for average compute both look correct on the day you buy them. The exam tests whether you can tell which commitment instrument tolerates divergence and which one quietly converts your discount into a stranded liability.</p>
         </div>
       </section>
-      <section class="doc-section">
-        <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
-        
-      <div class="scenario-card">
-        <p class="scenario-question"><strong>Q1.</strong> A company runs a steady-state, predictable production fleet but wants maximum flexibility to change instance families and regions over the commitment period.</p>
-        <div class="scenario-options" id="opts-d53q0">
+
+      <section class="doc-section" id="why-on-exam">
+        <h2 class="section-heading">1. Why This Is on the Exam</h2>
+        <p>Cost optimization is Domain 4 of SAP-C02, and it is the domain candidates most often underestimate because it feels like arithmetic rather than architecture. It is not arithmetic. Every cost question on the exam is really a question about which constraint the business is willing to accept: a commitment term, a capacity guarantee, an interruption risk, or a migration effort. The pricing instruments are just the vocabulary the question is written in.</p>
+        <p>The reason this cluster carries real weight is that it is the one place where a technically correct architecture can still be the wrong answer. A design that satisfies every availability and performance requirement can be marked incorrect because it leaves a steady-state fleet on On-Demand pricing, or because it puts a stateful, non-idempotent workload on Spot, or because it buys a three-year commitment for a workload the business has already told you will be re-platformed. The exam expects you to read the business constraints in the scenario — predictability, tolerance for interruption, willingness to commit, and how long the workload will exist in its current form — and select the instrument that matches.</p>
+        <p>There is also a structural reason this day sits where it does. The migration phase just covered the 7 Rs, and the 7 Rs are themselves a cost decision: Rehost is cheap and fast, Refactor is expensive and slow, Retain is free today and expensive later. Cost optimization is the discipline that quantifies those trade-offs after the migration lands. The exam will hand you a workload that has just been rehosted and ask what to do with its pricing, which is exactly the question this day answers.</p>
+      </section>
+
+      <section class="doc-section" id="mechanism">
+        <h2 class="section-heading">2. How the Commitment Instruments Actually Work</h2>
+        <p>All three instruments are mechanisms for trading flexibility for price, but they trade different things, and the difference matters more than the discount percentage. A Savings Plan is a commitment to spend a fixed dollar amount per hour on compute for a term. It is not a commitment to a specific instance; it is a commitment to a billing rate. AWS applies that commitment against whatever eligible usage you generate, and anything above the commitment is billed at On-Demand rates. This is why a Savings Plan can be partially utilized without being wasted — you simply stop receiving the discount on the portion of usage that exceeds the commitment.</p>
+        <p>A Reserved Instance is a commitment to a specific instance configuration in a specific scope. You are reserving a shape, not a spend rate. That specificity is what buys the deeper discount, and it is also what creates the stranded-capacity problem: if the workload moves to a different family, a different region, or a different tenancy, the reservation no longer applies to it and the discount evaporates while the commitment continues to bill. Convertible RIs soften this by allowing an exchange for a different configuration of equal or greater value, but the exchange is a manual operation with its own constraints, not an automatic reallocation.</p>
+        <p>Spot is a different mechanism entirely. Spot capacity is spare EC2 capacity that AWS sells at a discount with the explicit understanding that it can be reclaimed. The reclaim is announced through a two-minute interruption notice delivered to the instance metadata service and to EventBridge, after which the instance is terminated or stopped depending on the request configuration. Spot is not a pricing tier you graduate into; it is a capacity class with a different availability contract. The exam consistently rewards candidates who treat the two-minute notice as an architectural requirement rather than a footnote — a workload that cannot drain, checkpoint, or re-route within two minutes is not a Spot workload, regardless of how much it would save.</p>
+      </section>
+
+      <section class="doc-section" id="decision-boundary">
+        <h2 class="section-heading">3. The Core Decision Boundary</h2>
+        <p>The single fork that most scenario questions hinge on is whether the workload's shape is predictable and stable enough to commit to, and if so, how much specificity the commitment can tolerate. Predictability is the gate. A workload with a stable baseline and modest variance can be covered by a commitment; a workload whose baseline moves every quarter cannot, because the commitment will be either under-utilized or exceeded, and both outcomes are worse than On-Demand for different reasons.</p>
+        <p>Once predictability is established, the second question is how much the workload is expected to change. If the instance families, regions, or operating systems are likely to shift — because the team is mid-migration, or because the workload is being re-platformed onto Graviton, or because a region strategy is still being decided — then the commitment must be flexible, and the flexibility costs discount depth. If the workload is genuinely frozen in shape for the term, the specific commitment is strictly better. The exam phrases this as "maximum flexibility" versus "maximum savings," and the correct answer is whichever the scenario's constraints actually demand.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Instrument</th><th>What you commit to</th><th>Flexibility</th><th>Discount depth</th><th>Capacity guarantee</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Compute Savings Plan</td><td>$/hour of compute spend</td><td>Any family, region, OS, tenancy; includes Fargate and Lambda</td><td>Moderate</td><td>No</td></tr>
+              <tr><td>EC2 Instance Savings Plan</td><td>$/hour within one family in one region</td><td>Any size, OS, tenancy within that family/region</td><td>Deeper</td><td>No</td></tr>
+              <tr><td>Standard RI</td><td>A specific instance configuration</td><td>None (region or zonal scope only)</td><td>Deepest</td><td>Optional, zonal only</td></tr>
+              <tr><td>Convertible RI</td><td>A specific configuration, exchangeable</td><td>Exchange for equal-or-greater value</td><td>Moderate</td><td>Optional, zonal only</td></tr>
+              <tr><td>Spot</td><td>Nothing — capacity is reclaimable</td><td>N/A</td><td>Largest, variable</td><td>None, by definition</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="doc-section" id="config-tradeoffs">
+        <h2 class="section-heading">4. Configuration Modes and Their Tradeoffs</h2>
+        <p>Each instrument has configuration knobs that change what it covers, and the exam tests the knobs more often than the headline discount. For Savings Plans the primary knob is the hourly commitment amount, which is a spend rate rather than an instance count. Setting it too low leaves usage uncovered; setting it too high means you are paying for compute you did not consume, because the commitment bills whether or not you use it. The practical approach is to cover the stable baseline and let the variable portion ride at On-Demand, which is the same logic as the mixed-instance Auto Scaling Group covered in the lab.</p>
+        <p>For Reserved Instances the knobs are term length, payment option, scope, and offering class. Term length is one or three years, with the three-year term carrying the deeper discount and the longer exposure. Payment option — All Upfront, Partial Upfront, or No Upfront — trades cash flow against discount depth, with All Upfront cheapest and No Upfront most expensive. Scope is regional or zonal, and this is the knob candidates most often miss: a zonal RI can reserve capacity in a specific Availability Zone, which is the only way any of these instruments guarantees you capacity at all. A regional RI gives you the billing discount and the flexibility to move between AZs, but no capacity reservation.</p>
+        <p>Spot configuration is where the interruption contract becomes concrete. A Spot request can be configured to terminate, stop, or hibernate on interruption, and the choice determines what the workload can recover. Terminate is the default and loses everything on the instance. Stop preserves the EBS volumes and allows a later restart, which is useful for workloads that can tolerate a gap. Hibernate preserves the in-memory state, which is the closest thing to a checkpoint but requires the instance to support hibernation and the workload to tolerate the pause. The exam will describe a workload that needs to survive interruption and expect you to recognize that the answer is not a Spot configuration at all — it is a Spot configuration plus an application that can checkpoint, or a decision to move that workload off Spot entirely.</p>
+      </section>
+
+      <section class="doc-section" id="sizing-limits">
+        <h2 class="section-heading">5. Sizing, Limits and Quotas</h2>
+        <p>The numbers that matter here are the ones that constrain how much of a fleet you can actually cover with each instrument, and the ones that define the interruption window. Spot's two-minute interruption notice is the hard architectural constraint: it is the entire budget a workload has to drain connections, flush state, and deregister from a load balancer. Anything that cannot complete in that window needs a different capacity strategy, and the exam will describe workloads whose shutdown sequence obviously exceeds it.</p>
+        <p>Spot also has a service quota on the number of Spot Instance requests and on vCPUs, and the vCPU quota is the one that bites during a scale-out event. A mixed-instance group that tries to burst into Spot capacity beyond the account's Spot vCPU quota will simply fail to launch the Spot portion, which means the burst never happens and the workload degrades to its On-Demand baseline. This is a quota problem, not a pricing problem, and it is exactly the kind of thing the Reliability pillar's "service quotas as foundations" guidance is pointing at.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Constraint</th><th>Value / behavior</th><th>Why it matters</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Spot interruption notice</td><td>Two minutes before reclaim</td><td>Defines the maximum graceful-shutdown budget</td></tr>
+              <tr><td>Spot request types</td><td>One-time or persistent</td><td>Persistent requests re-launch after interruption; one-time do not</td></tr>
+              <tr><td>Spot allocation strategy</td><td>lowest-price, capacity-optimized, price-capacity-optimized</td><td>capacity-optimized reduces interruption frequency at some cost</td></tr>
+              <tr><td>Savings Plan term</td><td>One or three years</td><td>Longer term, deeper discount, longer exposure</td></tr>
+              <tr><td>RI payment options</td><td>All Upfront, Partial Upfront, No Upfront</td><td>Trades cash flow against discount depth</td></tr>
+              <tr><td>RI scope</td><td>Regional or zonal</td><td>Only zonal RIs reserve capacity in a specific AZ</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>One more number worth internalizing: the discount on Spot is described as up to roughly ninety percent off On-Demand, but it is variable and moves with supply and demand in the pool. Any scenario that quotes a fixed Spot savings figure is describing an assumption, not a guarantee, and the exam is more interested in whether you understand the variability than in the specific percentage.</p>
+      </section>
+
+      <section class="doc-section" id="failure-modes">
+        <h2 class="section-heading">6. Failure Modes and What They Look Like in Production</h2>
+        <p>The first failure mode is the stranded commitment. It presents as a cost anomaly rather than an availability incident: the monthly bill shows a Savings Plan or RI charge that is no longer offset by matching usage, because the workload moved to a different family, region, or account. The symptom is a utilization metric on the commitment itself — AWS reports Savings Plan and RI utilization and coverage, and a utilization figure that has dropped below the baseline is the signal. The first diagnostic move is to compare the commitment's coverage against the current fleet's actual instance mix, which usually reveals that a migration or a Graviton adoption quietly invalidated the reservation.</p>
+        <p>The second failure mode is Spot interruption during a non-idempotent operation. This presents as intermittent, hard-to-reproduce data corruption or duplicate processing, and it is the classic "same trap different service" pattern: the workload was designed for a capacity class that never disappears, and it was moved to one that does. The symptom is a spike in retries, duplicate records, or partial writes correlated with Spot interruption events in EventBridge. The first diagnostic move is to check whether the workload's write path is idempotent and whether the interruption handler actually drains in-flight work, rather than assuming the interruption itself is the problem.</p>
+        <p>The third failure mode is Spot capacity unavailability during a scale-out. This presents as a fleet that fails to reach its desired capacity exactly when demand is highest, because the Spot pools it targets are thin. The symptom is a scaling activity that reports insufficient capacity, and the fix is diversification — spreading the request across multiple instance families and Availability Zones, or using the capacity-optimized allocation strategy, which selects pools with the most available capacity rather than the lowest price. A single-family Spot request is the most fragile configuration available, and it is the one candidates most often propose.</p>
+      </section>
+
+      <section class="doc-section" id="sre-angle">
+        <h2 class="section-heading">7. The Operational and SRE Angle</h2>
+        <p>From an operations standpoint, commitment instruments are a monitoring problem before they are a purchasing problem. Savings Plan utilization and coverage, RI utilization and coverage, and Spot interruption frequency are all first-class metrics that belong on a dashboard alongside the workload's own SLOs, because a commitment that has drifted out of alignment is a slow, silent cost leak that no availability alarm will ever catch. The runbook shape is a periodic review: compare coverage against the current fleet, identify commitments whose utilization has fallen below the expected baseline, and decide whether to exchange, resell on the RI Marketplace where eligible, or simply let the term expire.</p>
+        <p>Spot changes the reliability posture of the workload itself, and that has to be reflected in the SLO rather than hidden from it. A service running a mixed fleet has a baseline capacity that is guaranteed and a burst capacity that is not, so its effective availability during a demand spike depends on Spot pool depth as much as on its own code. The honest way to model this is to treat the On-Demand baseline as the capacity floor and the Spot portion as elastic headroom, then set the SLO against the floor and monitor how often the headroom is actually available. A service that quietly depends on Spot headroom to meet its SLO has an availability risk that is invisible in its own metrics.</p>
+        <p>The interruption handler is the operational artifact that makes Spot safe, and it deserves the same treatment as any other failure-handling code. It should be tested, not assumed — the same discipline the chaos engineering days applied to AZ failure applies here, and an interruption handler that has never been exercised under load is an untested assumption. The handler's job is narrow and specific: deregister from the load balancer, stop accepting new work, finish or checkpoint in-flight work, and exit within the two-minute window. Anything the handler cannot complete in that window is work that will be lost, and that should be a deliberate decision rather than a discovery.</p>
+      </section>
+
+      <section class="doc-section" id="gotchas">
+        <h2 class="section-heading">8. Edge Cases and Exam Gotchas</h2>
+        <p>The most common trap is conflating a billing discount with a capacity guarantee. A regional Reserved Instance and a Savings Plan both reduce the bill and neither reserves capacity; only a zonal RI does. A scenario that says the workload must be guaranteed to launch in a specific Availability Zone during a regional capacity crunch is asking for a zonal RI, and a scenario that only asks for cost reduction is not. Read the requirement for the word "guarantee" and treat it as decisive.</p>
+        <p>The second trap is assuming a Savings Plan is wasted when it is under-utilized. It is not — the unused portion simply stops discounting, and the commitment continues to bill at the agreed rate. This is a real cost, but it is a bounded one, and it is materially different from a stranded RI, which cannot be reallocated to a different family at all. The exam will sometimes describe a workload that is expected to change shape and expect you to choose the flexible instrument precisely because partial utilization is recoverable while a mismatched reservation is not.</p>
+        <p>The third trap is treating Spot as suitable for any stateless workload. Statelessness is necessary but not sufficient; the workload also has to tolerate a two-minute termination, which rules out long-running batch jobs without checkpointing, in-memory session stores, and anything holding a lock. The fourth trap is forgetting that Spot and Savings Plans interact: a Savings Plan commitment applies to On-Demand usage, and Spot usage is billed separately, so a fleet that shifts heavily toward Spot can leave a Savings Plan under-utilized. The fifth is the RI Marketplace, which allows you to sell Standard RIs you no longer need — a detail the exam occasionally uses to distinguish a recoverable mistake from an unrecoverable one.</p>
+      </section>
+
+      <section class="doc-section" id="vs-comparison">
+        <h2 class="section-heading">9. This vs. the Instruments It Gets Confused With</h2>
+        <p>The cleanest way to hold all of this is to separate the instruments by what they actually promise. Savings Plans promise a discount on a spend rate. Reserved Instances promise a discount on a configuration, and optionally a capacity reservation in one AZ. Spot promises a discount in exchange for accepting reclaim. On-Demand promises nothing except availability at list price. Every scenario question is asking you to pick the promise that matches the workload's constraints, and the constraints are almost always stated in the scenario's first two sentences.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Pick this</th><th>When the scenario says…</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Compute Savings Plan</td><td>Steady usage, but families/regions/OS may change; or the fleet includes Fargate or Lambda</td></tr>
+              <tr><td>EC2 Instance Savings Plan</td><td>Steady usage locked to one family in one region, and you want a deeper discount than Compute</td></tr>
+              <tr><td>Standard RI</td><td>Frozen configuration for the term, and you want the deepest discount</td></tr>
+              <tr><td>Zonal RI</td><td>You need a capacity reservation in a specific Availability Zone</td></tr>
+              <tr><td>Convertible RI</td><td>You want RI depth but expect to exchange the configuration mid-term</td></tr>
+              <tr><td>Spot with mixed-instance ASG</td><td>Fault-tolerant, interruptible, checkpointable work; burst capacity above a stable baseline</td></tr>
+              <tr><td>On-Demand</td><td>Unpredictable or short-lived usage; no commitment is justified</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The pairing that shows up most often is a mixed-instance Auto Scaling Group: an On-Demand baseline sized to the guaranteed floor, Spot capacity above it for burst, and a diversification strategy across families and AZs so that no single thin pool can starve the fleet. That combination is the standard answer for "cost-optimize this fault-tolerant workload without risking availability," and it is the design the lab below builds.</p>
+      </section>
+
+      <section class="doc-section" id="lab">
+        <h2 class="section-heading">Hands-on Lab: A Mixed-Instance Fleet with a Tested Interruption Handler</h2>
+        <div class="card card-green">
+          <p><strong>Objective.</strong> Build an Auto Scaling Group that runs a guaranteed On-Demand baseline with Spot burst capacity above it, and prove that the interruption handler actually drains in-flight work inside the two-minute window.</p>
+          <p><strong>Step 1 — Establish the baseline.</strong> Pick a small stateless web workload and measure its steady-state instance count over a week. That number, not the peak, is the On-Demand baseline. Write it down; the entire design depends on not confusing the floor with the average.</p>
+          <p><strong>Step 2 — Build the launch template with a diversification-friendly instance type list.</strong> Create a launch template that does not pin a single instance type. Instead, supply a list of several comparable families and sizes so the ASG can substitute when a pool is thin. This is the single highest-leverage change for Spot reliability.</p>
+          <p><strong>Step 3 — Configure the mixed-instances policy.</strong> Set the On-Demand base capacity to the baseline from Step 1, set On-Demand percentage to zero above the base, and set the Spot allocation strategy to capacity-optimized. Capacity-optimized selects the pools with the most available capacity rather than the lowest price, which trades a little discount for materially fewer interruptions.</p>
+          <p><strong>Step 4 — Write the interruption handler.</strong> Subscribe a handler to the EC2 Spot Instance Interruption Warning event in EventBridge. The handler should immediately deregister the instance from the target group, wait for connection draining to complete, finish or checkpoint any in-flight work, and then allow termination. Log the elapsed time from event receipt to drain completion — that number is the thing you are testing.</p>
+          <p><strong>Step 5 — Test it under load.</strong> Drive real traffic at the fleet, then trigger an interruption deliberately. Confirm that no request fails, that the instance leaves the target group before termination, and that the drain completes well inside two minutes. If it does not, the workload is not a Spot workload yet, and the fix is in the application, not the ASG configuration.</p>
+          <p><strong>Step 6 — Add the cost guardrails.</strong> Create a Savings Plan sized to the On-Demand baseline only, not the peak. Then build a CloudWatch dashboard showing Spot interruption frequency, ASG capacity versus desired capacity, and Savings Plan utilization side by side, so a drift in any of the three is visible before it shows up on the bill.</p>
+          <p><strong>Step 7 — Break it on purpose.</strong> Reduce the instance type list back to a single family and re-run the scale-out test during a busy period. Watch the fleet fail to reach desired capacity. That failure is the lesson: diversification is not a nice-to-have, it is the mechanism that makes Spot capacity reliable enough to depend on.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="quiz">
+        <h2 class="section-heading">Scenario Question Drills</h2>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q1.</strong> A company runs a steady-state, predictable production fleet but wants maximum flexibility to change instance families and regions over the commitment period.</p>
+          <div class="scenario-options" id="opts-d53q1">
             <div class="scenario-option">A. EC2 Instance Savings Plans</div>
             <div class="scenario-option">B. Compute Savings Plans</div>
             <div class="scenario-option">C. Standard Reserved Instances</div>
             <div class="scenario-option">D. Spot Instances</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d53q1', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d53q1"><strong>Correct answer: B.</strong> Compute Savings Plans apply across any instance family, region, OS, and even Fargate and Lambda usage, trading a slightly lower discount than EC2 Instance Savings Plans for maximum flexibility.</div>
         </div>
-        <button class="scenario-reveal-btn" onclick="revealAnswer('d53q0', 1)">Reveal Answer</button>
-        <div class="scenario-explanation" id="exp-d53q0"><strong>Correct answer: B.</strong> Compute Savings Plans apply across any instance family, region, OS, and even Fargate/Lambda usage, trading a slightly lower discount than EC2 Instance Savings Plans for maximum flexibility.</div>
-      </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q2.</strong> A regulated workload must be guaranteed to launch in a specific Availability Zone during a regional capacity crunch, and the team also wants a discount. What should they purchase?</p>
+          <div class="scenario-options" id="opts-d53q2">
+            <div class="scenario-option">A. A regional Reserved Instance</div>
+            <div class="scenario-option">B. A zonal Reserved Instance</div>
+            <div class="scenario-option">C. A Compute Savings Plan</div>
+            <div class="scenario-option">D. Spot capacity with a persistent request</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d53q2', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d53q2"><strong>Correct answer: B.</strong> Only a zonal Reserved Instance reserves capacity in a specific Availability Zone. Regional RIs and Savings Plans provide a billing discount with no capacity guarantee.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q3.</strong> A batch processing job runs for 40 minutes per task and cannot checkpoint. The team wants to cut its cost by running it on Spot. What is the correct assessment?</p>
+          <div class="scenario-options" id="opts-d53q3">
+            <div class="scenario-option">A. Spot is appropriate because the job is stateless</div>
+            <div class="scenario-option">B. Spot is inappropriate because the job cannot complete or checkpoint within the two-minute interruption notice</div>
+            <div class="scenario-option">C. Spot is appropriate if a persistent request is used</div>
+            <div class="scenario-option">D. Spot is appropriate if the job is moved to a single Availability Zone</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d53q3', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d53q3"><strong>Correct answer: B.</strong> Statelessness is necessary but not sufficient. A workload must be able to drain or checkpoint within the two-minute interruption window; a 40-minute non-checkpointable task cannot.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q4.</strong> A company's monthly bill shows a Savings Plan charge that is no longer offset by matching usage after the team migrated to Graviton instances. What happened, and what is the first diagnostic step?</p>
+          <div class="scenario-options" id="opts-d53q4">
+            <div class="scenario-option">A. The plan expired; check the term end date</div>
+            <div class="scenario-option">B. The plan is under-utilized because the fleet's instance mix changed; compare plan coverage against the current fleet's actual usage</div>
+            <div class="scenario-option">C. The plan was applied to the wrong account; check Organizations</div>
+            <div class="scenario-option">D. Savings Plans do not cover Graviton; nothing can be done</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d53q4', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d53q4"><strong>Correct answer: B.</strong> A commitment whose coverage has drifted below baseline shows up as reduced utilization. The first move is to compare coverage against the current instance mix, which usually reveals a migration or family change invalidated the match.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q5.</strong> A mixed-instance Auto Scaling Group repeatedly fails to reach desired capacity during peak demand, reporting insufficient capacity. What is the most effective fix?</p>
+          <div class="scenario-options" id="opts-d53q5">
+            <div class="scenario-option">A. Increase the On-Demand base capacity to the peak</div>
+            <div class="scenario-option">B. Diversify the request across multiple instance families and Availability Zones, and use the capacity-optimized allocation strategy</div>
+            <div class="scenario-option">C. Switch to a single larger instance type</div>
+            <div class="scenario-option">D. Convert the Spot portion to a zonal Reserved Instance</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d53q5', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d53q5"><strong>Correct answer: B.</strong> Thin Spot pools are the cause. Diversifying across families and AZs, and using capacity-optimized allocation, spreads the request across pools with the most available capacity.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q6.</strong> A team wants the deepest possible discount on a fleet whose instance family and region are frozen for the next three years, and they do not need a capacity reservation. What should they buy?</p>
+          <div class="scenario-options" id="opts-d53q6">
+            <div class="scenario-option">A. Compute Savings Plan</div>
+            <div class="scenario-option">B. Standard Reserved Instance, regional scope</div>
+            <div class="scenario-option">C. Convertible Reserved Instance</div>
+            <div class="scenario-option">D. Spot with a persistent request</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d53q6', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d53q6"><strong>Correct answer: B.</strong> A frozen configuration with no capacity-reservation requirement is exactly what a Standard RI is for, and it carries the deepest discount of the commitment instruments.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q7.</strong> A workload's write path is not idempotent, and it has been running on Spot. The team sees intermittent duplicate records correlated with interruption events. What is the correct remediation?</p>
+          <div class="scenario-options" id="opts-d53q7">
+            <div class="scenario-option">A. Increase the Spot allocation strategy to lowest-price</div>
+            <div class="scenario-option">B. Make the write path idempotent and ensure the interruption handler drains in-flight work before termination</div>
+            <div class="scenario-option">C. Switch the Spot request to hibernate</div>
+            <div class="scenario-option">D. Add more Availability Zones to the ASG</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d53q7', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d53q7"><strong>Correct answer: B.</strong> The interruption itself is not the bug; the workload's inability to tolerate it is. Idempotent writes plus a handler that drains in-flight work is the fix.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q8.</strong> A company has a Savings Plan that is consistently under-utilized. What is the accurate characterization of the cost impact?</p>
+          <div class="scenario-options" id="opts-d53q8">
+            <div class="scenario-option">A. The entire plan is wasted and must be repurchased</div>
+            <div class="scenario-option">B. The unused portion simply stops discounting while the commitment continues to bill — a bounded cost, unlike a mismatched RI</div>
+            <div class="scenario-option">C. AWS automatically refunds the unused portion</div>
+            <div class="scenario-option">D. The plan converts to On-Demand pricing automatically</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d53q8', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d53q8"><strong>Correct answer: B.</strong> A Savings Plan is a spend-rate commitment; usage above it bills at On-Demand and usage below it leaves the commitment billing without a discount. It is recoverable in a way a stranded RI is not.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q9.</strong> A team expects to change its instance family mid-term but still wants a Reserved Instance discount. Which offering class fits?</p>
+          <div class="scenario-options" id="opts-d53q9">
+            <div class="scenario-option">A. Standard RI</div>
+            <div class="scenario-option">B. Convertible RI</div>
+            <div class="scenario-option">C. Zonal Standard RI</div>
+            <div class="scenario-option">D. Spot Fleet</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d53q9', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d53q9"><strong>Correct answer: B.</strong> Convertible RIs allow an exchange for a different configuration of equal or greater value, trading some discount depth for the ability to change shape mid-term.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q10.</strong> A workload must survive a Spot interruption without losing in-memory state, and the application cannot be modified. Which Spot request configuration is the closest fit?</p>
+          <div class="scenario-options" id="opts-d53q10">
+            <div class="scenario-option">A. Terminate on interruption</div>
+            <div class="scenario-option">B. Stop on interruption</div>
+            <div class="scenario-option">C. Hibernate on interruption</div>
+            <div class="scenario-option">D. Persistent request with lowest-price allocation</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d53q10', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d53q10"><strong>Correct answer: C.</strong> Hibernation preserves in-memory state, which is the closest available approximation of a checkpoint. It requires instance support and a workload that tolerates the pause.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q11.</strong> Which metric pair should be on a cost dashboard to detect a commitment that has drifted out of alignment with the fleet?</p>
+          <div class="scenario-options" id="opts-d53q11">
+            <div class="scenario-option">A. CPU utilization and network throughput</div>
+            <div class="scenario-option">B. Savings Plan / RI utilization and coverage</div>
+            <div class="scenario-option">C. Spot interruption frequency and ASG desired capacity</div>
+            <div class="scenario-option">D. Trusted Advisor check count and Config rule compliance</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d53q11', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d53q11"><strong>Correct answer: B.</strong> Utilization and coverage are the two metrics that reveal a commitment no longer matching the fleet's actual usage — a slow cost leak no availability alarm would catch.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q12.</strong> A company has a Standard RI it no longer needs after re-platforming. What is the recovery option?</p>
+          <div class="scenario-options" id="opts-d53q12">
+            <div class="scenario-option">A. Nothing — the commitment must run to term</div>
+            <div class="scenario-option">B. Sell it on the Reserved Instance Marketplace</div>
+            <div class="scenario-option">C. Convert it to a Savings Plan</div>
+            <div class="scenario-option">D. Apply it to a different instance family</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d53q12', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d53q12"><strong>Correct answer: B.</strong> Standard RIs can be resold on the RI Marketplace, which is what distinguishes a recoverable commitment mistake from an unrecoverable one.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q13.</strong> A service's SLO is met only when Spot burst capacity is available. How should this be modeled honestly?</p>
+          <div class="scenario-options" id="opts-d53q13">
+            <div class="scenario-option">A. Set the SLO against peak capacity, since that is what the service can theoretically deliver</div>
+            <div class="scenario-option">B. Treat the On-Demand baseline as the capacity floor, set the SLO against the floor, and monitor how often the Spot headroom is actually available</div>
+            <div class="scenario-option">C. Remove Spot from the fleet so the SLO is deterministic</div>
+            <div class="scenario-option">D. Set the SLO against average capacity</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d53q13', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d53q13"><strong>Correct answer: B.</strong> The guaranteed floor is the only capacity the service can promise. Setting the SLO against it, and monitoring Spot headroom availability separately, makes the availability risk visible instead of hidden.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q14.</strong> A fleet shifts heavily toward Spot over a quarter. What second-order effect should the team check on their existing Savings Plan?</p>
+          <div class="scenario-options" id="opts-d53q14">
+            <div class="scenario-option">A. None — Savings Plans cover Spot usage automatically</div>
+            <div class="scenario-option">B. The plan may become under-utilized, because Savings Plans apply to On-Demand usage and Spot is billed separately</div>
+            <div class="scenario-option">C. The plan converts to a Reserved Instance</div>
+            <div class="scenario-option">D. The plan's term is extended automatically</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d53q14', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d53q14"><strong>Correct answer: B.</strong> Savings Plans discount On-Demand usage; Spot is billed separately. A fleet that moves to Spot can leave the plan with less eligible usage to cover.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q15.</strong> A team is designing a cost-optimized fleet for a fault-tolerant, checkpointable workload with a stable baseline and unpredictable peaks. Which design is correct?</p>
+          <div class="scenario-options" id="opts-d53q15">
+            <div class="scenario-option">A. All On-Demand with a Compute Savings Plan sized to peak</div>
+            <div class="scenario-option">B. A mixed-instance ASG with an On-Demand base sized to the baseline, Spot above it, diversified across families and AZs, plus a tested interruption handler</div>
+            <div class="scenario-option">C. All Spot with a single instance family</div>
+            <div class="scenario-option">D. A zonal RI for the peak and On-Demand for the baseline</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d53q15', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d53q15"><strong>Correct answer: B.</strong> The standard pattern: On-Demand floor for guaranteed capacity, diversified Spot for burst, and an interruption handler that has actually been tested under load.</div>
+        </div>
+      </section>
+
+      <section class="doc-section" id="preview">
+        <h2 class="section-heading">Peek into Tomorrow</h2>
+        <div class="card card-purple">
+          <p>Everything here assumed you already knew which instances were oversized. The commitment instruments optimize the price of the capacity you have; none of them tells you whether that capacity is the right shape in the first place. A fleet of consistently under-utilized instances covered by a perfectly sized Savings Plan is still paying for compute it does not need, and the discount simply makes the waste slightly cheaper. The open question is how you find the over-provisioned instances in the first place, and how you decide what to do with them.</p>
+          <p>Tomorrow's material answers that with three different lenses on the same problem. Compute Optimizer turns utilization metrics into concrete right-sizing recommendations, Cost Explorer visualizes and forecasts spend and drives RI and Savings Plan purchase advice, and Trusted Advisor flags cost, security, performance, and fault-tolerance issues against AWS best practices. The interesting part is that they disagree in useful ways — a right-sizing recommendation and a commitment purchase recommendation can point in opposite directions, and knowing which to act on first is the judgment the exam is testing.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="sources">
+        <h2 class="section-heading">Sources</h2>
+        <div class="card">
+          <ul class="source-list">
+            <li><a href="https://docs.aws.amazon.com/savingsplans/latest/userguide/what-is-savings-plans.html" target="_blank" rel="noopener">AWS Savings Plans User Guide — What Are Savings Plans?</a></li>
+            <li><a href="https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-reserved-instances.html" target="_blank" rel="noopener">Amazon EC2 User Guide — Reserved Instances</a></li>
+            <li><a href="https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/using-spot-instances.html" target="_blank" rel="noopener">Amazon EC2 User Guide — Spot Instances</a></li>
+            <li><a href="https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/spot-interruptions.html" target="_blank" rel="noopener">Amazon EC2 User Guide — Spot Instance Interruptions</a></li>
+            <li><a href="https://docs.aws.amazon.com/autoscaling/ec2/userguide/ec2-auto-scaling-mixed-instances-groups.html" target="_blank" rel="noopener">Amazon EC2 Auto Scaling — Mixed Instances Policies</a></li>
+            <li><a href="https://docs.aws.amazon.com/awsaccountbilling/latest/aboutv2/ri-marketplace.html" target="_blank" rel="noopener">AWS Billing — Reserved Instance Marketplace</a></li>
+            <li><a href="https://docs.aws.amazon.com/wellarchitected/latest/cost-optimization-pillar/welcome.html" target="_blank" rel="noopener">AWS Well-Architected Framework — Cost Optimization Pillar</a></li>
+            <li><a href="https://docs.aws.amazon.com/wellarchitected/latest/reliability-pillar/welcome.html" target="_blank" rel="noopener">AWS Well-Architected Framework — Reliability Pillar (service quotas)</a></li>
+          </ul>
+        </div>
       </section>
       <div class="day-nav">
         <a href="day-052.html">&larr; Day 52: Direct Connect Capacity Planning for Large-Scale Migration</a>

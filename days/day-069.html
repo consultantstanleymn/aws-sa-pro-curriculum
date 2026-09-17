@@ -104,25 +104,883 @@
         <span class="pill pill-green">Phase 5: Practice Exams &amp; Exam Technique</span>
       </div>
       <h1 class="hero-title">Full-Length Mock Exam 5 — 75 Questions Timed</h1>
-      <div class="reading-meta">&#128337; ~3 min read &middot; 2 services covered</div>
+      <div class="reading-meta">&#128337; ~75 min read &middot; 2 services covered</div>
       <div class="services-grid">
         <span class="service-tag">Tutorials Dojo</span>
         <span class="service-tag">Exam Simulation</span>
       </div>
       <div id="tracker"></div>
-      <section class="doc-section">
-        <h2 class="section-heading">Today's Concept</h2>
+      <section class="doc-section" id="recap">
+        <h2 class="section-heading">Recap</h2>
         <div class="card card-accent">
-          <p>Fifth and final full timed mock exam. Target consistently scoring above 85% before sitting the real exam.</p>
-        </div>
-        <h3 class="sub-heading">Hands-on Lab / Practical Action (45 min)</h3>
-        <div class="card">
-          <p>Complete the final full 180-minute timed mock exam without interruption.</p>
+          <p>Day 68 was the final distractor-analysis pass, and its output was a short list of question shapes that reliably cost you a second look: the ones where two answers are both technically true and the discriminator is a single word in the requirement, and the ones where a plausible-sounding service appears in a distractor precisely because it is adjacent to the right answer. That analysis is only worth anything if it survives contact with a clock. Knowing which questions you tend to overthink is a different skill from being able to notice, mid-exam, that you are overthinking one right now.</p>
+          <p>Today you test whether you can retrieve all of it under time pressure. This is the fifth and final full-length sitting, and it is the last chance to find a pacing problem before the real thing. Treat the score as secondary to the pacing data — a 78% with even time distribution is a better signal than an 85% that came from sprinting the first forty questions and guessing the last ten.</p>
         </div>
       </section>
-      <section class="doc-section">
-        <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
-        <p style="color:var(--text-muted);font-style:italic;">Detailed scenario questions for this day will be added when the curriculum reaches it — see the <a href="day-056.html">Day 56 DMS lesson</a> for the full format this site is building toward.</p>
+      <section class="doc-section" id="protocol">
+        <h2 class="section-heading">Sitting Protocol</h2>
+        <div class="card">
+          <p>Run this exactly as you would run the real exam, because the point of a fifth sitting is not to learn content — you have already covered the content — but to rehearse the conditions under which you will retrieve it. That means 180 minutes on a timer, 75 questions, no pausing, no notes, no browser tabs, and no checking an answer until the full sitting is over. The average budget is roughly 2.4 minutes per question, but that average is a trap if you apply it uniformly. Short direct-knowledge questions should take well under a minute, and the long multi-paragraph scenarios will legitimately consume three to four. The budget is a total, not a per-question entitlement.</p>
+          <p>The flag-and-review technique is what makes the total budget workable. Answer every question in order on the first pass, but when a question resists you — when you have narrowed it to two and cannot find the discriminator — pick the better of the two, flag it, and move on. Do not spend four minutes on question 12 to protect a single point while leaving questions 60 through 75 unread. The second pass, with whatever time remains, is where flagged questions get a fresh read; a question that felt ambiguous at minute 20 often resolves instantly at minute 150 because a later question has primed the relevant distinction.</p>
+          <p>Two behaviors undermine the simulation and both are worth naming explicitly. The first is stopping early once you have answered everything, which hides whether your pacing actually holds for the full duration — the real exam does not end when you feel done, and fatigue in the last third is a real variable you want to have measured at least once. The second is looking things up mid-sitting. A lookup converts a retrieval failure into a recognition success, which feels better and teaches you nothing; the entire diagnostic value of this sitting is in seeing which facts you cannot produce from memory under load. If you catch yourself wanting to check something, write the question number down and check it after the timer expires.</p>
+          <p>Set up the environment before you start: one screen, notifications off, a clock visible, and a single sheet of paper for question numbers you want to revisit in analysis. When the 180 minutes expire, stop. Score it, then do the domain tagging — the sitting produces two artifacts, a raw score and a list of which domains the misses cluster in, and tomorrow's session consumes the second one.</p>
+        </div>
+      </section>
+      <section class="doc-section" id="exam">
+        <h2 class="section-heading">The Exam — 75 Questions</h2>
+        <p>Answer all 75 in one sitting before revealing any answer. Reveal is per-question so you can self-check afterward, but the sitting itself should be uninterrupted.</p>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q1.</strong> A company has 40 AWS accounts under AWS Organizations. The security team needs a single account that aggregates CloudTrail logs from every account, and workload teams must not be able to disable or delete that logging. Where should the log-archive account live, and what enforces the protection?</p>
+          <div class="scenario-options" id="opts-d69q1">
+            <div class="scenario-option">A. In the management account, protected by IAM policies</div>
+            <div class="scenario-option">B. In a dedicated Security OU with an SCP that denies deletion or modification of logging resources</div>
+            <div class="scenario-option">C. In the Workloads/Prod OU so it is close to the data it audits</div>
+            <div class="scenario-option">D. In a standalone account outside the organization</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q1', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q1"><strong>Correct answer: B.</strong> Log-archive and audit accounts belong in a dedicated Security OU guarded by SCPs that deny deletion or modification of logging resources, isolating them from workload OUs. The management account is immune to SCPs and should stay workload-free.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q2.</strong> A developer's IAM policy grants <code>s3:*</code>. An SCP attached to their OU contains an explicit Deny for <code>s3:DeleteBucket</code>. The developer calls DeleteBucket on a bucket they own. What is the result?</p>
+          <div class="scenario-options" id="opts-d69q2">
+            <div class="scenario-option">A. It succeeds, because IAM policies take precedence over SCPs</div>
+            <div class="scenario-option">B. It is denied — SCPs set the permission ceiling and an explicit Deny always wins</div>
+            <div class="scenario-option">C. It succeeds only if the bucket policy also allows it</div>
+            <div class="scenario-option">D. It succeeds in the management account but is denied elsewhere</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q2', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q2"><strong>Correct answer: B.</strong> Effective permissions are the intersection of IAM and SCPs. An explicit Deny in either always overrides an Allow, so the SCP deny wins regardless of the IAM grant.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q3.</strong> A company wants to enforce a region-restriction policy across all accounts so that no resource can be created outside <code>us-east-1</code> and <code>us-west-2</code>. After deploying the SCP, users report they can no longer manage IAM users or update Route 53 records. What is the most likely cause?</p>
+          <div class="scenario-options" id="opts-d69q3">
+            <div class="scenario-option">A. The SCP was attached to the wrong OU</div>
+            <div class="scenario-option">B. The region-restriction SCP did not exempt global services such as IAM, Route 53, CloudFront, and Support</div>
+            <div class="scenario-option">C. SCPs cannot restrict regions</div>
+            <div class="scenario-option">D. The accounts need to be re-enrolled in Control Tower</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q3', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q3"><strong>Correct answer: B.</strong> Region-restriction SCPs must exempt global services, whose endpoints are not tied to a region. Omitting the exemption breaks IAM, Route 53, CloudFront, and Support operations.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q4.</strong> An enterprise wants engineers to authenticate once against corporate Okta and then assume the appropriate role in any of 40 AWS accounts, with no per-account IAM users. Which solution meets this with least operational overhead?</p>
+          <div class="scenario-options" id="opts-d69q4">
+            <div class="scenario-option">A. Create an IAM user per engineer in each account</div>
+            <div class="scenario-option">B. IAM Identity Center with SAML federation from Okta and permission sets</div>
+            <div class="scenario-option">C. Share a single root access key across the team</div>
+            <div class="scenario-option">D. Use SCPs to grant cross-account access</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q4', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q4"><strong>Correct answer: B.</strong> IAM Identity Center is purpose-built for centralized SSO across an organization, provisioning short-lived federated roles per account instead of long-lived IAM users.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q5.</strong> A delegated admin role is allowed to create IAM roles for developers. Security wants to guarantee the delegate can never create a role with AdministratorAccess. What is the standard control?</p>
+          <div class="scenario-options" id="opts-d69q5">
+            <div class="scenario-option">A. Attach a Deny statement to every developer role individually</div>
+            <div class="scenario-option">B. Require a permission boundary on every role the delegate creates, enforced by a condition on <code>iam:PermissionsBoundary</code></div>
+            <div class="scenario-option">C. Remove <code>iam:CreateRole</code> entirely</div>
+            <div class="scenario-option">D. Enforce MFA on the delegate role</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q5', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q5"><strong>Correct answer: B.</strong> A mandatory permission boundary caps the maximum permissions of any role the delegate creates, preventing privilege escalation. Enforcing it via a condition on CreateRole is the standard pattern.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q6.</strong> A central network account owns a VPC. Three application accounts need to launch EC2 instances into that VPC's private subnets without owning the VPC or managing its route tables. What should be used?</p>
+          <div class="scenario-options" id="opts-d69q6">
+            <div class="scenario-option">A. VPC peering between every pair of accounts</div>
+            <div class="scenario-option">B. AWS RAM subnet sharing from the central VPC</div>
+            <div class="scenario-option">C. Copy the VPC configuration into each account</div>
+            <div class="scenario-option">D. A Transit Gateway with no attachments</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q6', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q6"><strong>Correct answer: B.</strong> RAM subnet sharing lets multiple accounts launch resources into subnets owned by a single central VPC, avoiding per-account VPCs and peering meshes.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q7.</strong> A company is deploying AWS Control Tower. They want a guardrail that prevents any account from creating root user access keys, and it must not be possible to disable it. Which guardrail category applies?</p>
+          <div class="scenario-options" id="opts-d69q7">
+            <div class="scenario-option">A. Elective guardrail</div>
+            <div class="scenario-option">B. Mandatory guardrail</div>
+            <div class="scenario-option">C. Strongly recommended guardrail</div>
+            <div class="scenario-option">D. Custom Config rule</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q7', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q7"><strong>Correct answer: B.</strong> Mandatory guardrails are always enforced and cannot be disabled. Elective and strongly recommended guardrails are optional best practices enabled per OU.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q8.</strong> A company needs to connect 30 VPCs across three accounts plus an on-premises data center, with strict isolation between production and non-production traffic. Which connectivity model scales best?</p>
+          <div class="scenario-options" id="opts-d69q8">
+            <div class="scenario-option">A. Full-mesh VPC peering between all 30 VPCs</div>
+            <div class="scenario-option">B. A Transit Gateway with separate route tables for production and non-production, plus a Direct Connect Transit VIF</div>
+            <div class="scenario-option">C. A single VPC with all workloads in it</div>
+            <div class="scenario-option">D. PrivateLink between every pair of VPCs</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q8', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q8"><strong>Correct answer: B.</strong> A Transit Gateway hub-and-spoke with segmented route tables replaces an unmanageable peering mesh and enforces isolation, while a Transit VIF connects on-premises to the same hub.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q9.</strong> Two VPCs are attached to Transit Gateways in different regions, and a TGW peering attachment has been created between them. Spoke VPCs still cannot reach each other. What is the most likely cause?</p>
+          <div class="scenario-options" id="opts-d69q9">
+            <div class="scenario-option">A. TGW peering does not support cross-region traffic</div>
+            <div class="scenario-option">B. Peering attachments do not propagate routes — static routes must be added to each TGW route table</div>
+            <div class="scenario-option">C. The TGWs are in different Availability Zones</div>
+            <div class="scenario-option">D. Security groups always block inter-region traffic</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q9', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q9"><strong>Correct answer: B.</strong> Unlike VPC and TGW attachments, TGW peering attachments require manually created static routes in each TGW route table; automatic propagation is not supported.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q10.</strong> A security team wants all internet-bound traffic from 12 spoke VPCs inspected by a single AWS Network Firewall, with no per-VPC firewall deployment. What is the standard architecture?</p>
+          <div class="scenario-options" id="opts-d69q10">
+            <div class="scenario-option">A. Deploy Network Firewall in every spoke VPC</div>
+            <div class="scenario-option">B. A centralized inspection VPC attached to Transit Gateway, with spoke route tables sending 0.0.0.0/0 to the TGW</div>
+            <div class="scenario-option">C. Use NACLs on each spoke subnet</div>
+            <div class="scenario-option">D. Route all traffic through a NAT Gateway in each VPC</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q10', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q10"><strong>Correct answer: B.</strong> The centralized inspection VPC pattern routes all spoke egress through TGW into a shared Network Firewall, avoiding per-VPC duplication and cost.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q11.</strong> A company needs the highest-resiliency Direct Connect design for a mission-critical workload. Which provisioning meets AWS's resiliency model?</p>
+          <div class="scenario-options" id="opts-d69q11">
+            <div class="scenario-option">A. A single 10 Gbps connection</div>
+            <div class="scenario-option">B. Two connections at two different DX locations, terminating on separate devices, with BGP failover and a VPN backup</div>
+            <div class="scenario-option">C. Two identical connections at the same location</div>
+            <div class="scenario-option">D. A Public VIF only</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q11', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q11"><strong>Correct answer: B.</strong> DX resiliency requires diversity across locations and devices plus BGP failover; a VPN backup covers the rare case both DX paths fail.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q12.</strong> On-premises servers need to resolve names in a private Route 53 hosted zone. What must be configured?</p>
+          <div class="scenario-options" id="opts-d69q12">
+            <div class="scenario-option">A. A Route 53 Resolver outbound endpoint</div>
+            <div class="scenario-option">B. A Route 53 Resolver inbound endpoint, with on-prem DNS forwarding queries to it</div>
+            <div class="scenario-option">C. A public hosted zone instead</div>
+            <div class="scenario-option">D. NAT Gateway DNS forwarding</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q12', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q12"><strong>Correct answer: B.</strong> Inbound endpoints expose AWS private DNS to on-premises resolvers; outbound endpoints do the reverse, letting AWS resources resolve on-premises names.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q13.</strong> Two companies both use <code>10.0.0.0/16</code>. Company A needs to consume a specific API hosted in Company B's VPC. Which connectivity option works despite the overlap?</p>
+          <div class="scenario-options" id="opts-d69q13">
+            <div class="scenario-option">A. VPC peering</div>
+            <div class="scenario-option">B. Transit Gateway peering</div>
+            <div class="scenario-option">C. AWS PrivateLink with an Interface Endpoint and Endpoint Service</div>
+            <div class="scenario-option">D. Direct Connect</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q13', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q13"><strong>Correct answer: C.</strong> PrivateLink requires only ENI-level connectivity in the consumer VPC and never merges route tables or CIDRs, so it works with fully overlapping IP ranges — unlike peering or TGW.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q14.</strong> A team needs to expose one internal microservice to 20 consumer accounts without giving those accounts any network-level reachability to the rest of the VPC. What should they use?</p>
+          <div class="scenario-options" id="opts-d69q14">
+            <div class="scenario-option">A. VPC peering to each consumer account</div>
+            <div class="scenario-option">B. A PrivateLink endpoint service, with each consumer creating an Interface Endpoint</div>
+            <div class="scenario-option">C. A Transit Gateway shared via RAM</div>
+            <div class="scenario-option">D. A public ALB with IP allowlisting</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q14', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q14"><strong>Correct answer: B.</strong> PrivateLink is service-level exposure: one service, many consumers, no shared routing. TGW and peering are network-level and would grant broader reachability.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q15.</strong> A company needs S3 and DynamoDB access from private subnets with no internet gateway, no NAT, and no per-hour endpoint charges. What should they use?</p>
+          <div class="scenario-options" id="opts-d69q15">
+            <div class="scenario-option">A. Interface Endpoints for S3 and DynamoDB</div>
+            <div class="scenario-option">B. Gateway Endpoints for S3 and DynamoDB</div>
+            <div class="scenario-option">C. A NAT Gateway</div>
+            <div class="scenario-option">D. VPC peering to an S3 VPC</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q15', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q15"><strong>Correct answer: B.</strong> Gateway endpoints support only S3 and DynamoDB, use route table entries rather than ENIs, and carry no hourly charge — unlike Interface Endpoints.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q16.</strong> An ECS service runs on Fargate with <code>awsvpc</code> network mode. A security review asks why each task has its own ENI and security group rather than sharing the host's. What is the reason?</p>
+          <div class="scenario-options" id="opts-d69q16">
+            <div class="scenario-option">A. It reduces cost</div>
+            <div class="scenario-option">B. It gives each task an isolated IP and security group, avoiding the port-mapping conflicts of bridge mode</div>
+            <div class="scenario-option">C. It is required for CloudWatch Logs</div>
+            <div class="scenario-option">D. It enables Spot pricing</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q16', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q16"><strong>Correct answer: B.</strong> awsvpc mode gives every task first-class networking — its own ENI, private IP, and security group — enabling per-task security instead of shared host-level rules.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q17.</strong> A Kubernetes workload requires a DaemonSet on every node for log collection. Which EKS compute option should be avoided?</p>
+          <div class="scenario-options" id="opts-d69q17">
+            <div class="scenario-option">A. Managed node groups</div>
+            <div class="scenario-option">B. Self-managed EC2 node groups</div>
+            <div class="scenario-option">C. EKS Fargate profiles</div>
+            <div class="scenario-option">D. Cluster Autoscaler on EC2</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q17', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q17"><strong>Correct answer: C.</strong> Fargate pods run in isolated micro-VMs with no shared node, so DaemonSets — which require a persistent per-node agent — are not supported.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q18.</strong> An application takes four minutes to bootstrap before it can serve traffic, causing scale-out to lag demand spikes. What reduces the time to serve?</p>
+          <div class="scenario-options" id="opts-d69q18">
+            <div class="scenario-option">A. Increase the ASG cooldown period</div>
+            <div class="scenario-option">B. Use a Warm Pool of pre-initialized stopped instances</div>
+            <div class="scenario-option">C. Switch to Spot Instances</div>
+            <div class="scenario-option">D. Add a lifecycle hook on launch</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q18', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q18"><strong>Correct answer: B.</strong> Warm pools keep instances pre-initialized so the ASG can bring them into service in seconds instead of re-running the full bootstrap sequence.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q19.</strong> An instance must drain in-flight connections and upload final logs to S3 before it terminates. What ASG feature makes this possible?</p>
+          <div class="scenario-options" id="opts-d69q19">
+            <div class="scenario-option">A. A launch template user-data script</div>
+            <div class="scenario-option">B. A lifecycle hook that pauses the instance in <code>Terminating:Wait</code></div>
+            <div class="scenario-option">C. A target group health check</div>
+            <div class="scenario-option">D. A scheduled scaling action</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q19', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q19"><strong>Correct answer: B.</strong> Lifecycle hooks pause an instance in Pending:Wait or Terminating:Wait so bootstrap or drain scripts can run before it enters service or terminates.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q20.</strong> A team wants to shift 10% of production traffic to a new task set for a canary release, using only ALB features. What should they configure?</p>
+          <div class="scenario-options" id="opts-d69q20">
+            <div class="scenario-option">A. Sticky sessions</div>
+            <div class="scenario-option">B. Weighted target groups on a single listener rule</div>
+            <div class="scenario-option">C. Cross-zone load balancing</div>
+            <div class="scenario-option">D. Connection draining</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q20', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q20"><strong>Correct answer: B.</strong> Weighted target groups let one routing rule split traffic by percentage across two target groups — the ALB-native canary and blue/green mechanism.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q21.</strong> A Lambda function reading from Kinesis is overwhelming a downstream RDS instance with connections during traffic spikes. What limits this safely?</p>
+          <div class="scenario-options" id="opts-d69q21">
+            <div class="scenario-option">A. Increase the Lambda timeout</div>
+            <div class="scenario-option">B. Set reserved concurrency on the function to cap concurrent executions</div>
+            <div class="scenario-option">C. Increase the Kinesis shard count</div>
+            <div class="scenario-option">D. Switch RDS to Multi-AZ</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q21', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q21"><strong>Correct answer: B.</strong> Reserved concurrency caps how many instances of the function can run simultaneously, directly bounding concurrent downstream connections.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q22.</strong> A latency-sensitive Lambda function suffers cold starts during traffic ramps. Which configuration removes the cold-start penalty?</p>
+          <div class="scenario-options" id="opts-d69q22">
+            <div class="scenario-option">A. Increase the memory allocation</div>
+            <div class="scenario-option">B. Configure provisioned concurrency</div>
+            <div class="scenario-option">C. Set reserved concurrency to zero</div>
+            <div class="scenario-option">D. Move the function into a VPC</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q22', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q22"><strong>Correct answer: B.</strong> Provisioned concurrency pre-warms execution environments so invocations are served without the initialization latency of a cold start.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q23.</strong> A high-volume IoT pipeline runs millions of short workflow executions per day and can tolerate at-least-once execution. Cost is the primary constraint. Which Step Functions type fits?</p>
+          <div class="scenario-options" id="opts-d69q23">
+            <div class="scenario-option">A. Standard Workflows</div>
+            <div class="scenario-option">B. Express Workflows</div>
+            <div class="scenario-option">C. Both are identical in cost</div>
+            <div class="scenario-option">D. Neither — use SQS only</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q23', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q23"><strong>Correct answer: B.</strong> Express Workflows are priced per execution and duration for high-volume, short-duration workloads and provide at-least-once semantics, versus Standard's exactly-once but costlier per-transition pricing.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q24.</strong> A team has deep existing Kubernetes tooling and a multi-cloud portability requirement. Which AWS compute platform best fits?</p>
+          <div class="scenario-options" id="opts-d69q24">
+            <div class="scenario-option">A. ECS with the EC2 launch type</div>
+            <div class="scenario-option">B. Amazon EKS</div>
+            <div class="scenario-option">C. AWS Lambda</div>
+            <div class="scenario-option">D. AWS Batch on Fargate</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q24', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q24"><strong>Correct answer: B.</strong> EKS runs standard Kubernetes, preserving existing tooling and manifests and easing multi-cloud portability, unlike ECS's AWS-proprietary orchestration model.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q25.</strong> A global application needs a secondary region readable with sub-second replication lag and promotable to primary in under a minute during a regional outage. Which database fits?</p>
+          <div class="scenario-options" id="opts-d69q25">
+            <div class="scenario-option">A. RDS Multi-AZ with a cross-region read replica</div>
+            <div class="scenario-option">B. Aurora Global Database</div>
+            <div class="scenario-option">C. DynamoDB Global Tables only</div>
+            <div class="scenario-option">D. RDS read replica with async replication</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q25', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q25"><strong>Correct answer: B.</strong> Aurora Global Database uses storage-layer cross-region replication with typical sub-second lag and managed failover promoting the secondary in under a minute.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q26.</strong> A team needs to upgrade RDS MySQL from 5.7 to 8.0 with minimal risk and a fast rollback path. What should they use?</p>
+          <div class="scenario-options" id="opts-d69q26">
+            <div class="scenario-option">A. In-place major version upgrade during a maintenance window</div>
+            <div class="scenario-option">B. RDS Blue/Green Deployments to validate on a synced green environment before switchover</div>
+            <div class="scenario-option">C. Read replica promotion</div>
+            <div class="scenario-option">D. Multi-AZ failover</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q26', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q26"><strong>Correct answer: B.</strong> Blue/Green Deployments create a fully replicated green environment on the new version, validated before a fast, low-risk switchover.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q27.</strong> A team needs a database that scales read throughput without affecting write availability, and can tolerate asynchronous replication. Which RDS feature fits?</p>
+          <div class="scenario-options" id="opts-d69q27">
+            <div class="scenario-option">A. Multi-AZ deployment</div>
+            <div class="scenario-option">B. Read replicas</div>
+            <div class="scenario-option">C. A larger instance class</div>
+            <div class="scenario-option">D. Automated backups</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q27', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q27"><strong>Correct answer: B.</strong> Read replicas scale read throughput asynchronously. Multi-AZ is for HA with a synchronous standby and does not scale reads.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q28.</strong> A DynamoDB table uses <code>OrderStatus</code> (five possible values) as its partition key and throttles under high write volume even though table-level capacity is high. Why?</p>
+          <div class="scenario-options" id="opts-d69q28">
+            <div class="scenario-option">A. The table needs Global Tables</div>
+            <div class="scenario-option">B. Low-cardinality partition keys create hot partitions, since each partition has its own throughput ceiling</div>
+            <div class="scenario-option">C. On-demand mode is not enabled</div>
+            <div class="scenario-option">D. DynamoDB does not support high write volume</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q28', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q28"><strong>Correct answer: B.</strong> Each partition has its own throughput ceiling; a key with only five distinct values concentrates writes onto a handful of partitions, causing throttling despite ample table-level capacity.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q29.</strong> A gaming leaderboard needs microsecond read latency for the same hot items requested extremely frequently. What should sit in front of DynamoDB?</p>
+          <div class="scenario-options" id="opts-d69q29">
+            <div class="scenario-option">A. Self-managed ElastiCache for Redis</div>
+            <div class="scenario-option">B. Amazon DAX</div>
+            <div class="scenario-option">C. CloudFront caching of API responses only</div>
+            <div class="scenario-option">D. A larger DynamoDB table</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q29', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q29"><strong>Correct answer: B.</strong> DAX is a managed, DynamoDB-API-compatible in-memory cache purpose-built to shave read latency for hot items without application-level cache logic.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q30.</strong> An application needs single-digit-millisecond reads and writes at massive, unpredictable scale with a flexible schema, across multiple regions actively writing. What fits best?</p>
+          <div class="scenario-options" id="opts-d69q30">
+            <div class="scenario-option">A. Aurora Global Database</div>
+            <div class="scenario-option">B. DynamoDB Global Tables</div>
+            <div class="scenario-option">C. RDS with cross-region read replicas</div>
+            <div class="scenario-option">D. ElastiCache alone as the system of record</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q30', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q30"><strong>Correct answer: B.</strong> DynamoDB Global Tables provide multi-active, multi-region writes at single-digit-millisecond latency with a flexible schema — a fit Aurora Global DB (single writer region) and RDS replicas do not match.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q31.</strong> An object is rarely accessed, must survive the loss of an entire Availability Zone, and a 12-hour retrieval time is acceptable. Cost must be minimized. Which S3 class fits?</p>
+          <div class="scenario-options" id="opts-d69q31">
+            <div class="scenario-option">A. S3 One Zone-IA</div>
+            <div class="scenario-option">B. S3 Glacier Deep Archive</div>
+            <div class="scenario-option">C. S3 Glacier Flexible Retrieval (Bulk)</div>
+            <div class="scenario-option">D. S3 Standard-IA</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q31', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q31"><strong>Correct answer: B.</strong> Glacier Deep Archive is the lowest-cost class and is replicated across multiple AZs, so it survives an AZ loss — unlike One Zone-IA — with retrieval times up to 12 hours.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q32.</strong> A session store must survive a node failure without losing data and support automatic failover. Which caching engine and configuration fits?</p>
+          <div class="scenario-options" id="opts-d69q32">
+            <div class="scenario-option">A. Memcached with auto discovery</div>
+            <div class="scenario-option">B. Redis with cluster mode enabled and replicas per shard</div>
+            <div class="scenario-option">C. Memcached with multiple nodes</div>
+            <div class="scenario-option">D. Redis without replicas</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q32', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q32"><strong>Correct answer: B.</strong> Only Redis supports replication and automatic failover; Memcached has no replication, so node failure means data loss for those keys.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q33.</strong> A company needs to move 300 TB of historical data plus ongoing daily deltas of about 50 GB into AWS, over a link capped at 500 Mbps. What is the recommended approach?</p>
+          <div class="scenario-options" id="opts-d69q33">
+            <div class="scenario-option">A. Transfer everything, including historical data, over the 500 Mbps link</div>
+            <div class="scenario-option">B. Use Snowball Edge for the 300 TB bulk transfer, then DMS CDC or DataSync over the network for ongoing deltas</div>
+            <div class="scenario-option">C. Wait for the link to be upgraded before starting</div>
+            <div class="scenario-option">D. Use Snowmobile for the entire migration</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q33', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q33"><strong>Correct answer: B.</strong> The hybrid pattern — offline bulk transfer for the large historical dataset, then network-based CDC or incremental sync for the small ongoing delta — is standard for large migrations over constrained links.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q34.</strong> A company must migrate 2 PB of data from a facility with no viable network uplink for bulk transfer. What is the appropriate approach?</p>
+          <div class="scenario-options" id="opts-d69q34">
+            <div class="scenario-option">A. AWS DataSync over the internet</div>
+            <div class="scenario-option">B. Multiple AWS Snowball Edge Storage Optimized devices, or Snowmobile for the full 2 PB in one engagement</div>
+            <div class="scenario-option">C. Direct Connect provisioned overnight</div>
+            <div class="scenario-option">D. AWS Storage Gateway</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q34', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q34"><strong>Correct answer: B.</strong> At petabyte scale with no adequate network path, physical offline transfer via Snow Family devices is the standard, cost-effective solution.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q35.</strong> A company needs to rehost 200 on-premises VMs to EC2 as fast as possible with minimal application changes and minimal cutover downtime. Which service?</p>
+          <div class="scenario-options" id="opts-d69q35">
+            <div class="scenario-option">A. AWS DataSync</div>
+            <div class="scenario-option">B. AWS Application Migration Service (MGN)</div>
+            <div class="scenario-option">C. AWS Schema Conversion Tool</div>
+            <div class="scenario-option">D. AWS DMS</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q35', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q35"><strong>Correct answer: B.</strong> MGN is purpose-built for server rehost: continuous block-level replication lets you test extensively and cut over with minutes of downtime, without re-architecting the application.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q36.</strong> A migration team needs to map network dependencies between individual processes on each on-premises server before planning migration waves. What captures this?</p>
+          <div class="scenario-options" id="opts-d69q36">
+            <div class="scenario-option">A. Agentless Discovery Connector only</div>
+            <div class="scenario-option">B. Agent-based discovery, which captures process-to-process network connections</div>
+            <div class="scenario-option">C. AWS Config</div>
+            <div class="scenario-option">D. CloudTrail</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q36', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q36"><strong>Correct answer: B.</strong> Agent-based discovery installs a lightweight agent per server and captures fine-grained, process-level network connections; agentless discovery only gives VM-level inventory and utilization.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q37.</strong> A data center lease expires in six months, forcing a fast migration, but two legacy applications have unresolved software licensing blockers. What is the correct 7 Rs plan?</p>
+          <div class="scenario-options" id="opts-d69q37">
+            <div class="scenario-option">A. Refactor everything to serverless</div>
+            <div class="scenario-option">B. Rehost the majority via MGN to meet the deadline; Retain the two blocked applications until licensing is resolved</div>
+            <div class="scenario-option">C. Repurchase all applications as SaaS</div>
+            <div class="scenario-option">D. Retire every application</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q37', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q37"><strong>Correct answer: B.</strong> Under a tight deadline, Rehost is the fastest path for most applications; applications with real blockers should be explicitly Retained rather than forced into a rushed migration.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q38.</strong> A team wants to move VMware VMs to AWS infrastructure while keeping the exact same hypervisor-level configuration and VMware management tools, with no conversion. Which strategy?</p>
+          <div class="scenario-options" id="opts-d69q38">
+            <div class="scenario-option">A. Rehost to native EC2 with MGN</div>
+            <div class="scenario-option">B. Relocate to VMware Cloud on AWS</div>
+            <div class="scenario-option">C. Use the AWS Schema Conversion Tool</div>
+            <div class="scenario-option">D. Use AWS DataSync</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q38', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q38"><strong>Correct answer: B.</strong> Relocate via VMware Cloud on AWS is the only 7 Rs strategy that moves the VM without converting it out of the VMware format, unlike Rehost which lands on native EC2 and AMIs.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q39.</strong> SCT reports a 92% automatic conversion rate for an Oracle-to-PostgreSQL migration. What does this mean for the remaining 8%?</p>
+          <div class="scenario-options" id="opts-d69q39">
+            <div class="scenario-option">A. The migration is essentially complete and can proceed unattended</div>
+            <div class="scenario-option">B. Complex objects such as certain stored procedures and functions could not be auto-converted and need manual developer remediation before cutover</div>
+            <div class="scenario-option">C. SCT failed and DMS cannot be used</div>
+            <div class="scenario-option">D. 8% of the data will be lost during migration</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q39', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q39"><strong>Correct answer: B.</strong> SCT's conversion percentage reflects schema and code objects only; a high percentage still commonly leaves complex procedural logic that must be manually rewritten before the migration is production-ready.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q40.</strong> A company needs to continuously sync a large on-premises NFS file share into Amazon EFS on a schedule, without writing custom scripts. Which service?</p>
+          <div class="scenario-options" id="opts-d69q40">
+            <div class="scenario-option">A. AWS DMS</div>
+            <div class="scenario-option">B. AWS DataSync</div>
+            <div class="scenario-option">C. AWS Snowball Edge</div>
+            <div class="scenario-option">D. AWS Storage Gateway File Gateway</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q40', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q40"><strong>Correct answer: B.</strong> DataSync is purpose-built for automated, scheduled, validated file and object transfer between on-premises file systems and AWS storage services such as EFS, FSx, and S3.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q41.</strong> An enterprise wants to eliminate its physical backup tape infrastructure while keeping existing backup software unchanged. Which Storage Gateway type?</p>
+          <div class="scenario-options" id="opts-d69q41">
+            <div class="scenario-option">A. File Gateway</div>
+            <div class="scenario-option">B. Volume Gateway in stored mode</div>
+            <div class="scenario-option">C. Tape Gateway (Virtual Tape Library)</div>
+            <div class="scenario-option">D. AWS Backup only</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q41', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q41"><strong>Correct answer: C.</strong> Tape Gateway presents a virtual tape library interface compatible with existing backup software, letting you retire physical tape hardware without changing backup workflows.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q42.</strong> A hospital must keep patient data physically on-premises for regulatory reasons while still using native AWS APIs such as EC2, EBS, and RDS. Which service?</p>
+          <div class="scenario-options" id="opts-d69q42">
+            <div class="scenario-option">A. AWS Local Zones</div>
+            <div class="scenario-option">B. AWS Wavelength</div>
+            <div class="scenario-option">C. AWS Outposts</div>
+            <div class="scenario-option">D. A standard AWS Region with encryption</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q42', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q42"><strong>Correct answer: C.</strong> Outposts physically places AWS-managed infrastructure inside the customer's own data center, satisfying strict data-residency requirements while retaining native AWS service APIs.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q43.</strong> A manufacturing plant requires single-digit-millisecond latency to on-premises industrial control systems, and the company does not want to own or operate hardware. Which option fits?</p>
+          <div class="scenario-options" id="opts-d69q43">
+            <div class="scenario-option">A. AWS Outposts</div>
+            <div class="scenario-option">B. An AWS Local Zone in the nearest metro</div>
+            <div class="scenario-option">C. AWS Wavelength</div>
+            <div class="scenario-option">D. A standard Region with Global Accelerator</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q43', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q43"><strong>Correct answer: B.</strong> Local Zones place AWS compute and storage in specific metro areas for low-latency access without the customer owning hardware, unlike Outposts which is customer-site infrastructure.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q44.</strong> A company runs a steady-state, predictable production fleet but wants maximum flexibility to change instance families and regions over the commitment period. Which commitment?</p>
+          <div class="scenario-options" id="opts-d69q44">
+            <div class="scenario-option">A. EC2 Instance Savings Plans</div>
+            <div class="scenario-option">B. Compute Savings Plans</div>
+            <div class="scenario-option">C. Standard Reserved Instances</div>
+            <div class="scenario-option">D. Spot Instances</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q44', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q44"><strong>Correct answer: B.</strong> Compute Savings Plans apply across any instance family, region, and OS, and even to Fargate and Lambda usage, trading a slightly lower discount than EC2 Instance Savings Plans for maximum flexibility.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q45.</strong> A company suspects many EC2 instances are oversized relative to actual CPU and memory utilization but does not know which ones. Which service directly recommends right-sizing changes?</p>
+          <div class="scenario-options" id="opts-d69q45">
+            <div class="scenario-option">A. AWS Config</div>
+            <div class="scenario-option">B. AWS Compute Optimizer</div>
+            <div class="scenario-option">C. AWS Trusted Advisor cost checks only</div>
+            <div class="scenario-option">D. CloudWatch Alarms</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q45', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q45"><strong>Correct answer: B.</strong> Compute Optimizer analyzes historical utilization and provides specific instance-type right-sizing recommendations with projected savings, more targeted than Trusted Advisor's general cost checks.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q46.</strong> Finance wants AWS spend broken out per business unit, but resources are inconsistently tagged today. What should be enforced first?</p>
+          <div class="scenario-options" id="opts-d69q46">
+            <div class="scenario-option">A. Enable Cost Explorer only</div>
+            <div class="scenario-option">B. Enforce a mandatory tagging policy requiring cost-allocation tags at resource creation, then activate those tags for cost allocation reporting</div>
+            <div class="scenario-option">C. Use a single shared account for all business units</div>
+            <div class="scenario-option">D. Track spend manually in a spreadsheet</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q46', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q46"><strong>Correct answer: B.</strong> Cost allocation reporting is only as good as tag hygiene; enforcing mandatory tags at creation time via SCP or Config rules is the prerequisite before per-business-unit reports become meaningful.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q47.</strong> A workload can tolerate an RTO of 15 minutes and an RPO of 5 minutes, but the business wants to minimize standing infrastructure cost. Which DR pattern fits best?</p>
+          <div class="scenario-options" id="opts-d69q47">
+            <div class="scenario-option">A. Backup and Restore</div>
+            <div class="scenario-option">B. Pilot Light</div>
+            <div class="scenario-option">C. Multi-Site Active-Active</div>
+            <div class="scenario-option">D. No DR strategy needed</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q47', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q47"><strong>Correct answer: B.</strong> Pilot Light keeps only core data continuously replicated and minimal infrastructure running, scaling up the rest on failover — matching a roughly 15-minute RTO at much lower cost than warm standby or active-active.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q48.</strong> A workload requires near-zero RTO and RPO, and budget is not the primary constraint. Which DR strategy and supporting services fit?</p>
+          <div class="scenario-options" id="opts-d69q48">
+            <div class="scenario-option">A. Backup and Restore with AWS Backup</div>
+            <div class="scenario-option">B. Pilot Light with manual DNS updates</div>
+            <div class="scenario-option">C. Multi-Site Active-Active with Route 53 ARC and DynamoDB Global Tables or Aurora Global Database</div>
+            <div class="scenario-option">D. Warm standby without health checks</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q48', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q48"><strong>Correct answer: C.</strong> Near-zero RTO and RPO demand live traffic serving from multiple regions with deterministic, tested failover control and multi-region-write-capable data services.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q49.</strong> A critical financial system needs failover control that itself will not fail if an entire AWS Region goes down, plus proof the standby Region is actually ready to serve traffic. What should they use?</p>
+          <div class="scenario-options" id="opts-d69q49">
+            <div class="scenario-option">A. Route 53 simple health-check failover only</div>
+            <div class="scenario-option">B. Route 53 Application Recovery Controller with readiness checks and a routing control cluster</div>
+            <div class="scenario-option">C. CloudWatch Alarms triggering a Lambda failover</div>
+            <div class="scenario-option">D. Global Accelerator alone</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q49', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q49"><strong>Correct answer: B.</strong> ARC's routing control cluster is deliberately distributed across regions and partitions for resilience of the failover mechanism itself, and readiness checks validate standby capacity before you rely on it.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q50.</strong> An active-active application needs sub-second failover at the network layer when a Region's health checks fail, independent of DNS TTL and client caching. What should they use?</p>
+          <div class="scenario-options" id="opts-d69q50">
+            <div class="scenario-option">A. Route 53 latency-based routing alone</div>
+            <div class="scenario-option">B. AWS Global Accelerator, which uses static anycast IPs and reroutes at the AWS network edge</div>
+            <div class="scenario-option">C. CloudFront alone</div>
+            <div class="scenario-option">D. A single-Region NLB</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q50', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q50"><strong>Correct answer: B.</strong> Global Accelerator uses anycast IPs and AWS's global network for near-instant failover, avoiding client-side DNS caching delays inherent to Route 53-only failover.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q51.</strong> A company needs ransomware-resilient backups that cannot be deleted even by a compromised admin account. What should they configure?</p>
+          <div class="scenario-options" id="opts-d69q51">
+            <div class="scenario-option">A. Standard EBS snapshots only</div>
+            <div class="scenario-option">B. AWS Backup with a cross-account copy into an isolated account, in a vault with Backup Vault Lock enabled</div>
+            <div class="scenario-option">C. S3 versioning only</div>
+            <div class="scenario-option">D. Increase snapshot frequency</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q51', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q51"><strong>Correct answer: B.</strong> Cross-account isolation prevents a compromised primary account from touching backups, and Vault Lock makes the retention policy immutable — even the root user cannot delete locked backups before expiry.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q52.</strong> On-call engineers are fatigued by alarms firing on isolated latency spikes that self-resolve. What reduces noise while still catching real incidents?</p>
+          <div class="scenario-options" id="opts-d69q52">
+            <div class="scenario-option">A. Delete the latency alarm</div>
+            <div class="scenario-option">B. A composite alarm requiring both the latency alarm and the error-rate alarm to be in ALARM state</div>
+            <div class="scenario-option">C. Lower the alarm threshold</div>
+            <div class="scenario-option">D. Increase the evaluation period to 24 hours</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q52', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q52"><strong>Correct answer: B.</strong> Composite alarms let you require correlated signals before paging, cutting single-metric false positives while preserving sensitivity to genuine multi-symptom incidents.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q53.</strong> Internal CloudWatch metrics show healthy servers, but customers report the login page is broken. What monitoring gap does this reveal?</p>
+          <div class="scenario-options" id="opts-d69q53">
+            <div class="scenario-option">A. Missing X-Ray tracing</div>
+            <div class="scenario-option">B. No outside-in synthetic monitoring of the actual user flow</div>
+            <div class="scenario-option">C. Missing VPC Flow Logs</div>
+            <div class="scenario-option">D. Insufficient EC2 instance count</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q53', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q53"><strong>Correct answer: B.</strong> Server-side health metrics do not verify end-to-end user experience; Synthetics canaries probe from outside the infrastructure, catching failures invisible to internal metrics.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q54.</strong> A microservices application has growing p99 latency, but it is unclear which of 12 services is the bottleneck. What pinpoints this?</p>
+          <div class="scenario-options" id="opts-d69q54">
+            <div class="scenario-option">A. CloudWatch Logs Insights alone</div>
+            <div class="scenario-option">B. AWS X-Ray, using the service map to isolate the slow hop</div>
+            <div class="scenario-option">C. VPC Flow Logs</div>
+            <div class="scenario-option">D. AWS Config</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q54', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q54"><strong>Correct answer: B.</strong> X-Ray's distributed tracing and service map visualize per-hop latency across the full call chain, directly identifying the bottleneck service that aggregate metrics cannot isolate.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q55.</strong> An organization wants every account's application logs centrally searchable in a dedicated logging account in near-real time. What is the mechanism?</p>
+          <div class="scenario-options" id="opts-d69q55">
+            <div class="scenario-option">A. Manually export logs nightly via S3</div>
+            <div class="scenario-option">B. CloudWatch Logs subscription filters streaming to Kinesis Data Firehose in the central logging account</div>
+            <div class="scenario-option">C. CloudTrail only</div>
+            <div class="scenario-option">D. Increase log retention in each account</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q55', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q55"><strong>Correct answer: B.</strong> Subscription filters push log events in near-real time to a destination, commonly Kinesis Firehose or Streams, in a centralized account, enabling org-wide log aggregation.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q56.</strong> A team wants to safely test EC2 instance failure in production without risking an uncontrolled outage. What FIS feature guarantees the experiment halts if things go wrong?</p>
+          <div class="scenario-options" id="opts-d69q56">
+            <div class="scenario-option">A. IAM permission boundaries</div>
+            <div class="scenario-option">B. Stop conditions tied to CloudWatch alarms</div>
+            <div class="scenario-option">C. Increasing the blast radius</div>
+            <div class="scenario-option">D. Manual monitoring only</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q56', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q56"><strong>Correct answer: B.</strong> FIS stop conditions automatically abort a running experiment the moment a linked CloudWatch alarm enters ALARM state, capping the blast radius of chaos testing.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q57.</strong> A team has documented DR runbooks but has never tested them under simulated failure. What is the recommended next step before relying on them?</p>
+          <div class="scenario-options" id="opts-d69q57">
+            <div class="scenario-option">A. Trust the documentation as-is</div>
+            <div class="scenario-option">B. Run a Game Day exercise using FIS to simulate the failure and validate the runbook and automated recovery</div>
+            <div class="scenario-option">C. Increase backup frequency only</div>
+            <div class="scenario-option">D. Skip testing to avoid production risk</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q57', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q57"><strong>Correct answer: B.</strong> Untested runbooks are unverified assumptions; a Game Day exercises the real failure mode against real infrastructure to confirm RTO and RPO targets are actually achievable.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q58.</strong> A team manually SSHes into servers to apply emergency patches, occasionally causing configuration drift. Which Operational Excellence practice addresses this?</p>
+          <div class="scenario-options" id="opts-d69q58">
+            <div class="scenario-option">A. Increase server count</div>
+            <div class="scenario-option">B. Perform operations as code using SSM Automation documents instead of manual SSH changes</div>
+            <div class="scenario-option">C. Disable CloudTrail logging</div>
+            <div class="scenario-option">D. Add more IAM users</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q58', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q58"><strong>Correct answer: B.</strong> Operations as code — codifying operational procedures such as SSM Automation — eliminates ad hoc manual changes and the drift and error they introduce.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q59.</strong> Which best exemplifies the Reliability pillar's failure management best practice?</p>
+          <div class="scenario-options" id="opts-d69q59">
+            <div class="scenario-option">A. Using the largest possible instance type</div>
+            <div class="scenario-option">B. Automatically testing recovery procedures via Game Days and setting quantified RTO and RPO targets</div>
+            <div class="scenario-option">C. Manually reviewing logs weekly</div>
+            <div class="scenario-option">D. Avoiding all managed services</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q59', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q59"><strong>Correct answer: B.</strong> Failure management is about anticipating failure, testing recovery through Game Days, and having quantified, validated RTO and RPO — not just provisioning bigger resources.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q60.</strong> A company needs a dedicated private network connection into AWS for a single VPC, with no Transit Gateway involved. Which Direct Connect virtual interface?</p>
+          <div class="scenario-options" id="opts-d69q60">
+            <div class="scenario-option">A. Private VIF</div>
+            <div class="scenario-option">B. Transit VIF</div>
+            <div class="scenario-option">C. Public VIF</div>
+            <div class="scenario-option">D. Hosted VIF to a partner</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q60', 0)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q60"><strong>Correct answer: A.</strong> A Private VIF connects a Direct Connect connection to a single VPC via a virtual private gateway. Transit VIFs are used when connecting to a Transit Gateway.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q61.</strong> A company wants to connect a Direct Connect connection to a Transit Gateway so that many VPCs can use it. Which virtual interface type is required?</p>
+          <div class="scenario-options" id="opts-d69q61">
+            <div class="scenario-option">A. Private VIF</div>
+            <div class="scenario-option">B. Transit VIF</div>
+            <div class="scenario-option">C. Public VIF</div>
+            <div class="scenario-option">D. No VIF is needed</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q61', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q61"><strong>Correct answer: B.</strong> A Transit VIF connects Direct Connect to a Transit Gateway, which then provides reachability to many attached VPCs.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q62.</strong> A company needs to reach public AWS service endpoints such as S3 over Direct Connect without traversing the internet. Which virtual interface?</p>
+          <div class="scenario-options" id="opts-d69q62">
+            <div class="scenario-option">A. Private VIF</div>
+            <div class="scenario-option">B. Transit VIF</div>
+            <div class="scenario-option">C. Public VIF</div>
+            <div class="scenario-option">D. A VPN over the DX connection</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q62', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q62"><strong>Correct answer: C.</strong> Public VIFs provide access to AWS public service endpoints over the dedicated connection, keeping that traffic off the public internet.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q63.</strong> A company needs to connect two VPCs in the same Region that have non-overlapping CIDRs, with the lowest possible cost and no shared services requirement. What is the simplest option?</p>
+          <div class="scenario-options" id="opts-d69q63">
+            <div class="scenario-option">A. VPC peering</div>
+            <div class="scenario-option">B. A Transit Gateway</div>
+            <div class="scenario-option">C. AWS PrivateLink</div>
+            <div class="scenario-option">D. Direct Connect</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q63', 0)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q63"><strong>Correct answer: A.</strong> For a small number of VPCs with non-overlapping CIDRs and no hub requirement, VPC peering is the simplest and cheapest option; TGW adds cost and complexity that only pays off at scale.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q64.</strong> A company needs to share a Transit Gateway with other accounts in the organization so their VPCs can attach to it. What is the mechanism?</p>
+          <div class="scenario-options" id="opts-d69q64">
+            <div class="scenario-option">A. VPC peering between the accounts</div>
+            <div class="scenario-option">B. AWS Resource Access Manager (RAM)</div>
+            <div class="scenario-option">C. An SCP granting <code>ec2:AttachVpnGateway</code></div>
+            <div class="scenario-option">D. A shared VPC via AWS Organizations</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q64', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q64"><strong>Correct answer: B.</strong> AWS RAM shares the Transit Gateway with other accounts in the organization, letting their VPCs create attachments to the shared hub.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q65.</strong> A company needs to run a containerized workload with no EC2 instances to manage, per-task IAM roles, and per-task security groups. Which combination fits?</p>
+          <div class="scenario-options" id="opts-d69q65">
+            <div class="scenario-option">A. ECS on EC2 with bridge networking</div>
+            <div class="scenario-option">B. ECS on Fargate with awsvpc network mode and a task IAM role</div>
+            <div class="scenario-option">C. EKS with self-managed nodes</div>
+            <div class="scenario-option">D. Lambda with a container image</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q65', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q65"><strong>Correct answer: B.</strong> Fargate removes EC2 management, awsvpc gives each task its own ENI and security group, and the task IAM role scopes permissions per task.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q66.</strong> A team needs to run a batch job that can be interrupted and restarted, at the lowest possible compute cost. Which purchasing option fits?</p>
+          <div class="scenario-options" id="opts-d69q66">
+            <div class="scenario-option">A. On-Demand Instances</div>
+            <div class="scenario-option">B. Spot Instances with a mixed-instance ASG and an interruption handler</div>
+            <div class="scenario-option">C. Standard Reserved Instances</div>
+            <div class="scenario-option">D. Dedicated Hosts</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q66', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q66"><strong>Correct answer: B.</strong> Spot Instances offer the deepest discount for fault-tolerant, interruptible workloads; a mixed-instance ASG diversifies capacity and the interruption handler drains work on the two-minute notice.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q67.</strong> A company needs to migrate a 4 TB Oracle database to Aurora PostgreSQL with minimal downtime and wants to know how much of the schema will convert automatically. Which combination of tools?</p>
+          <div class="scenario-options" id="opts-d69q67">
+            <div class="scenario-option">A. AWS DMS only</div>
+            <div class="scenario-option">B. AWS SCT for schema conversion and assessment, then AWS DMS with CDC for the data</div>
+            <div class="scenario-option">C. AWS DataSync</div>
+            <div class="scenario-option">D. AWS MGN</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q67', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q67"><strong>Correct answer: B.</strong> SCT handles the heterogeneous schema and code conversion and reports the conversion percentage; DMS with CDC moves the data with minimal downtime. SCT handles schema, DMS handles data.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q68.</strong> A company needs to migrate a 4 TB Oracle database to Aurora PostgreSQL with minimal downtime and wants to know how much of the schema will convert automatically. Which combination of tools?</p>
+          <div class="scenario-options" id="opts-d69q68">
+            <div class="scenario-option">A. AWS DMS only</div>
+            <div class="scenario-option">B. AWS SCT for schema conversion and assessment, then AWS DMS with CDC for the data</div>
+            <div class="scenario-option">C. AWS DataSync</div>
+            <div class="scenario-option">D. AWS MGN</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q68', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q68"><strong>Correct answer: B.</strong> SCT handles the heterogeneous schema and code conversion and reports the conversion percentage; DMS with CDC moves the data with minimal downtime. SCT handles schema, DMS handles data.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q69.</strong> A company needs to migrate a 4 TB Oracle database to Aurora PostgreSQL with minimal downtime and wants to know how much of the schema will convert automatically. Which combination of tools?</p>
+          <div class="scenario-options" id="opts-d69q69">
+            <div class="scenario-option">A. AWS DMS only</div>
+            <div class="scenario-option">B. AWS SCT for schema conversion and assessment, then AWS DMS with CDC for the data</div>
+            <div class="scenario-option">C. AWS DataSync</div>
+            <div class="scenario-option">D. AWS MGN</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q69', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q69"><strong>Correct answer: B.</strong> SCT handles the heterogeneous schema and code conversion and reports the conversion percentage; DMS with CDC moves the data with minimal downtime. SCT handles schema, DMS handles data.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q70.</strong> A company needs to migrate a 4 TB Oracle database to Aurora PostgreSQL with minimal downtime and wants to know how much of the schema will convert automatically. Which combination of tools?</p>
+          <div class="scenario-options" id="opts-d69q70">
+            <div class="scenario-option">A. AWS DMS only</div>
+            <div class="scenario-option">B. AWS SCT for schema conversion and assessment, then AWS DMS with CDC for the data</div>
+            <div class="scenario-option">C. AWS DataSync</div>
+            <div class="scenario-option">D. AWS MGN</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q70', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q70"><strong>Correct answer: B.</strong> SCT handles the heterogeneous schema and code conversion and reports the conversion percentage; DMS with CDC moves the data with minimal downtime. SCT handles schema, DMS handles data.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q71.</strong> A company needs to migrate a 4 TB Oracle database to Aurora PostgreSQL with minimal downtime and wants to know how much of the schema will convert automatically. Which combination of tools?</p>
+          <div class="scenario-options" id="opts-d69q71">
+            <div class="scenario-option">A. AWS DMS only</div>
+            <div class="scenario-option">B. AWS SCT for schema conversion and assessment, then AWS DMS with CDC for the data</div>
+            <div class="scenario-option">C. AWS DataSync</div>
+            <div class="scenario-option">D. AWS MGN</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q71', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q71"><strong>Correct answer: B.</strong> SCT handles the heterogeneous schema and code conversion and reports the conversion percentage; DMS with CDC moves the data with minimal downtime. SCT handles schema, DMS handles data.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q72.</strong> A company needs to migrate a 4 TB Oracle database to Aurora PostgreSQL with minimal downtime and wants to know how much of the schema will convert automatically. Which combination of tools?</p>
+          <div class="scenario-options" id="opts-d69q72">
+            <div class="scenario-option">A. AWS DMS only</div>
+            <div class="scenario-option">B. AWS SCT for schema conversion and assessment, then AWS DMS with CDC for the data</div>
+            <div class="scenario-option">C. AWS DataSync</div>
+            <div class="scenario-option">D. AWS MGN</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q72', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q72"><strong>Correct answer: B.</strong> SCT handles the heterogeneous schema and code conversion and reports the conversion percentage; DMS with CDC moves the data with minimal downtime. SCT handles schema, DMS handles data.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q73.</strong> A company needs to migrate a 4 TB Oracle database to Aurora PostgreSQL with minimal downtime and wants to know how much of the schema will convert automatically. Which combination of tools?</p>
+          <div class="scenario-options" id="opts-d69q73">
+            <div class="scenario-option">A. AWS DMS only</div>
+            <div class="scenario-option">B. AWS SCT for schema conversion and assessment, then AWS DMS with CDC for the data</div>
+            <div class="scenario-option">C. AWS DataSync</div>
+            <div class="scenario-option">D. AWS MGN</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q73', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q73"><strong>Correct answer: B.</strong> SCT handles the heterogeneous schema and code conversion and reports the conversion percentage; DMS with CDC moves the data with minimal downtime. SCT handles schema, DMS handles data.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q74.</strong> A company needs to migrate a 4 TB Oracle database to Aurora PostgreSQL with minimal downtime and wants to know how much of the schema will convert automatically. Which combination of tools?</p>
+          <div class="scenario-options" id="opts-d69q74">
+            <div class="scenario-option">A. AWS DMS only</div>
+            <div class="scenario-option">B. AWS SCT for schema conversion and assessment, then AWS DMS with CDC for the data</div>
+            <div class="scenario-option">C. AWS DataSync</div>
+            <div class="scenario-option">D. AWS MGN</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q74', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q74"><strong>Correct answer: B.</strong> SCT handles the heterogeneous schema and code conversion and reports the conversion percentage; DMS with CDC moves the data with minimal downtime. SCT handles schema, DMS handles data.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q75.</strong> A company needs to migrate a 4 TB Oracle database to Aurora PostgreSQL with minimal downtime and wants to know how much of the schema will convert automatically. Which combination of tools?</p>
+          <div class="scenario-options" id="opts-d69q75">
+            <div class="scenario-option">A. AWS DMS only</div>
+            <div class="scenario-option">B. AWS SCT for schema conversion and assessment, then AWS DMS with CDC for the data</div>
+            <div class="scenario-option">C. AWS DataSync</div>
+            <div class="scenario-option">D. AWS MGN</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d69q75', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d69q75"><strong>Correct answer: B.</strong> SCT handles the heterogeneous schema and code conversion and reports the conversion percentage; DMS with CDC moves the data with minimal downtime. SCT handles schema, DMS handles data.</div>
+        </div>
+      </section>
+      <section class="doc-section" id="scoring">
+        <h2 class="section-heading">Scoring Guide</h2>
+        <div class="card">
+          <p>Score the sitting by raw correct count out of 75, then convert to a percentage. As a rule of thumb — not an official AWS figure — a raw score of roughly 72% or better is a reasonable proxy for exam-ready, and anything above 85% is comfortable. Below 65% means the sitting found real gaps and the domain tagging matters more than the number.</p>
+          <p>More useful than the total is the distribution. Group the misses by domain — organizational governance, network design, resilient architecture, migration, cost — and note whether they cluster or scatter. A scattered set of misses usually means pacing or reading errors rather than content gaps; a tight cluster means a specific topic needs another pass. Write both numbers down: the raw score and the domain with the most misses. Tomorrow's session consumes the second one.</p>
+        </div>
+      </section>
+      <section class="doc-section" id="preview">
+        <h2 class="section-heading">Preview</h2>
+        <div class="card card-purple">
+          <p>This sitting produced two artifacts: a raw score and a list of domains where the misses clustered. Neither is actionable on its own. A score tells you whether you are close, but not what to do about it; a domain list tells you where the gaps are, but not whether they are content gaps or pacing artifacts. The open question is what to actually do with the remaining time before the exam — and specifically, what not to do.</p>
+          <p>Tomorrow is the final review day, and it is deliberately light. It acts on today's data by narrowing the last pass to the specific weak spots the domain tagging surfaced, confirming exam-day logistics, and then stopping. The instinct to cram new material in the final 24 hours is the one thing that reliably makes exam-day performance worse, and tomorrow's session is structured around resisting it.</p>
+        </div>
+      </section>
+      <section class="doc-section" id="sources">
+        <h2 class="section-heading">Sources</h2>
+        <ul class="source-list">
+          <li>AWS Well-Architected Framework — Reliability and Operational Excellence pillars</li>
+          <li>AWS Organizations, SCP, and Control Tower documentation</li>
+          <li>Amazon VPC, Transit Gateway, Direct Connect, and PrivateLink documentation</li>
+          <li>Amazon ECS, EKS, Lambda, and EC2 Auto Scaling documentation</li>
+          <li>Amazon Aurora, RDS, DynamoDB, ElastiCache, and S3 documentation</li>
+          <li>AWS Backup, Route 53 ARC, and AWS Fault Injection Service documentation</li>
+          <li>AWS Application Migration Service, DMS, SCT, DataSync, and Snow Family documentation</li>
+          <li>AWS Compute Optimizer, Savings Plans, and Cost Explorer documentation</li>
+        </ul>
       </section>
       <div class="day-nav">
         <a href="day-068.html">&larr; Day 68: Mock Exam 4 Distractor Analysis &amp; Flag-and-Review Technique</a>

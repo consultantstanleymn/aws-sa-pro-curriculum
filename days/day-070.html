@@ -104,36 +104,297 @@
         <span class="pill pill-green">Phase 5: Practice Exams &amp; Exam Technique</span>
       </div>
       <h1 class="hero-title">Final Review — Exam Day Logistics, Pearson VUE Checklist &amp; Confidence Drills</h1>
-      <div class="reading-meta">&#128337; ~3 min read &middot; 2 services covered</div>
+      <div class="reading-meta">&#128337; ~28 min read &middot; 2 services covered</div>
       <div class="services-grid">
         <span class="service-tag">Pearson VUE</span>
         <span class="service-tag">Exam Day Prep</span>
       </div>
       <div id="tracker"></div>
-      <section class="doc-section">
-        <h2 class="section-heading">Today's Concept</h2>
+
+      <section class="doc-section" id="recap">
+        <h2 class="section-heading">Recap — What Mock Exam 5 Actually Told You</h2>
         <div class="card card-accent">
-          <p>Light review only — re-read your personal weak-spot cheat sheet, confirm Pearson VUE/OnVUE logistics (ID requirements, room scan for online proctoring, check-in time), and avoid cramming new material the day before the exam.</p>
-        </div>
-        <h3 class="sub-heading">Hands-on Lab / Practical Action (45 min)</h3>
-        <div class="card">
-          <p>Confirm exam appointment details, prepare valid ID, do a final light pass of the personal cheat sheet built on Day 68, and get a full night's sleep.</p>
+          <p>Mock Exam 5 was the last full timed run before the real thing, and the target attached to it was consistency: scoring above 85% not once, but as a stable pattern rather than a lucky draw. That is a different kind of signal than a single high score. A 90% followed by a 72% followed by an 88% means the underlying knowledge is there but the retrieval is unstable, and instability under exam conditions is what produces the "I knew this" misses that feel worse than genuine gaps. A flat 86-88% across three consecutive mocks means the weak domains have been closed and what remains is execution.</p>
+          <p>That shift — from closing knowledge gaps to protecting execution quality — is the same lifecycle stage as the mock-exam loop itself, but a different concern. The loop was about finding and fixing what you did not know. Today is about not losing points on what you do know. The failure modes are no longer conceptual; they are fatigue, overthinking, second-guessing a correct first instinct, and logistics. Everything below is aimed at that narrower problem.</p>
         </div>
       </section>
-      <section class="doc-section">
-        <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
-        
-      <div class="scenario-card">
-        <p class="scenario-question"><strong>Q1.</strong> The day before the SAP-C02 exam, what is the most effective use of study time?</p>
-        <div class="scenario-options" id="opts-d70q0">
-            <div class="scenario-option">A. Cram as many new topics as possible</div>
-            <div class="scenario-option">B. Light review of your personal weak-spot cheat sheet, logistics confirmation, and rest — not new material</div>
-            <div class="scenario-option">C. Take a 6th full mock exam back-to-back</div>
-            <div class="scenario-option">D. Skip review entirely</div>
+
+      <section class="doc-section" id="patterns">
+        <h2 class="section-heading">Distractor Patterns — The Twelve That Cost You Points</h2>
+        <p>These are the recurring wrong-answer shapes that survived five rounds of distractor analysis. Each entry names the tempting option, explains why it feels right, and gives the specific tell that separates it from the correct answer. Read them as a checklist against your own Day 68 cheat sheet, not as new material.</p>
+
+        <h3 class="sub-heading">1. The "More Managed Service" Trap</h3>
+        <p>The tempting answer names a fully managed AWS service that does roughly the right thing, and it feels right because managed services are usually the correct answer on this exam. The pattern breaks when the scenario contains a constraint the managed service cannot satisfy — a data residency requirement, an existing tooling investment, a licensing obligation, or a latency floor that only customer-controlled infrastructure can meet. The tell is a constraint clause in the question stem that the managed option quietly ignores. On Mock Exam 5 this showed up in the hybrid compute questions, where Outposts was the correct answer precisely because the scenario said the data had to stay on-premises, and the managed-service distractor was a Region-based service with encryption.</p>
+
+        <h3 class="sub-heading">2. The "Cheaper Commitment" Trap</h3>
+        <p>Savings Plans and Reserved Instances questions almost always include a distractor that is cheaper on paper but locked to a narrower scope. The tempting option is the one with the deepest discount, and it feels right because the scenario usually mentions cost sensitivity. The tell is whether the scenario also mentions flexibility — changing instance families, moving regions, or covering Fargate and Lambda usage. If flexibility is stated, the deeper-discount option is wrong regardless of how much it saves. If the workload is genuinely fixed and predictable, the narrower commitment is correct and the flexible option is the distractor.</p>
+
+        <h3 class="sub-heading">3. The "Add a Health Check" Trap</h3>
+        <p>When a scenario describes failover that is slow or unreliable, the tempting fix is to add or tighten a Route 53 health check. It feels right because health checks are the visible mechanism behind DNS failover. The tell is whether the scenario mentions client-side DNS caching, TTL behavior, or a requirement for deterministic, auditable failover. If it does, health checks alone are the wrong layer — the answer is Global Accelerator for network-layer failover or Route 53 ARC for a control plane that survives a regional outage. Health checks are necessary but not sufficient, and the exam tests whether you know where the insufficiency lives.</p>
+
+        <h3 class="sub-heading">4. The "Bigger Instance" Trap</h3>
+        <p>A performance or throttling scenario offers an instance-class upgrade as a distractor. It feels right because scaling up is the intuitive response to a capacity problem. The tell is whether the bottleneck is described as per-partition, per-shard, per-connection, or per-key rather than aggregate. DynamoDB hot partitions, Kinesis shard limits, and RDS connection ceilings are all cases where a bigger instance does nothing because the constraint is not on the compute resource. On Mock Exam 5 the DynamoDB partition-key question used exactly this shape: high table-level capacity, throttling anyway, and an instance-size distractor that had no relationship to the actual limit.</p>
+
+        <h3 class="sub-heading">5. The "Enable Multi-AZ" Trap</h3>
+        <p>Any database availability scenario will offer Multi-AZ as an option, and it feels right because Multi-AZ is the canonical HA answer. The tell is whether the scenario asks for read scaling, cross-region reads, or a secondary region that can serve traffic. Multi-AZ gives you a synchronous standby on the same endpoint and does not scale reads at all. If the requirement is read throughput, the answer is read replicas; if it is cross-region low-latency reads with fast promotion, it is Aurora Global Database. Multi-AZ is correct only when the requirement is failover within a single Region with no read-scaling component.</p>
+
+        <h3 class="sub-heading">6. The "Use SCPs to Grant Access" Trap</h3>
+        <p>Governance scenarios sometimes offer an SCP as the mechanism that enables a permission. It feels right because SCPs are the org-wide policy tool and the scenario is about org-wide control. The tell is the word "grant" or "allow" in the requirement. SCPs are a ceiling, never a grant; an identity still needs an IAM allow, and the default FullAWSAccess SCP permits everything until an explicit Deny is attached. If the scenario needs access to exist, the answer involves IAM or Identity Center permission sets. If it needs access to be capped, the answer involves SCPs.</p>
+
+        <h3 class="sub-heading">7. The "Rehost Everything" Trap</h3>
+        <p>Migration scenarios with a tight deadline make Rehost feel like the universal answer, and it often is for the bulk of a portfolio. The tell is a workload in the scenario that has a stated blocker — unresolved licensing, a regulatory constraint, or a dependency that cannot survive a lift-and-shift. Those workloads are Retain, not Rehost, and the correct answer names both strategies explicitly. The distractor is the answer that applies one strategy uniformly across the whole portfolio, which is almost never right when the scenario describes heterogeneous constraints.</p>
+
+        <h3 class="sub-heading">8. The "SCT Will Handle It" Trap</h3>
+        <p>Heterogeneous database migration scenarios offer the Schema Conversion Tool as a complete solution. It feels right because SCT is the tool named for exactly this job. The tell is a conversion-completeness figure below 100% in the scenario, or any mention of stored procedures, triggers, or complex procedural logic. SCT converts schema and reports what it could not convert; the remainder needs manual developer remediation before cutover. The distractor treats a 92% conversion rate as "done," which is the single most common misread in this domain.</p>
+
+        <h3 class="sub-heading">9. The "One Big VPC" Trap</h3>
+        <p>Networking scenarios offer a single shared VPC with subnets per team as a simplification. It feels right because it reduces the number of moving parts and the scenario is about connectivity. The tell is any mention of blast radius, independent failure domains, or per-team policy. A single VPC means a single route table set, a single set of VPC-level quotas, and a shared failure domain. The correct answer is usually separate VPCs connected through Transit Gateway, or RAM-shared subnets from a central network account when the requirement is specifically about central ownership rather than isolation.</p>
+
+        <h3 class="sub-heading">10. The "CloudWatch Alarm Will Fix It" Trap</h3>
+        <p>Reliability scenarios offer an alarm as the remediation for a failure mode. It feels right because alarms are how you detect problems. The tell is whether the scenario asks for recovery or for notification. An alarm notifies; it does not recover unless something is wired to act on it. The correct answer names the automated action — an Auto Scaling policy, an EventBridge rule invoking a Lambda, an SSM Automation document, or a Route 53 ARC routing control — and the alarm is only the trigger. Answers that stop at "create an alarm" are incomplete.</p>
+
+        <h3 class="sub-heading">11. The "Increase the Timeout" Trap</h3>
+        <p>Lambda and API Gateway scenarios offer a timeout increase as the fix for a failing or slow invocation. It feels right because timeouts are a visible failure and the knob is right there. The tell is whether the scenario describes a cold start, a downstream connection limit, or a concurrency ceiling. None of those are timeout problems. Cold starts are addressed with provisioned concurrency, downstream connection exhaustion with reserved concurrency, and concurrency ceilings with account-level limits. Raising the timeout on a cold-start problem just makes the failure slower.</p>
+
+        <h3 class="sub-heading">12. The "Delete and Recreate" Trap</h3>
+        <p>Operational scenarios offer a rebuild — terminate and relaunch, delete and recreate the stack — as the fix for drift or a bad configuration. It feels right because it guarantees a known-good state. The tell is any mention of stateful data, in-flight work, or a requirement for zero downtime. Rebuilding is correct for stateless, disposable resources and wrong for anything holding state or serving live traffic. The correct answer usually involves a rolling replacement, a blue/green deployment, or a lifecycle hook that drains before termination.</p>
+      </section>
+
+      <section class="doc-section" id="logistics">
+        <h2 class="section-heading">Exam Day Logistics — The Checklist That Prevents Self-Inflicted Losses</h2>
+        <p>Logistics failures are the only category of exam loss that is entirely preventable, and they are more common than most candidates expect. The two delivery modes have different failure surfaces. At a Pearson VUE test center, the risks are arrival timing, identification, and the fact that you cannot control the environment. With OnVUE online proctoring, the risks are the room scan, the environment check, background processes on your machine, and the check-in window. Both modes require you to confirm the appointment details and the identification requirements in advance rather than on the day.</p>
+        <p>The practical rule is to treat the day before as a logistics day, not a study day. Confirm the appointment time and location or the online check-in window, verify that your identification is current and matches the name on the registration exactly, and for online proctoring run the system test on the same machine and network you will use. The night before, stop studying at a reasonable hour and sleep. Marginal new learning on the final evening has a low expected return and a real cost in fatigue and anxiety the next morning.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Item</th><th>Test center</th><th>OnVUE online</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Identification</td><td>Government-issued photo ID, name matching registration</td><td>Same, plus a secondary check during check-in</td></tr>
+              <tr><td>Arrival / check-in</td><td>Arrive early; late arrival can forfeit the seat</td><td>Check in within the stated window; do not start late</td></tr>
+              <tr><td>Environment</td><td>Provided; personal items stored</td><td>Private room, clear desk, room scan, no interruptions</td></tr>
+              <tr><td>Machine</td><td>Provided</td><td>Run the system test in advance; close background apps</td></tr>
+              <tr><td>Network</td><td>Provided</td><td>Wired connection preferred; have a fallback</td></tr>
+              <tr><td>Breaks</td><td>Per test center policy</td><td>Generally none; plan hydration and restroom before</td></tr>
+            </tbody>
+          </table>
         </div>
-        <button class="scenario-reveal-btn" onclick="revealAnswer('d70q0', 1)">Reveal Answer</button>
-        <div class="scenario-explanation" id="exp-d70q0"><strong>Correct answer: B.</strong> By the final day, marginal new learning is low-value and risks fatigue/anxiety; reviewing known weak spots lightly and ensuring logistics/rest are handled has the best return on exam-day performance.</div>
-      </div>
+      </section>
+
+      <section class="doc-section" id="lab">
+        <h2 class="section-heading">Hands-on Lab / Practical Action (45 min)</h2>
+        <div class="card card-green">
+          <p>The lab for today is a logistics and confidence pass, not a study session. Start by opening the personal weak-spot cheat sheet you built on Day 68 and reading it end to end once, slowly, without trying to add anything to it. The goal is recognition, not memorization: you should be able to read each line and immediately recall the scenario shape it maps to. If a line does not trigger that recognition, mark it and move on rather than stopping to re-study the topic — the point of the pass is to confirm what is already there, not to open new fronts.</p>
+          <p>Next, confirm the exam appointment. Verify the date, time, and delivery mode, and if you are testing online, run the system test on the machine and network you will actually use. Check that your identification is current, undamaged, and matches the name on your registration character for character. If you are testing at a center, confirm the address and plan your arrival with margin for traffic. Write the check-in time somewhere you will see it in the morning.</p>
+          <p>Then do a short confidence drill rather than a content drill. Pick five questions you got wrong on Mock Exam 5, read only the question stems, and say out loud which distractor pattern each one is testing. You are not solving them; you are confirming that you can now see the shape of the trap. This is the skill that carries over to the real exam, where the content will be unfamiliar but the distractor patterns will not be.</p>
+          <p>Finish by closing the laptop. Do not take a sixth mock exam, do not start a new topic, and do not re-read the domains you already know. Eat something normal, set an alarm with margin, and sleep. The work is done; today's job is to arrive at the exam rested and undistracted.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="quiz">
+        <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
+        <p>Fifteen questions built around the distractor patterns above. Each one contains the tempting wrong answer as an option — read all four before choosing.</p>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q1.</strong> A hospital must keep patient data physically on-premises for regulatory reasons while still using native AWS APIs for its applications. Which option satisfies the requirement?</p>
+          <div class="scenario-options" id="opts-d70q1">
+            <div class="scenario-option">A. A standard AWS Region with encryption at rest and in transit</div>
+            <div class="scenario-option">B. AWS Outposts</div>
+            <div class="scenario-option">C. AWS Local Zones</div>
+            <div class="scenario-option">D. AWS Wavelength</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d70q1', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d70q1"><strong>Correct answer: B.</strong> The constraint is physical data residency, which only Outposts satisfies by placing AWS-managed infrastructure inside the customer's own data center. Encryption in a Region does not meet a physical-location requirement, and Local Zones and Wavelength are AWS-operated facilities, not customer premises.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q2.</strong> A company runs a steady, predictable production fleet and wants the deepest possible discount, with no plans to change instance families or regions over the next three years. Which commitment fits best?</p>
+          <div class="scenario-options" id="opts-d70q2">
+            <div class="scenario-option">A. Compute Savings Plans</div>
+            <div class="scenario-option">B. EC2 Instance Savings Plans</div>
+            <div class="scenario-option">C. Spot Instances</div>
+            <div class="scenario-option">D. On-Demand with auto scaling</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d70q2', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d70q2"><strong>Correct answer: B.</strong> EC2 Instance Savings Plans trade flexibility for a deeper discount by locking to an instance family and region. The scenario explicitly rules out changing families or regions, so the flexibility of Compute Savings Plans is worth nothing here and costs discount depth.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q3.</strong> An active-active application needs sub-second failover at the network layer when a Region's health checks fail, independent of client-side DNS caching. What should be used?</p>
+          <div class="scenario-options" id="opts-d70q3">
+            <div class="scenario-option">A. Route 53 latency-based routing with health checks</div>
+            <div class="scenario-option">B. AWS Global Accelerator</div>
+            <div class="scenario-option">C. A lower Route 53 TTL on the record</div>
+            <div class="scenario-option">D. CloudFront with origin failover</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d70q3', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d70q3"><strong>Correct answer: B.</strong> Global Accelerator uses static anycast IPs and reroutes at the AWS network edge, avoiding the client-side DNS caching delay that makes Route 53-only failover unreliable. Lowering TTL reduces but does not eliminate that delay, and the scenario explicitly calls out DNS caching as the problem.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q4.</strong> A DynamoDB table using a five-value status field as its partition key throttles under high write volume even though table-level capacity is high. What is the correct fix?</p>
+          <div class="scenario-options" id="opts-d70q4">
+            <div class="scenario-option">A. Switch the table to on-demand capacity mode</div>
+            <div class="scenario-option">B. Redesign the partition key to a high-cardinality composite key</div>
+            <div class="scenario-option">C. Increase the provisioned write capacity units</div>
+            <div class="scenario-option">D. Enable DynamoDB Global Tables</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d70q4', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d70q4"><strong>Correct answer: B.</strong> Each partition has its own throughput ceiling, so a low-cardinality key concentrates writes onto a handful of partitions and throttles regardless of table-level capacity. Adding capacity or changing the capacity mode does not move the hot-partition constraint.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q5.</strong> A global application needs a secondary Region readable with sub-second replication lag and promotable to primary in under a minute during a regional outage. Which database fits?</p>
+          <div class="scenario-options" id="opts-d70q5">
+            <div class="scenario-option">A. RDS Multi-AZ</div>
+            <div class="scenario-option">B. Aurora Global Database</div>
+            <div class="scenario-option">C. RDS with a cross-region read replica</div>
+            <div class="scenario-option">D. ElastiCache for Redis with Global Datastore</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d70q5', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d70q5"><strong>Correct answer: B.</strong> Aurora Global Database replicates at the storage layer with typical sub-second lag and supports managed promotion of the secondary Region in under a minute. Multi-AZ is single-Region failover only, and a cross-region read replica has higher lag and a slower, less managed promotion path.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q6.</strong> A developer has an IAM policy granting s3:*, but an SCP on their OU denies s3:DeleteBucket. What happens when they call DeleteBucket?</p>
+          <div class="scenario-options" id="opts-d70q6">
+            <div class="scenario-option">A. It succeeds because the IAM policy grants the action</div>
+            <div class="scenario-option">B. It is denied — the SCP sets the ceiling and an explicit Deny wins</div>
+            <div class="scenario-option">C. It succeeds only in the management account</div>
+            <div class="scenario-option">D. It depends on the bucket policy</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d70q6', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d70q6"><strong>Correct answer: B.</strong> Effective permission is the intersection of IAM and SCP, and an explicit Deny in either always overrides an Allow. The tempting distractor treats the IAM grant as sufficient, which misreads SCPs as grants rather than ceilings.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q7.</strong> A data center lease expires in six months, forcing a fast migration, but two legacy applications have unresolved software licensing blockers. What is the correct plan?</p>
+          <div class="scenario-options" id="opts-d70q7">
+            <div class="scenario-option">A. Refactor every application to serverless before the deadline</div>
+            <div class="scenario-option">B. Rehost the majority via MGN and Retain the two blocked applications</div>
+            <div class="scenario-option">C. Repurchase all applications as SaaS</div>
+            <div class="scenario-option">D. Retire every application and rebuild from scratch</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d70q7', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d70q7"><strong>Correct answer: B.</strong> Under a tight deadline, Rehost is the fastest path for most of the portfolio, and workloads with genuine blockers should be explicitly Retained rather than forced into a rushed migration. The distractor applies one strategy uniformly across a portfolio with heterogeneous constraints.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q8.</strong> SCT reports a 92% automatic conversion rate for an Oracle-to-PostgreSQL migration. What does this mean for the remaining 8%?</p>
+          <div class="scenario-options" id="opts-d70q8">
+            <div class="scenario-option">A. The migration is essentially complete and can proceed unattended</div>
+            <div class="scenario-option">B. Complex objects such as certain stored procedures need manual developer remediation before cutover</div>
+            <div class="scenario-option">C. SCT failed and DMS cannot be used for this migration</div>
+            <div class="scenario-option">D. 8% of the data will be lost during migration</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d70q8', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d70q8"><strong>Correct answer: B.</strong> SCT's conversion percentage covers schema and code objects only, and a high percentage still commonly leaves complex procedural logic that must be rewritten by hand. The distractor treats a partial conversion rate as a completed migration.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q9.</strong> A company wants every application account to use a common, centrally managed VPC without each account owning its own VPC. What is the mechanism?</p>
+          <div class="scenario-options" id="opts-d70q9">
+            <div class="scenario-option">A. VPC peering between every pair of accounts</div>
+            <div class="scenario-option">B. Share subnets from a central VPC using AWS RAM</div>
+            <div class="scenario-option">C. A single shared VPC with one subnet per team</div>
+            <div class="scenario-option">D. Copy the VPC configuration into every account</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d70q9', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d70q9"><strong>Correct answer: B.</strong> RAM subnet sharing lets many accounts launch resources into subnets owned by a single central VPC, which is exactly the stated requirement. The single-shared-VPC distractor collapses the accounts into one failure domain and one set of VPC-level quotas, which is not what the scenario asks for.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q10.</strong> On-call engineers are fatigued by alarms firing on isolated latency spikes that self-resolve. What reduces noise while still catching real incidents?</p>
+          <div class="scenario-options" id="opts-d70q10">
+            <div class="scenario-option">A. Delete the latency alarm</div>
+            <div class="scenario-option">B. A composite alarm requiring both the latency alarm and the error-rate alarm to be in ALARM</div>
+            <div class="scenario-option">C. Lower the alarm threshold</div>
+            <div class="scenario-option">D. Increase the evaluation period to 24 hours</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d70q10', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d70q10"><strong>Correct answer: B.</strong> Composite alarms require correlated signals before paging, which removes single-metric false positives while preserving sensitivity to genuine multi-symptom incidents. Deleting the alarm removes the signal entirely, and widening the evaluation period delays detection rather than filtering noise.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q11.</strong> A Lambda function reading from Kinesis is overwhelming a downstream RDS database with connections during traffic spikes. What limits this safely?</p>
+          <div class="scenario-options" id="opts-d70q11">
+            <div class="scenario-option">A. Increase the Lambda timeout</div>
+            <div class="scenario-option">B. Set reserved concurrency on the function</div>
+            <div class="scenario-option">C. Increase the Kinesis shard count</div>
+            <div class="scenario-option">D. Switch RDS to Multi-AZ</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d70q11', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d70q11"><strong>Correct answer: B.</strong> Reserved concurrency caps how many instances of the function can run simultaneously, which directly bounds the number of concurrent downstream connections. Raising the timeout does not reduce concurrency, and adding shards increases it.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q12.</strong> A team manually SSHes into servers to apply emergency patches, occasionally causing configuration drift. Which practice addresses this?</p>
+          <div class="scenario-options" id="opts-d70q12">
+            <div class="scenario-option">A. Increase the number of servers so drift affects fewer of them</div>
+            <div class="scenario-option">B. Perform operations as code using SSM Automation documents instead of manual SSH</div>
+            <div class="scenario-option">C. Disable CloudTrail logging to reduce noise</div>
+            <div class="scenario-option">D. Add more IAM users so changes are attributable</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d70q12', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d70q12"><strong>Correct answer: B.</strong> Operations as code codifies the procedure so it runs identically every time, eliminating the ad hoc manual changes that produce drift. The other options either do not address the cause or make the situation worse.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q13.</strong> A company needs ransomware-resilient backups that cannot be deleted even by a compromised admin account. What should be configured?</p>
+          <div class="scenario-options" id="opts-d70q13">
+            <div class="scenario-option">A. Standard EBS snapshots on a frequent schedule</div>
+            <div class="scenario-option">B. AWS Backup with cross-account copy into an isolated account and Vault Lock enabled</div>
+            <div class="scenario-option">C. S3 versioning on the backup bucket</div>
+            <div class="scenario-option">D. Increase snapshot frequency to hourly</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d70q13', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d70q13"><strong>Correct answer: B.</strong> Cross-account isolation prevents a compromised primary account from reaching the backups, and Vault Lock makes the retention policy immutable so even the root user cannot delete locked backups before expiry. Frequency and versioning do not protect against a privileged deletion.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q14.</strong> A critical financial system needs failover control that itself survives an entire Region going down, plus proof the standby Region is actually ready to serve traffic. What should be used?</p>
+          <div class="scenario-options" id="opts-d70q14">
+            <div class="scenario-option">A. Route 53 simple health-check failover</div>
+            <div class="scenario-option">B. Route 53 Application Recovery Controller with readiness checks and a routing control cluster</div>
+            <div class="scenario-option">C. A CloudWatch alarm triggering a Lambda that updates DNS</div>
+            <div class="scenario-option">D. Global Accelerator alone</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d70q14', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d70q14"><strong>Correct answer: B.</strong> ARC's routing control cluster is deliberately distributed so the failover mechanism itself survives a regional outage, and readiness checks continuously validate that the standby Region has the capacity and configuration to take over. A Lambda-driven DNS update depends on the Region that may be down.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q15.</strong> A workload requires near-zero RTO and RPO and budget is not the primary constraint. Which strategy and supporting services fit?</p>
+          <div class="scenario-options" id="opts-d70q15">
+            <div class="scenario-option">A. Backup and Restore with AWS Backup</div>
+            <div class="scenario-option">B. Pilot Light with manual DNS updates</div>
+            <div class="scenario-option">C. Multi-Site Active-Active with Route 53 ARC and DynamoDB Global Tables or Aurora Global Database</div>
+            <div class="scenario-option">D. Warm Standby without health checks</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d70q15', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d70q15"><strong>Correct answer: C.</strong> Near-zero RTO and RPO requires serving live traffic from multiple Regions simultaneously, with deterministic tested failover control and data services that support multi-Region writes or fast promotion. The cheaper patterns on the spectrum cannot meet a near-zero target regardless of budget.</div>
+        </div>
+      </section>
+
+      <section class="doc-section" id="preview">
+        <h2 class="section-heading">Exam Day — The Send-Off</h2>
+        <div class="card card-purple">
+          <p>There is no next lesson. Seventy days of governance, networking, compute, data, resilience, migration, and cost work end here, and the only thing left is to sit the exam. The open question that remains is not a technical one — it is whether the preparation holds up under the specific pressure of a proctored room and a clock. Everything you can control has already been controlled: the weak domains were found and closed, the distractor patterns were named and rehearsed, and the logistics are confirmed.</p>
+          <p>What is left is execution discipline. Read every question stem twice before looking at the options, because the constraint clause that separates the correct answer from the tempting one is almost always in the stem rather than the choices. Answer the straightforward questions quickly, flag the long scenarios, and come back to them with the time you banked. When two options both look defensible, ask which one the scenario's stated constraint actually rules out — that is the question the exam is asking. Trust the preparation, arrive rested, and let the work you have already done carry the day.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="sources">
+        <h2 class="section-heading">Sources</h2>
+        <div class="card">
+          <ul class="source-list">
+            <li><a href="https://aws.amazon.com/certification/certified-solutions-architect-professional/" target="_blank">AWS Certified Solutions Architect – Professional exam guide</a></li>
+            <li><a href="https://docs.aws.amazon.com/wellarchitected/latest/framework/welcome.html" target="_blank">AWS Well-Architected Framework</a></li>
+            <li><a href="https://aws.amazon.com/route53/" target="_blank">Amazon Route 53 — routing policies and Application Recovery Controller</a></li>
+            <li><a href="https://aws.amazon.com/backup/" target="_blank">AWS Backup — Vault Lock and cross-account backup</a></li>
+            <li><a href="https://aws.amazon.com/compute/savings-plans/" target="_blank">AWS Savings Plans — commitment types and flexibility</a></li>
+          </ul>
+        </div>
       </section>
       <div class="day-nav">
         <a href="day-069.html">&larr; Day 69: Full-Length Mock Exam 5 — 75 Questions Timed</a>

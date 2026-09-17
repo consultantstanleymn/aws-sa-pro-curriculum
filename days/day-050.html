@@ -23,6 +23,23 @@
   <aside class="sidebar" id="sidebar">
     <div class="search-box"><input type="text" id="navSearch" class="search-input" placeholder="Search days..." onkeyup="filterNav()"></div>
     <div class="nav-section">
+      <div class="nav-section-title">On This Page</div>
+      <a href="#recap" class="nav-link">Recap: Where We Left Off</a>
+      <a href="#why-on-exam" class="nav-link">1. Why This Is on the Exam</a>
+      <a href="#mechanism" class="nav-link">2. How Each Option Actually Works</a>
+      <a href="#decision-boundary" class="nav-link">3. The Core Decision Boundary</a>
+      <a href="#config-tradeoffs" class="nav-link">4. Configuration Modes and Their Tradeoffs</a>
+      <a href="#sizing-limits" class="nav-link">5. Sizing, Limits and Quotas</a>
+      <a href="#failure-modes" class="nav-link">6. Failure Modes and What They Look Like in Production</a>
+      <a href="#sre-angle" class="nav-link">7. Operational and SRE Angle</a>
+      <a href="#gotchas" class="nav-link">8. Edge Cases and Exam Gotchas</a>
+      <a href="#vs-comparison" class="nav-link">9. This vs. the Services It Gets Confused With</a>
+      <a href="#lab" class="nav-link">Hands-on Lab</a>
+      <a href="#quiz" class="nav-link">Scenario Question Drills</a>
+      <a href="#preview" class="nav-link">Peek into Tomorrow</a>
+      <a href="#sources" class="nav-link">Sources</a>
+    </div>
+    <div class="nav-section">
       <div class="nav-section-title">All Days</div>
       <a href="day-001.html" class="nav-link" data-day="1">Day 1: Multi-Account Architecture &amp; AWS Organizations</a>
       <a href="day-002.html" class="nav-link" data-day="2">Day 2: Service Control Policy (SCP) Mechanics</a>
@@ -104,37 +121,348 @@
         <span class="pill pill-green">Phase 4: Migration, Hybrid &amp; Cost Optimization</span>
       </div>
       <h1 class="hero-title">Hybrid Cloud Compute — Outposts, Local Zones &amp; Wavelength</h1>
-      <div class="reading-meta">&#128337; ~3 min read &middot; 3 services covered</div>
+      <div class="reading-meta">&#128337; ~58 min read &middot; 3 services covered</div>
       <div class="services-grid">
         <span class="service-tag">AWS Outposts</span>
         <span class="service-tag">Local Zones</span>
         <span class="service-tag">Wavelength</span>
       </div>
       <div id="tracker"></div>
-      <section class="doc-section">
-        <h2 class="section-heading">Today's Concept</h2>
+
+      <section class="doc-section" id="recap">
+        <h2 class="section-heading">Recap: Where We Left Off</h2>
         <div class="card card-accent">
-          <p>Outposts extends AWS infrastructure and APIs into your own data center for workloads needing local data residency or ultra-low latency to on-prem systems. Local Zones place AWS compute/storage in specific metro areas for low-latency access without owning hardware. Wavelength embeds AWS compute at telco 5G network edges for ultra-low-latency mobile applications.</p>
-        </div>
-        <h3 class="sub-heading">Hands-on Lab / Practical Action (45 min)</h3>
-        <div class="card">
-          <p>Decide between Outposts, a Local Zone, and Wavelength for a manufacturing plant requiring single-digit-millisecond latency to on-prem industrial control systems.</p>
+          <p>Day 49 established the Snow Family as the offline-transfer answer when the network itself is the bottleneck — Snowcone for small or rugged edge sites, Snowball Edge Storage Optimized at roughly 80TB usable per device, Snowball Edge Compute Optimized with GPU for edge processing, and Snowmobile for exabyte-scale shipping-container transfers, all coordinated through OpsHub. The common thread was that when moving data over the wire is impractical, you move the hardware instead.</p>
+          <p>Today extends that same instinct in a different direction. Snow Family moves data to AWS; Outposts, Local Zones, and Wavelength move AWS compute to where the data and the users already are. The constraint is no longer bandwidth but latency and data residency — a manufacturing plant that needs single-digit-millisecond round trips to its own control systems cannot be served by a Region hundreds of miles away, no matter how much bandwidth you provision. The question shifts from "how do we get the bytes to AWS" to "how much of AWS can we put inside the building, the metro, or the carrier network."</p>
         </div>
       </section>
-      <section class="doc-section">
+
+      <section class="doc-section" id="why-on-exam">
+        <h2 class="section-heading">1. Why This Is on the Exam</h2>
+        <p>SAP-C02 scenarios that mention latency in single-digit milliseconds, data that legally cannot leave a facility, or workloads that must talk to industrial control systems on the factory floor are almost always testing whether you know the boundary between the three hybrid compute options. The exam does not ask you to recite Outposts rack dimensions; it asks you to pick the right extension of AWS for a stated constraint, and to recognize when the correct answer is actually "none of these — use a Region."</p>
+        <p>The trap is that all three services sound like "AWS, but closer." They are not interchangeable. Outposts is customer-owned real estate running AWS-managed hardware under your physical control. Local Zones are AWS-owned infrastructure in a metro area you do not manage. Wavelength is AWS compute embedded inside a telecommunications provider's 5G network, reachable only through that carrier's mobile data path. Each one answers a different question, and the exam will give you a scenario where two of them are plausible and only one is correct.</p>
+        <p>This maps most directly to Domain 1 (Design Solutions for Organizational Complexity) for the residency and governance angles, and to Domain 2 (Design for New Solutions) for the latency-driven architecture choices. It also shows up in Domain 4 cost questions, because Outposts carries a substantial fixed monthly commitment that Local Zones and Wavelength do not.</p>
+      </section>
+
+      <section class="doc-section" id="mechanism">
+        <h2 class="section-heading">2. How Each Option Actually Works</h2>
+        <p>Outposts ships AWS-designed racks or individual servers into your data center. AWS installs and manages the hardware, but you provide the power, cooling, networking, and physical security. The Outpost connects back to its parent Region over a service link — a VPN or, more commonly, a Direct Connect connection — and appears in the AWS console as a distinct resource pool. You launch EC2 instances, EBS volumes, and in some configurations RDS and ECS resources onto it exactly as you would in a Region, but the compute physically sits in your building. The parent Region remains authoritative for control-plane operations: IAM, CloudWatch, and the APIs that manage the Outpost all live there, which means a service link outage does not stop running instances but does stop you from launching new ones.</p>
+        <p>Local Zones are a different animal entirely. AWS builds a small extension of a parent Region in a specific metro area — Los Angeles, Boston, Houston, and dozens of others — and you opt in per account. When you enable a Local Zone, a new set of subnets appears that you can create in your VPC, and resources launched there have single-digit-millisecond latency to users in that metro. You do not own or manage any hardware; you pay for what you use, and the Local Zone is connected to its parent Region over AWS's own low-latency network. The parent Region still owns the control plane, so the same service-link reasoning applies, but the failure domain is AWS's problem rather than yours.</p>
+        <p>Wavelength takes the same idea and pushes it into the carrier network. AWS deploys compute and storage inside a telecommunications provider's data center at the edge of a 5G network, and traffic from mobile devices on that carrier reaches the Wavelength Zone without leaving the carrier's network. That last hop is the entire point: a request from a phone to a Wavelength Zone never traverses the public internet, which is what makes sub-10-millisecond round trips achievable for mobile applications. Wavelength Zones are available only in specific carrier networks and specific metros, and they are reached through carrier gateways rather than standard internet gateways.</p>
+      </section>
+
+      <section class="doc-section" id="decision-boundary">
+        <h2 class="section-heading">3. The Core Decision Boundary</h2>
+        <p>Every scenario question in this space reduces to two questions asked in order. First: does the workload require AWS-managed hardware to be physically located on premises that the customer controls? If yes, the answer is Outposts and nothing else will do. If no, the second question is: is the latency-sensitive client a mobile device on a specific carrier's 5G network, or is it a general population of users in a metro area? Mobile-on-carrier points to Wavelength; general metro users point to Local Zones.</p>
+        <p>The reason this ordering matters is that Outposts is the only option that satisfies data residency requirements in the strict sense. Local Zones and Wavelength are still AWS-operated facilities; if a regulator requires that data never leave the customer's physical premises, neither of them qualifies, regardless of how low the latency is. Conversely, if the requirement is purely latency and the customer has no interest in owning hardware, Outposts is the wrong answer even though it would technically work — it carries a fixed cost and an operational burden that the other two avoid.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Constraint</th><th>Outposts</th><th>Local Zone</th><th>Wavelength</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Hardware location</td><td>Customer data center</td><td>AWS metro facility</td><td>Carrier 5G data center</td></tr>
+              <tr><td>Who owns/operates hardware</td><td>AWS owns, customer hosts</td><td>AWS</td><td>AWS + carrier</td></tr>
+              <tr><td>Data residency on customer premises</td><td>Yes</td><td>No</td><td>No</td></tr>
+              <tr><td>Typical latency target</td><td>Sub-millisecond to on-prem systems</td><td>Single-digit ms to metro users</td><td>Sub-10 ms to mobile devices</td></tr>
+              <tr><td>Billing model</td><td>Fixed monthly + usage</td><td>Usage only</td><td>Usage only</td></tr>
+              <tr><td>Requires customer facilities</td><td>Yes (power, cooling, space)</td><td>No</td><td>No</td></tr>
+              <tr><td>Reachable from public internet</td><td>Via parent Region</td><td>Yes</td><td>Only via carrier network</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="doc-section" id="config-tradeoffs">
+        <h2 class="section-heading">4. Configuration Modes and Their Tradeoffs</h2>
+        <p>Outposts comes in two form factors, and the choice between them is driven by capacity and by whether you need the full rack-level service set. The rack form factor is a standard 42U rack that AWS ships and installs, supporting the widest range of instance types and services including RDS and ECS on Outposts. The server form factor is a single 1U or 2U server intended for smaller sites — retail stores, branch offices, factory floors — where a full rack is impractical. The server form factor supports a narrower set of instance types and does not support all the services the rack does, so a scenario that requires RDS on Outposts is implicitly requiring the rack.</p>
+        <p>Local Zones have essentially one configuration decision: which Local Zones to opt into, and which subnets to extend into them. The tradeoff is not about modes but about placement — you enable a Local Zone in your account, create a subnet in it, and then decide which resources to launch there. The subtlety is that a Local Zone subnet is part of your VPC, so it inherits your VPC's routing and security posture, but it is physically distant from your other subnets. Cross-subnet traffic between a Local Zone and its parent Region traverses AWS's network and incurs latency, so the design question is what belongs in the Local Zone versus what stays in the Region.</p>
+        <p>Wavelength has a similar shape but a harder constraint: resources in a Wavelength Zone are reachable from the carrier network through a carrier gateway, and from your VPC through the parent Region. You cannot reach a Wavelength Zone from the public internet directly. That means the application architecture has to be split — the latency-sensitive portion runs in the Wavelength Zone, and everything else runs in the Region, with the two communicating over the AWS backbone. The tradeoff is that you gain the carrier-network path but you take on a split-architecture design that has to handle the case where the Wavelength Zone is unavailable.</p>
+      </section>
+
+      <section class="doc-section" id="sizing-limits">
+        <h2 class="section-heading">5. Sizing, Limits and Quotas</h2>
+        <p>The numbers that matter here are mostly about what each option can and cannot host, and about the connectivity requirements that gate whether it works at all. Outposts requires a reliable, low-latency connection back to the parent Region — AWS documents a service link latency requirement in the low single-digit milliseconds, and a Direct Connect connection is the recommended path. If the service link is down, existing instances keep running but you cannot launch, terminate, or modify resources, and control-plane operations fail.</p>
+        <p>Local Zones are available in a specific and growing list of metros, and each one is tied to a parent Region. Not every instance type is available in every Local Zone, and the available capacity is smaller than a full Region, so a scenario that assumes you can launch a large fleet in a Local Zone is usually wrong. Wavelength Zones are even more constrained: they exist only where a participating carrier has deployed them, and the instance types available are a subset oriented toward the mobile edge use case.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Dimension</th><th>Outposts</th><th>Local Zone</th><th>Wavelength</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Form factors</td><td>Rack (42U) or server (1U/2U)</td><td>N/A (AWS-managed)</td><td>N/A (carrier-managed)</td></tr>
+              <tr><td>Service coverage</td><td>Broadest on rack; narrower on server</td><td>Subset of Region services</td><td>Narrowest, mobile-edge focused</td></tr>
+              <tr><td>Parent Region dependency</td><td>Required for control plane</td><td>Required for control plane</td><td>Required for control plane</td></tr>
+              <tr><td>Connectivity requirement</td><td>Service link, low single-digit ms</td><td>AWS backbone to parent Region</td><td>Carrier network + AWS backbone</td></tr>
+              <tr><td>Availability footprint</td><td>Wherever customer has facilities</td><td>Specific metros</td><td>Specific carrier metros</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The practical sizing rule is that Outposts capacity is fixed by the hardware you order and cannot burst beyond it, while Local Zones and Wavelength Zones draw on AWS-managed capacity that you do not provision. That difference shows up in capacity-planning scenarios: an Outposts deployment needs a capacity headroom decision up front, whereas a Local Zone deployment can scale within whatever AWS has made available in that metro.</p>
+      </section>
+
+      <section class="doc-section" id="failure-modes">
+        <h2 class="section-heading">6. Failure Modes and What They Look Like in Production</h2>
+        <p>The signature Outposts failure is the service link going down. The symptom is peculiar: your instances keep serving traffic, your application looks healthy, but every API call that tries to launch, stop, or modify a resource fails, and CloudWatch metrics from the Outpost stop arriving in the Region. The first diagnostic move is to check the service link status in the Outposts console and verify the underlying Direct Connect or VPN connection, not to start debugging the application. Teams that have never seen this before waste time looking at the workload when the control plane is the problem.</p>
+        <p>A second Outposts failure mode is physical: power, cooling, or network failure in the customer's own data center. AWS manages the hardware but not the facility, so a UPS failure or a cooling outage takes the Outpost down in a way that no AWS-side remediation can fix. This is the operational cost of hosting AWS hardware yourself, and it is why Outposts deployments need the same facility redundancy planning as any on-premises rack.</p>
+        <p>Local Zones fail in a way that looks like a normal Regional degradation, because that is essentially what it is. If the Local Zone loses connectivity to its parent Region, resources in the Local Zone may continue running but control-plane operations fail, and any application that depends on Regional services — a database in the Region, an S3 bucket, an IAM call — will see elevated latency or errors. Wavelength failures are similar but compounded by the carrier dependency: if the carrier network has an issue, mobile clients cannot reach the Wavelength Zone at all, even if the AWS-side infrastructure is healthy. The diagnostic move in both cases is to determine whether the failure is in the AWS control plane, the network path, or the carrier, because the remediation differs entirely.</p>
+      </section>
+
+      <section class="doc-section" id="sre-angle">
+        <h2 class="section-heading">7. Operational and SRE Angle</h2>
+        <p>Monitoring hybrid compute requires watching two planes at once. The data plane — the instances and their application metrics — behaves like any other EC2 workload and can be monitored with the standard CloudWatch agent and alarms. The control plane is the part that is easy to forget: the service link status, the connectivity to the parent Region, and the health of the Outpost itself are all separate signals that need their own alarms. A useful pattern is to alarm on the absence of metrics from the Outpost, because a silent Outpost is more likely to indicate a link failure than a healthy idle one.</p>
+        <p>For Local Zones and Wavelength, the SRE concern is latency SLOs rather than hardware health. If the entire reason you deployed to a Local Zone is to hit a single-digit-millisecond latency target for metro users, then that target is your SLO and it needs to be measured from the user's perspective, not from inside the VPC. CloudWatch Synthetics canaries running from the metro, or client-side real user monitoring, are the right instruments. A canary that runs from the parent Region will happily report healthy latency while users in the metro experience something entirely different.</p>
+        <p>The runbook shape for all three is similar: first determine whether the failure is in the control plane, the data plane, or the network path; then determine whether the remediation is an AWS-side action or a customer-side one. For Outposts, the customer-side actions — power, cooling, physical network — are the ones that most often require a human on site, which means the runbook needs an escalation path to whoever has physical access to the facility. That is a genuinely different operational model from a pure-Region workload, and it is worth writing down explicitly rather than assuming the on-call engineer will figure it out at 3 a.m.</p>
+      </section>
+
+      <section class="doc-section" id="gotchas">
+        <h2 class="section-heading">8. Edge Cases and Exam Gotchas</h2>
+        <p>The most common exam trap is treating Outposts as a latency solution when the scenario is really about data residency, or vice versa. Read the scenario carefully: if it says the data must remain on the customer's premises, that is residency and the answer is Outposts. If it says users in a specific city need low latency and there is no residency requirement, that is Local Zones. If it says mobile users on a specific carrier need sub-10-millisecond latency, that is Wavelength.</p>
+        <p>A second gotcha is the assumption that Outposts removes the need for a parent Region. It does not. The control plane, IAM, CloudWatch, and most AWS services still live in the Region, and the Outpost is an extension of it, not a replacement. Scenarios that describe a fully disconnected Outpost are describing something Outposts does not do — running instances survive a link outage, but the Outpost is not an autonomous Region.</p>
+        <p>A third gotcha is cost. Outposts carries a fixed monthly commitment for the hardware plus a service link charge, which makes it expensive for small workloads even when it is technically the right fit. Local Zones and Wavelength are usage-based. A cost-optimization scenario that proposes Outposts for a small latency-sensitive workload is usually wrong; the correct answer is more likely a Local Zone or a Region with CloudFront in front of it.</p>
+        <p>Finally, remember that Wavelength is not reachable from the public internet. Any scenario that describes a Wavelength Zone serving general web traffic is describing something that cannot work — Wavelength is for mobile clients on the carrier's network, reached through a carrier gateway.</p>
+      </section>
+
+      <section class="doc-section" id="vs-comparison">
+        <h2 class="section-heading">9. This vs. the Services It Gets Confused With</h2>
+        <p>The services most often confused with this cluster are CloudFront, Global Accelerator, and the Snow Family. CloudFront and Global Accelerator both reduce latency, but they do it by moving content or traffic closer to users over the existing internet, not by moving compute. If the requirement is to run code close to the user, CloudFront Functions and Lambda@Edge cover some cases, but they are constrained in runtime and cannot host arbitrary workloads. The Snow Family moves data, not compute, and is the right answer when the problem is bandwidth rather than latency.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Service</th><th>What it moves</th><th>Pick it when…</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>AWS Outposts</td><td>AWS compute into your facility</td><td>Data residency or sub-ms latency to on-prem systems is required</td></tr>
+              <tr><td>Local Zones</td><td>AWS compute into a metro</td><td>Metro users need single-digit-ms latency and you don't want to own hardware</td></tr>
+              <tr><td>Wavelength</td><td>AWS compute into a carrier 5G edge</td><td>Mobile clients on a specific carrier need sub-10-ms latency</td></tr>
+              <tr><td>CloudFront</td><td>Cached content closer to users</td><td>The workload is cacheable HTTP content, not arbitrary compute</td></tr>
+              <tr><td>Global Accelerator</td><td>Traffic onto the AWS backbone</td><td>You need faster, more reliable routing to existing Regional endpoints</td></tr>
+              <tr><td>Snow Family</td><td>Data into AWS</td><td>The network is the bottleneck for a bulk data transfer</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The decision rule that resolves most scenarios: if the constraint is where the data must physically live, choose Outposts. If the constraint is how fast a metro user gets a response and you do not want to own hardware, choose Local Zones. If the constraint is a mobile device on a carrier network, choose Wavelength. If the constraint is bandwidth for a one-time data move, choose the Snow Family. And if the constraint is simply "make the website faster for global users," the answer is almost always CloudFront or Global Accelerator, not any of the hybrid compute options.</p>
+      </section>
+
+      <section class="doc-section" id="lab">
+        <h2 class="section-heading">Hands-on Lab: Choosing Hybrid Compute for a Manufacturing Plant</h2>
+        <div class="card card-green">
+          <p><strong>Scenario.</strong> A manufacturing company runs a plant with industrial control systems (PLCs and SCADA) on the factory floor. The plant has a small server room with power and cooling, a 1 Gbps fiber connection to the corporate WAN, and a Direct Connect connection to AWS. The company wants to run a machine-vision quality-inspection workload that reads camera feeds from the line and must respond within single-digit milliseconds to stop a defective part. They also want a dashboard for plant managers in the same city, and a mobile app for field technicians on a national carrier's 5G network. Budget is a stated concern, and the company has no appetite for managing servers.</p>
+          <p><strong>Step 1 — Separate the three latency domains.</strong> Write down the three distinct client populations: the control systems on the factory floor, the plant managers in the metro, and the field technicians on mobile. Each has a different latency target and a different physical location, and each will likely map to a different AWS extension. Do not try to solve all three with one service.</p>
+          <p><strong>Step 2 — Evaluate the control-system workload against Outposts.</strong> The machine-vision workload must respond to the PLC within single-digit milliseconds, and the camera feeds are large. Measure the round trip from the plant server room to the nearest Region and confirm it exceeds the target. Then confirm the plant has the power, cooling, and rack space for an Outposts server form factor, and that the Direct Connect service link meets the latency requirement. Document the fixed monthly cost and compare it against the cost of the defect rate the workload is meant to reduce.</p>
+          <p><strong>Step 3 — Evaluate the manager dashboard against a Local Zone.</strong> The dashboard is a web application serving users in one metro. Check whether a Local Zone exists in that metro and whether the required instance types are available. If so, deploy the dashboard there and measure latency from a client in the metro. If no Local Zone exists, the fallback is a Region with CloudFront in front of it — document that as the alternative and note the latency difference.</p>
+          <p><strong>Step 4 — Evaluate the mobile app against Wavelength.</strong> Confirm the carrier the field technicians use participates in Wavelength and has a zone in the relevant metro. If so, deploy the latency-sensitive portion of the mobile backend there and keep the rest in the Region. If the carrier does not participate, the answer is a Region with Global Accelerator, and the sub-10-millisecond target is not achievable — document that as an accepted tradeoff.</p>
+          <p><strong>Step 5 — Design the failure handling.</strong> For each of the three deployments, write down what happens when the connection to the parent Region fails. For Outposts, instances keep running but control-plane operations fail. For the Local Zone and Wavelength Zone, determine which application components depend on Regional services and will degrade. Define the alarm for each and the first diagnostic step.</p>
+          <p><strong>Step 6 — Produce the recommendation.</strong> Write a one-page decision memo with a table of the three workloads, the chosen AWS extension, the latency target, the monthly cost, and the failure-handling plan. Justify each choice against the constraint that drove it, and explicitly note where a requirement could not be met and what the fallback is.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="quiz">
         <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
-        
+
       <div class="scenario-card">
         <p class="scenario-question"><strong>Q1.</strong> A hospital must keep patient data physically on-premises for regulatory reasons while still using native AWS APIs (EC2, EBS, RDS on Outposts) for its applications.</p>
-        <div class="scenario-options" id="opts-d50q0">
+        <div class="scenario-options" id="opts-d50q1">
             <div class="scenario-option">A. AWS Local Zones</div>
             <div class="scenario-option">B. AWS Wavelength</div>
             <div class="scenario-option">C. AWS Outposts</div>
             <div class="scenario-option">D. Standard AWS Region with encryption</div>
         </div>
-        <button class="scenario-reveal-btn" onclick="revealAnswer('d50q0', 2)">Reveal Answer</button>
-        <div class="scenario-explanation" id="exp-d50q0"><strong>Correct answer: C.</strong> Outposts physically places AWS-managed infrastructure inside the customer's own data center, satisfying strict data-residency requirements while retaining native AWS service APIs.</div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d50q1', 2)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d50q1"><strong>Correct answer: C.</strong> Outposts physically places AWS-managed infrastructure inside the customer's own data center, satisfying strict data-residency requirements while retaining native AWS service APIs.</div>
       </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q2.</strong> A media company wants to serve a video-editing application to users in a single metro area with single-digit-millisecond latency, but has no interest in owning or operating any hardware.</p>
+        <div class="scenario-options" id="opts-d50q2">
+            <div class="scenario-option">A. AWS Outposts rack in a colocation facility</div>
+            <div class="scenario-option">B. An AWS Local Zone in that metro</div>
+            <div class="scenario-option">C. AWS Wavelength</div>
+            <div class="scenario-option">D. A second AWS Region</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d50q2', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d50q2"><strong>Correct answer: B.</strong> Local Zones place AWS-managed compute in a specific metro with no customer hardware ownership, which matches both the latency target and the no-hardware constraint.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q3.</strong> A gaming company wants sub-10-millisecond latency for players on a specific carrier's 5G network, and the game traffic must not traverse the public internet.</p>
+        <div class="scenario-options" id="opts-d50q3">
+            <div class="scenario-option">A. AWS Local Zones</div>
+            <div class="scenario-option">B. AWS Outposts</div>
+            <div class="scenario-option">C. AWS Wavelength</div>
+            <div class="scenario-option">D. CloudFront with Lambda@Edge</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d50q3', 2)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d50q3"><strong>Correct answer: C.</strong> Wavelength embeds AWS compute inside the carrier's 5G network so mobile traffic reaches it without leaving the carrier network, which is the only option that satisfies both the latency and the no-public-internet requirement.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q4.</strong> An Outposts deployment's instances are still serving traffic, but the operations team cannot launch new instances or modify existing ones, and CloudWatch metrics from the Outpost have stopped arriving.</p>
+        <div class="scenario-options" id="opts-d50q4">
+            <div class="scenario-option">A. The instances have crashed and need to be restarted</div>
+            <div class="scenario-option">B. The service link between the Outpost and its parent Region is down</div>
+            <div class="scenario-option">C. The IAM role attached to the instances has expired</div>
+            <div class="scenario-option">D. The Outpost has been decommissioned by AWS</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d50q4', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d50q4"><strong>Correct answer: B.</strong> Running instances survive a service link outage, but control-plane operations and metric delivery depend on the link to the parent Region — this is the signature Outposts failure mode.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q5.</strong> A retail chain wants to run a small point-of-sale application in each of 200 stores, each with limited rack space and no dedicated server room.</p>
+        <div class="scenario-options" id="opts-d50q5">
+            <div class="scenario-option">A. An Outposts rack in each store</div>
+            <div class="scenario-option">B. An Outposts server form factor in each store</div>
+            <div class="scenario-option">C. A Local Zone per store</div>
+            <div class="scenario-option">D. A Wavelength Zone per store</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d50q5', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d50q5"><strong>Correct answer: B.</strong> The Outposts server form factor is designed for space-constrained sites like retail stores, whereas a full rack is impractical and Local Zones and Wavelength are not per-store options.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q6.</strong> A team wants to reduce latency for users in a metro area but the workload is a cacheable HTTP website with no dynamic compute requirement.</p>
+        <div class="scenario-options" id="opts-d50q6">
+            <div class="scenario-option">A. Deploy to a Local Zone</div>
+            <div class="scenario-option">B. Deploy to AWS Outposts</div>
+            <div class="scenario-option">C. Use CloudFront to cache content at edge locations</div>
+            <div class="scenario-option">D. Deploy to a Wavelength Zone</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d50q6', 2)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d50q6"><strong>Correct answer: C.</strong> CloudFront is the right tool for cacheable HTTP content; hybrid compute options are for workloads that need to run code close to users, not for serving static or cacheable content.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q7.</strong> A company is deploying an Outposts rack and asks what happens to the workload if the connection to the parent Region is severed for several hours.</p>
+        <div class="scenario-options" id="opts-d50q7">
+            <div class="scenario-option">A. All instances are terminated immediately</div>
+            <div class="scenario-option">B. Running instances continue to serve traffic, but control-plane operations fail until the link is restored</div>
+            <div class="scenario-option">C. The Outpost automatically becomes an independent Region</div>
+            <div class="scenario-option">D. The Outpost fails over to a Local Zone</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d50q7', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d50q7"><strong>Correct answer: B.</strong> Outposts is an extension of its parent Region, not an autonomous Region — running instances survive a link outage, but the control plane does not.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q8.</strong> A financial services firm needs to run a latency-sensitive trading application that must communicate with an on-premises market data feed with sub-millisecond latency, and the data cannot leave the firm's data center.</p>
+        <div class="scenario-options" id="opts-d50q8">
+            <div class="scenario-option">A. AWS Local Zones</div>
+            <div class="scenario-option">B. AWS Wavelength</div>
+            <div class="scenario-option">C. AWS Outposts</div>
+            <div class="scenario-option">D. AWS Global Accelerator</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d50q8', 2)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d50q8"><strong>Correct answer: C.</strong> Only Outposts places AWS-managed compute inside the customer's own data center, satisfying both the sub-millisecond on-prem latency requirement and the data residency constraint.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q9.</strong> A team is designing a Wavelength deployment and asks how clients reach the application running in the Wavelength Zone.</p>
+        <div class="scenario-options" id="opts-d50q9">
+            <div class="scenario-option">A. Through the public internet via an internet gateway</div>
+            <div class="scenario-option">B. Through a carrier gateway from the carrier's mobile network</div>
+            <div class="scenario-option">C. Through a VPC peering connection from the parent Region only</div>
+            <div class="scenario-option">D. Through a Direct Connect connection</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d50q9', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d50q9"><strong>Correct answer: B.</strong> Wavelength Zones are reached through a carrier gateway from the carrier's network; they are not directly reachable from the public internet.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q10.</strong> A company wants to run RDS on Outposts for a workload that must stay on-premises, but is considering the server form factor to save space.</p>
+        <div class="scenario-options" id="opts-d50q10">
+            <div class="scenario-option">A. The server form factor supports RDS on Outposts</div>
+            <div class="scenario-option">B. RDS on Outposts requires the rack form factor</div>
+            <div class="scenario-option">C. RDS on Outposts is not supported at all</div>
+            <div class="scenario-option">D. RDS on Outposts requires a Local Zone</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d50q10', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d50q10"><strong>Correct answer: B.</strong> The server form factor supports a narrower service set than the rack; RDS on Outposts requires the rack form factor.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q11.</strong> An application runs in a Local Zone and depends on an RDS database in the parent Region. Users in the metro report that the application feels slow despite the Local Zone deployment.</p>
+        <div class="scenario-options" id="opts-d50q11">
+            <div class="scenario-option">A. The Local Zone is misconfigured</div>
+            <div class="scenario-option">B. Every database call crosses from the Local Zone to the parent Region, adding latency to each request</div>
+            <div class="scenario-option">C. Local Zones do not support VPC subnets</div>
+            <div class="scenario-option">D. The application needs a Wavelength Zone instead</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d50q11', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d50q11"><strong>Correct answer: B.</strong> A Local Zone reduces latency to the user, but any dependency that lives in the parent Region still incurs cross-region latency on every call — the design has to account for what stays in the Region.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q12.</strong> A company is comparing Outposts and Local Zones for a workload that needs low latency for users in a specific city, and the company has no data residency requirement and wants to minimize fixed costs.</p>
+        <div class="scenario-options" id="opts-d50q12">
+            <div class="scenario-option">A. Outposts, because it offers the lowest latency</div>
+            <div class="scenario-option">B. Local Zones, because they are usage-based and require no customer hardware</div>
+            <div class="scenario-option">C. Wavelength, because it is the newest option</div>
+            <div class="scenario-option">D. A second Region, because it is the most resilient</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d50q12', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d50q12"><strong>Correct answer: B.</strong> With no residency requirement and a cost constraint, Local Zones are the right fit — Outposts carries a fixed monthly commitment and requires customer facilities.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q13.</strong> A team wants to monitor whether a Local Zone deployment is meeting its latency SLO for metro users.</p>
+        <div class="scenario-options" id="opts-d50q13">
+            <div class="scenario-option">A. Monitor CloudWatch metrics from the instances in the Local Zone</div>
+            <div class="scenario-option">B. Run CloudWatch Synthetics canaries from the metro to measure user-perceived latency</div>
+            <div class="scenario-option">C. Monitor the parent Region's health dashboard</div>
+            <div class="scenario-option">D. Use VPC Flow Logs to measure latency</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d50q13', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d50q13"><strong>Correct answer: B.</strong> Instance-level metrics do not measure user-perceived latency; canaries running from the metro measure the actual SLO from the user's perspective.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q14.</strong> A company is deploying Outposts and asks what connectivity is recommended between the Outpost and its parent Region.</p>
+        <div class="scenario-options" id="opts-d50q14">
+            <div class="scenario-option">A. A public internet connection is sufficient</div>
+            <div class="scenario-option">B. A Direct Connect connection is recommended to meet the service link latency requirement</div>
+            <div class="scenario-option">C. No connection is needed; the Outpost operates independently</div>
+            <div class="scenario-option">D. A VPC peering connection to the parent Region</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d50q14', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d50q14"><strong>Correct answer: B.</strong> The service link requires low single-digit-millisecond latency to the parent Region, and Direct Connect is the recommended path to achieve it reliably.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q15.</strong> A scenario describes a workload that must run on AWS-managed hardware inside the customer's own data center, and the customer wants to use the same EC2 APIs and IAM policies they use in a Region.</p>
+        <div class="scenario-options" id="opts-d50q15">
+            <div class="scenario-option">A. AWS Local Zones</div>
+            <div class="scenario-option">B. AWS Wavelength</div>
+            <div class="scenario-option">C. AWS Outposts</div>
+            <div class="scenario-option">D. AWS Snowball Edge</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d50q15', 2)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d50q15"><strong>Correct answer: C.</strong> Outposts is the only option that places AWS-managed hardware in the customer's own facility while preserving native AWS APIs and IAM.</div>
+      </div>
+      </section>
+
+      <section class="doc-section" id="preview">
+        <h2 class="section-heading">Peek into Tomorrow</h2>
+        <div class="card card-purple">
+          <p>Everything in this day assumed that the workload being placed at the edge is either cloud-native or can be rehosted onto EC2. That assumption breaks for the large population of enterprises whose applications are virtualized on VMware and whose operational tooling, backup software, and team skills are all built around vSphere. For those workloads, the question is not "which AWS extension do we deploy to" but "can we move the VM to AWS without converting it out of the VMware format at all."</p>
+          <p>That is the Relocate strategy, and it raises a genuine tension with everything we have covered in this phase. Rehosting via MGN lands the workload on native EC2, which means it can use every AWS service and every hybrid compute option we just discussed. Relocating to VMware Cloud on AWS preserves the hypervisor layer and the existing VMware tooling, but it also preserves the operational model — which is exactly the point for teams that are not ready to refactor. The open question is when preserving the hypervisor is the right call versus when it is technical debt deferred, and how HCX actually performs the migration without a conversion step.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="sources">
+        <h2 class="section-heading">Sources</h2>
+        <div class="card">
+          <ul class="source-list">
+            <li><a href="https://docs.aws.amazon.com/outposts/latest/userguide/what-is-outposts.html" target="_blank">AWS Outposts User Guide — What Is AWS Outposts?</a></li>
+            <li><a href="https://docs.aws.amazon.com/outposts/latest/userguide/outposts-rack.html" target="_blank">AWS Outposts User Guide — Rack and Server Form Factors</a></li>
+            <li><a href="https://docs.aws.amazon.com/local-zones/latest/ug/what-is-aws-local-zones.html" target="_blank">AWS Local Zones User Guide — What Are AWS Local Zones?</a></li>
+            <li><a href="https://docs.aws.amazon.com/wavelength/latest/developerguide/what-is-wavelength.html" target="_blank">AWS Wavelength Developer Guide — What Is AWS Wavelength?</a></li>
+            <li><a href="https://docs.aws.amazon.com/whitepapers/latest/aws-fault-isolation-boundaries/outposts.html" target="_blank">AWS Whitepaper — Fault Isolation Boundaries: Outposts</a></li>
+            <li><a href="https://aws.amazon.com/outposts/pricing/" target="_blank">AWS Outposts Pricing</a></li>
+            <li><a href="https://aws.amazon.com/local-zones/" target="_blank">AWS Local Zones Product Page</a></li>
+            <li><a href="https://aws.amazon.com/wavelength/" target="_blank">AWS Wavelength Product Page</a></li>
+          </ul>
+        </div>
       </section>
       <div class="day-nav">
         <a href="day-049.html">&larr; Day 49: AWS Snow Family — Snowball Edge, Snowcone &amp; Snowmobile</a>

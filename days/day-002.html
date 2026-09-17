@@ -104,37 +104,352 @@
         <span class="pill pill-green">Phase 1: Multi-Account Governance &amp; Networking</span>
       </div>
       <h1 class="hero-title">Service Control Policy (SCP) Mechanics</h1>
-      <div class="reading-meta">&#128337; ~3 min read &middot; 2 services covered</div>
+      <div class="reading-meta">&#128337; ~58 min read &middot; 2 services covered</div>
       <div class="services-grid">
         <span class="service-tag">SCP</span>
         <span class="service-tag">IAM</span>
       </div>
       <div id="tracker"></div>
-      <section class="doc-section">
-        <h2 class="section-heading">Today's Concept</h2>
+
+      <section class="doc-section" id="recap">
+        <h2 class="section-heading">Recap: From Account Structure to Account Limits</h2>
         <div class="card card-accent">
-          <p>SCPs are org-wide permission guardrails: they set the maximum available permissions for accounts in an OU but never grant access by themselves — an IAM identity still needs an allow. The default FullAWSAccess SCP allows everything until you attach explicit Deny statements. Region-restriction SCPs must exempt global services (IAM, Route 53, CloudFront, Support) or you will break account operations.</p>
-        </div>
-        <h3 class="sub-heading">Hands-on Lab / Practical Action (45 min)</h3>
-        <div class="card">
-          <p>Write and validate a region-restriction SCP that denies all actions outside two approved regions while exempting IAM, Route 53, CloudFront, and Support.</p>
+          <p>Day 1 established the 70-day structure of this curriculum and, more importantly, the multi-account governance premise that Phase 1 opens with: an AWS Organization is a hierarchy of accounts grouped into Organizational Units, and the management account exists to hold billing and org-wide policy rather than workloads. That structure is only half of a governance model. A hierarchy tells you where an account sits; it does not tell you what that account is allowed to do. Today extends the Day 1 material directly by supplying the enforcement layer that makes the hierarchy meaningful.</p>
+          <p>This is the pattern the whole curriculum follows: each day layers one governance or architecture concept onto the last, and the recap and preview sections are the connective tissue that keeps the arc coherent rather than a pile of disconnected service notes. The OU tree you drew on Day 1 is inert until something constrains the accounts inside it. Service Control Policies are that constraint, and they are the first place where the difference between "an account exists" and "an account is governed" becomes concrete.</p>
         </div>
       </section>
-      <section class="doc-section">
-        <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
-        
-      <div class="scenario-card">
-        <p class="scenario-question"><strong>Q1.</strong> A developer has an IAM policy granting s3:*, but an SCP on their OU denies s3:DeleteBucket. What happens if they call DeleteBucket?</p>
-        <div class="scenario-options" id="opts-d2q0">
+
+      <section class="doc-section" id="why-on-exam">
+        <h2 class="section-heading">1. Why SCPs Are on the Exam</h2>
+        <p>Every SAP-C02 candidate eventually hits a question that looks like a permissions question but is actually a governance question. The tell is usually a phrase like "must not be able to, even if an administrator in that account tries" or "centrally enforced across all accounts" or "the security team must retain control regardless of what the workload team configures." Those phrases are not describing IAM. IAM is account-local and, by design, the account's own administrators can rewrite it. What the question is describing is a control that lives above the account and that the account cannot escape. That control is the Service Control Policy.</p>
+        <p>The architectural problem SCPs solve is the delegated-administration problem. Once you split a company into dozens or hundreds of accounts — which Day 1 argued is the correct default — you have created dozens or hundreds of independent permission domains. Each account's root user and each account's IAM administrators can, absent any external constraint, grant themselves anything. A central platform team that wants to guarantee "no production account can ever create an unencrypted S3 bucket" or "no account outside the approved regions can launch compute" has no IAM-based mechanism to make that guarantee, because IAM policies are owned by the account being constrained. SCPs invert the ownership: the policy is attached to the OU or account from the organization's management account, and the account cannot detach it.</p>
+        <p>This maps most directly to SAP-C02 Domain 1, Design Solutions for Organizational Complexity, which covers multi-account strategy, governance, and the security controls that span accounts. It also shows up indirectly in Domain 2 and Domain 4 scenarios, because a well-designed landing zone uses SCPs to enforce cost and resilience boundaries — for example, denying the creation of resources in unapproved regions, which is simultaneously a data-residency control, a cost control, and a blast-radius control. The exam treats SCPs as the canonical answer to "centrally enforce a boundary that account-level administrators cannot override," and it tests the mechanics precisely enough that a vague mental model will lose points.</p>
+      </section>
+
+      <section class="doc-section" id="mechanism">
+        <h2 class="section-heading">2. How SCP Evaluation Actually Works</h2>
+        <p>An SCP is a JSON policy document, structurally similar to an IAM policy, that is attached to one of three things: the organization root, an Organizational Unit, or an individual account. It contains statements with Effect, Action, and Resource elements, and it supports conditions. What makes it different from an IAM policy is not its syntax but its role in the evaluation. An SCP never grants permissions. It only filters them. The AWS documentation is explicit that SCPs by themselves do not grant access to any resource; they define the maximum permissions available to the accounts they apply to, and an identity within the account still needs an IAM policy (or a resource policy, or a session policy) that allows the action.</p>
+        <p>The evaluation model is an intersection. When a principal in an account makes an API call, AWS evaluates the request against the SCPs that apply to that account — the SCPs attached to the account itself, plus every SCP attached to each OU above it in the hierarchy, plus any SCP attached to the root. The effective permission set is the intersection of all of those, and then intersected again with the identity-based and resource-based policies that apply to the principal. An action is allowed only if it is allowed by the identity side and not denied by any SCP in the chain. An explicit Deny anywhere in that chain wins over any Allow, exactly as it does in IAM. This is why the mental model that survives contact with exam questions is "SCPs are a ceiling, not a floor."</p>
+        <p>Two structural details matter for reasoning about real deployments. First, SCPs are inherited downward. An SCP attached to an OU applies to every account in that OU and to every OU nested beneath it, which means a single Deny at the root propagates to the entire organization and cannot be relaxed by anything lower in the tree. Second, the management account is exempt. SCPs do not apply to the management account of the organization, which is the mechanical reason Day 1 insisted that the management account hold no workloads: it is the one account in the organization that no SCP can constrain, so anything running there is outside your governance boundary. The same exemption applies to the service-linked roles that AWS Organizations itself uses, and to a small set of operations that must remain available for the organization to function.</p>
+        <p>There is also a default that trips people up in practice. Every organization is created with an SCP named FullAWSAccess attached to the root, and it allows all actions on all resources. It is not a special policy; it is an ordinary SCP whose statement is a wildcard Allow. Its purpose is to make the organization functional out of the box, because without at least one Allow in the chain, the intersection would be empty and every account would be locked out. When you attach a restrictive SCP, you are not replacing FullAWSAccess — you are adding a second policy to the chain, and the intersection of the two is what applies. This is why the standard pattern is to leave FullAWSAccess attached and layer Deny-based policies on top of it, rather than trying to write a single Allow-list policy that enumerates everything an account is permitted to do.</p>
+      </section>
+
+      <section class="doc-section" id="decision-boundary">
+        <h2 class="section-heading">3. The Core Decision Boundary: Allow-List vs. Deny-List</h2>
+        <p>The single fork that most SCP scenario questions hinge on is whether the policy should be written as an allow-list or a deny-list, and the answer is almost always deny-list. An allow-list SCP replaces the wildcard Allow with an explicit enumeration of permitted actions, which means the effective permission set for every account under it is the intersection of that enumeration with whatever IAM grants. The consequence is that any action not named in the allow-list is denied for every principal in every account beneath it, including actions that AWS services themselves need to perform on your behalf. Allow-list SCPs are brittle in a way that is hard to appreciate until you deploy one: a new service feature, a new API call from a managed service, or a new operational tool all silently break, and the failure surfaces as an opaque AccessDenied in a service you were not thinking about.</p>
+        <p>Deny-list SCPs take the opposite approach. They leave FullAWSAccess in place and add statements that deny specific actions, typically scoped by condition. The effective permission set is "everything IAM allows, minus the denied set." This is far more robust because the default is permissive and the exceptions are explicit, so the blast radius of a mistake is limited to the actions you actually named. The tradeoff is that a deny-list cannot express "only these regions" as cleanly as an allow-list can — you have to deny everything that is not in the approved set, which is done with a condition rather than an enumeration. That pattern is the subject of the next section.</p>
+        <p>The decision boundary, stated as a rule: use deny-list SCPs for guardrails that constrain a small, well-understood set of actions or that enforce a condition across all actions; use allow-list SCPs only when you genuinely need to restrict an account to a tiny, stable set of services and you are prepared to maintain that list as AWS evolves. In exam scenarios, the phrase "must not be able to" points at a deny-list, and the phrase "must only be able to" points at an allow-list — but the second phrasing is rare, and when it appears it is usually a trap, because the more operationally sound answer is a deny-list that achieves the same outcome with less fragility.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Dimension</th><th>Allow-list SCP</th><th>Deny-list SCP</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Default posture</td><td>Everything denied unless named</td><td>Everything allowed unless denied</td></tr>
+              <tr><td>Interaction with FullAWSAccess</td><td>Typically replaces it or is intersected with it</td><td>Left in place; Deny statements layered on top</td></tr>
+              <tr><td>Failure mode</td><td>New services and features break silently</td><td>Only the explicitly denied actions break</td></tr>
+              <tr><td>Maintenance burden</td><td>High — must track AWS service surface</td><td>Low — only the guardrail set changes</td></tr>
+              <tr><td>Best fit</td><td>Locked-down sandbox or single-purpose account</td><td>Org-wide guardrails, region restriction, service blocks</td></tr>
+              <tr><td>Exam signal</td><td>"must only be able to use X"</td><td>"must not be able to do X, even if an admin tries"</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="doc-section" id="config-tradeoffs">
+        <h2 class="section-heading">4. Configuration Modes and Their Tradeoffs</h2>
+        <p>Once you have chosen deny-list as the posture, the next set of knobs determines what the policy actually constrains and what it costs you operationally. The most common guardrail is region restriction, and it is worth understanding why it is written the way it is rather than copying a snippet. A region-restriction SCP denies all actions whose requested region is not in an approved list, using the aws:RequestedRegion condition key. The naive version of this policy denies everything outside the approved regions, which immediately breaks the account, because a large set of AWS operations are global rather than regional and do not carry a meaningful aws:RequestedRegion value — or carry one that is not in your approved list. IAM, Route 53, CloudFront, and Support are the canonical examples, and the standard fix is a NotAction or a condition that exempts them.</p>
+        <p>The second knob is scope: root, OU, or account. Attaching at the root gives you the strongest guarantee and the widest blast radius, and it is appropriate for guardrails that genuinely apply everywhere, such as a region restriction or a prohibition on disabling CloudTrail. Attaching at an OU lets you differentiate — a Sandbox OU might deny the creation of any resource that costs money above a threshold, while a Production OU denies the deletion of backup vaults. Attaching at the account level is the narrowest and is usually reserved for temporary exceptions or for accounts with unusual requirements. The tradeoff is always the same: broader scope means fewer policies to maintain and a stronger guarantee, but a mistake at the root is an organization-wide outage of the affected action.</p>
+        <p>The third knob is the condition vocabulary. SCPs support the same condition keys as IAM, and the ones that matter most for governance are aws:RequestedRegion, aws:PrincipalArn, aws:PrincipalOrgID, aws:SourceIp, and the tag-based keys such as aws:RequestTag and aws:ResourceTag. Tag-based conditions are how you enforce a tagging standard at the organization level: a Deny on resource creation when aws:RequestTag/CostCenter is absent makes tagging mandatory without relying on anyone's discipline. The cost of this mode is that it only works for API calls that actually carry the tag in the request, so it enforces tagging at creation time but does not retroactively fix untagged resources, and it does not apply to services that do not support tagging on create.</p>
+        <p>The fourth knob is the interaction with service-linked roles and AWS-managed automation. Some AWS services create service-linked roles in your accounts and then act through them; if an SCP denies the actions those roles need, the service breaks in ways that are hard to diagnose because the failure appears in the service, not in the policy. The practical guidance is to test any new SCP in a non-production OU first, to keep a documented list of the exemptions each guardrail requires, and to prefer conditions that are as narrow as the requirement allows. A guardrail that is slightly too permissive is a governance gap; a guardrail that is slightly too strict is an outage, and the second failure is the one that gets escalated.</p>
+      </section>
+
+      <section class="doc-section" id="sizing-limits">
+        <h2 class="section-heading">5. Sizing, Limits, and Quotas</h2>
+        <p>SCP limits are generous enough that they are rarely the binding constraint in a well-designed organization, but the exam does test a few of them, and knowing the shape of the limits helps you reason about whether a design is feasible. The headline number is that an organization can have a maximum of 1,000 SCPs, and a single SCP document can be up to 5,120 characters. That character limit is the one that actually bites in practice, because a region-restriction policy with a long exemption list, or a policy that enumerates many services, can approach it. When you hit the limit, the standard response is to split the policy into multiple SCPs and attach them all to the same target, since the effective permission set is the intersection of every attached policy.</p>
+        <p>Attachment limits are the second constraint. An account, OU, or root can have a limited number of SCPs attached to it directly, and the practical ceiling is well below the 1,000-policy organization limit. The important structural point is that inheritance means you rarely need to attach many policies to a single target: a policy at the root applies everywhere, so the number of policies attached to any one account is usually small. The exception is the account that needs a specific carve-out, which is where you attach an additional policy at the account level.</p>
+        <p>The third set of numbers is about what SCPs do not cover. SCPs do not apply to the management account, as noted earlier. They do not apply to service-linked roles in the way you might expect, and they do not restrict the root user of a member account from performing the actions that only the root user can perform, such as changing the account's support plan or closing the account. They also do not apply to resource-based policies in the sense of granting access — an SCP can deny an action that a resource policy would otherwise allow, but it cannot grant an action that no identity or resource policy allows. Finally, SCPs are evaluated in the context of the account making the call, so a cross-account request is constrained by the SCPs of the calling account, not the target account's SCPs, which is a subtlety that shows up in cross-account access scenarios.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Limit</th><th>Value</th><th>Practical implication</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>SCPs per organization</td><td>1,000</td><td>Rarely binding; split policies rather than consolidate</td></tr>
+              <tr><td>SCP document size</td><td>5,120 characters</td><td>The real constraint for long exemption lists</td></tr>
+              <tr><td>SCPs attached per target</td><td>Limited per account/OU/root</td><td>Inheritance keeps per-account attachments low</td></tr>
+              <tr><td>Management account</td><td>Exempt from SCPs</td><td>Keep it workload-free; it is outside the boundary</td></tr>
+              <tr><td>Cross-account calls</td><td>Caller's SCPs apply</td><td>Target account SCPs do not constrain the caller</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="doc-section" id="failure-modes">
+        <h2 class="section-heading">6. Failure Modes and What They Look Like in Production</h2>
+        <p>The characteristic SCP failure is an AccessDenied that appears in a service you were not thinking about, at a time you were not expecting it, and that no IAM policy change seems to fix. The reason is structural: because SCPs are evaluated before identity policies in the sense that they cap the effective set, an action can be denied by an SCP even when the identity policy clearly allows it, and the error message does not distinguish between the two. The first diagnostic move is therefore always the same: identify the principal, identify the account, and then walk the SCP chain from the account up to the root looking for a Deny that matches the action. CloudTrail records the API call and the error, and the account's own administrators can see the SCPs attached to their account and its parent OUs, so the investigation is usually a matter of reading the policies rather than guessing.</p>
+        <p>The most common production failure is the region-restriction policy that forgot a global service. The symptom is that a specific service stops working — IAM role creation fails, or Route 53 hosted zone changes fail, or CloudFront distributions cannot be updated — while everything else in the account is fine. The second most common is a Deny that is broader than intended because of a wildcard in the Action element, for example denying s3:* when the intent was to deny s3:DeleteBucket. The third is a tag-enforcement policy that blocks a service which does not support the tag in question, producing a Deny on an action that has nothing to do with tagging. All three share the same signature: a narrow, service-specific breakage that correlates with a recent policy change.</p>
+        <p>A fourth failure mode is subtler and worth calling out because it is the one that catches experienced architects. Because SCPs are inherited and intersected, a policy attached at the root can silently constrain an OU that was designed to be permissive. If a platform team attaches a new guardrail at the root without auditing the OUs beneath it, the effect is organization-wide, and the team that owns the affected OU may not even know the policy exists. The mitigation is procedural rather than technical: treat root-level SCP changes as a change-controlled event, and keep a documented inventory of which guardrails are attached where. The exam does not test your change-management process, but it does test whether you understand that root-level attachment is organization-wide and irreversible from below.</p>
+      </section>
+
+      <section class="doc-section" id="sre-angle">
+        <h2 class="section-heading">7. The Operational and SRE Angle</h2>
+        <p>From an SRE perspective, SCPs are a control-plane dependency, and the right way to think about them is as a source of correlated failure. A single SCP change can break an entire class of operations across every account beneath it simultaneously, which is the opposite of the blast-radius profile you want from a change. The operational response is to treat SCPs like any other high-blast-radius configuration: version them, review them, and roll them out progressively. In practice this means attaching a new guardrail to a single non-production OU first, observing for a defined period, and only then promoting it up the tree. The AWS Organizations API and CloudTrail give you the audit trail for who changed what and when, and that trail is the first thing you reach for when a guardrail causes an incident.</p>
+        <p>Monitoring for SCP-induced failures is mostly about watching for AccessDenied patterns rather than watching a dedicated SCP metric, because AWS does not expose an SCP-specific CloudWatch metric. The practical approach is to alarm on elevated AccessDenied rates in CloudTrail-derived metrics for the services that matter, and to correlate spikes with recent Organizations changes. A useful pattern is a CloudWatch alarm on the Organizations API itself — specifically on AttachPolicy, DetachPolicy, and UpdatePolicy calls — so that any change to the guardrail set generates a notification to the platform team. That alarm does not prevent the failure, but it collapses the mean time to diagnosis from "why is this service broken" to "someone changed a policy twenty minutes ago."</p>
+        <p>The SLO implication is that SCPs are part of the availability story for every workload in the organization, even though they are not part of any single workload's architecture. A guardrail that is too strict is an availability risk; a guardrail that is too permissive is a compliance risk. The runbook shape that follows from this is short and specific: on an unexplained AccessDenied, check the SCP chain before checking IAM; on a planned SCP change, stage it in a non-production OU and notify the affected account owners; on an incident caused by an SCP, the fastest mitigation is usually to detach the specific policy from the specific target rather than to edit the policy in place, because detaching is reversible and editing is not. That last point is worth internalizing: detach-then-fix is the safe rollback, and it is the move the exam expects you to recognize.</p>
+      </section>
+
+      <section class="doc-section" id="gotchas">
+        <h2 class="section-heading">8. Edge Cases and Exam Gotchas</h2>
+        <p>The gotchas cluster around the same theme as the failure modes: SCPs are a ceiling, and the exam tests whether you have internalized that rather than memorized the syntax. The first and most heavily tested gotcha is that an SCP cannot grant access. A question that describes an SCP allowing an action and asks whether the principal can perform it is testing whether you know that the identity still needs an Allow. The second is that an explicit Deny in an SCP beats an Allow in an IAM policy, which is the mirror image of the first and appears in questions that describe a conflict between the two layers.</p>
+        <p>The third gotcha is the management account exemption. Any scenario that asks you to constrain the management account with an SCP is testing whether you know it cannot be done, and the correct answer is usually to move the workload out of the management account rather than to try to constrain it. The fourth is the global-services exemption in region-restriction policies, which is the single most common cause of a self-inflicted outage in a new landing zone. The fifth is the cross-account evaluation rule: the caller's SCPs apply, not the target's, which matters in scenarios involving a central account calling into member accounts.</p>
+        <p>The sixth gotcha is the interaction with service-linked roles and AWS-managed automation, where an over-broad Deny breaks a service in a way that looks unrelated to the policy. The seventh is the difference between SCPs and permissions boundaries, which are both "ceilings" but operate at different scopes — a permissions boundary caps a single IAM entity within an account, while an SCP caps every entity in every account beneath its attachment point. The eighth is that SCPs do not apply to resource-based policies in the granting direction, so a cross-account S3 bucket policy that grants access to a principal in another account is still subject to that principal's account SCPs. The ninth, and the one most often missed, is that SCPs are evaluated on the requested region, not the resource's region, which is why the aws:RequestedRegion condition is the correct key for region restriction and why some global calls behave unexpectedly.</p>
+      </section>
+
+      <section class="doc-section" id="vs-comparison">
+        <h2 class="section-heading">9. SCPs vs. the Controls They Get Confused With</h2>
+        <p>SCPs sit in a family of controls that all look like "a policy that limits what you can do," and the exam deliberately mixes them. The closest relative is the IAM permissions boundary, which also caps maximum permissions but does so for a single IAM entity inside a single account. The distinction is scope and ownership: a permissions boundary is created and attached by the account that owns the entity, while an SCP is created and attached by the organization and cannot be removed by the account. A question that describes a delegated administrator creating roles they should not be able to escalate beyond is describing a permissions boundary; a question that describes a central team constraining every account in an OU is describing an SCP.</p>
+        <p>The second relative is the IAM policy itself, which grants rather than caps. The third is the AWS Config rule, which detects and can remediate non-compliant configuration but does not prevent the API call in the first place — Config is detective, SCPs are preventive. The fourth is the resource-based policy, which grants access to a resource from a principal in another account and is evaluated alongside, not instead of, the caller's SCPs. The fifth is the Control Tower guardrail, which is not a separate mechanism at all but a managed wrapper that deploys SCPs and Config rules on your behalf, which is the subject of tomorrow's material.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Control</th><th>Scope</th><th>Grants or caps?</th><th>Who can remove it</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>SCP</td><td>Root, OU, or account</td><td>Caps only</td><td>Organization management account</td></tr>
+              <tr><td>IAM permissions boundary</td><td>Single IAM entity</td><td>Caps only</td><td>The owning account</td></tr>
+              <tr><td>IAM identity policy</td><td>Single IAM entity</td><td>Grants</td><td>The owning account</td></tr>
+              <tr><td>Resource-based policy</td><td>Single resource</td><td>Grants</td><td>The resource owner</td></tr>
+              <tr><td>AWS Config rule</td><td>Resource configuration</td><td>Detects (and can remediate)</td><td>The owning account</td></tr>
+              <tr><td>Control Tower guardrail</td><td>OU or account</td><td>Deploys SCPs and Config rules</td><td>Control Tower administrator</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The pick-X-when rules that fall out of this table are the ones to carry into the exam. Pick an SCP when the requirement is a boundary that account administrators cannot override and that must apply uniformly across a set of accounts. Pick a permissions boundary when the requirement is to prevent a specific delegated administrator from escalating their own privileges within one account. Pick an IAM policy when the requirement is to grant access. Pick a Config rule when the requirement is to detect and report drift, or to remediate after the fact. Pick Control Tower guardrails when the requirement is to get a curated, AWS-maintained set of SCPs and Config rules without writing them yourself — and recognize that a Control Tower guardrail is, mechanically, an SCP underneath.</p>
+      </section>
+
+      <section class="doc-section" id="lab">
+        <h2 class="section-heading">Hands-on Lab: A Region-Restriction Guardrail That Does Not Break the Account</h2>
+        <div class="card card-green">
+          <p>The goal of this lab is to write, deploy, and validate a region-restriction SCP that denies actions outside two approved regions while exempting the global services that would otherwise break. Work in a non-production OU or a dedicated sandbox account; do not attach this to the root on your first attempt. Budget roughly 45 minutes.</p>
+          <p><strong>Step 1 — Establish the baseline.</strong> In the management account, open AWS Organizations and identify the OU you will target. Confirm that the root has the default FullAWSAccess SCP attached and that your target OU inherits it. Before you change anything, note the current effective permissions by attempting a benign action in an unapproved region from a member account — for example, listing S3 buckets with a region override — so you have a before-and-after comparison.</p>
+          <p><strong>Step 2 — Write the policy.</strong> Create a new SCP with a single statement whose Effect is Deny, whose Action is "*", and whose Resource is "*", with a condition that denies when aws:RequestedRegion is not one of your approved regions. Use a StringNotEquals condition on the aws:RequestedRegion key with a list of your approved regions. Do not add the global-service exemption yet; you want to observe the failure first so you understand what the exemption is protecting against.</p>
+          <p><strong>Step 3 — Attach and observe.</strong> Attach the policy to the target OU. From a member account in that OU, attempt a regional action in an approved region (it should succeed) and the same action in an unapproved region (it should be denied). Then attempt an IAM action, such as creating a role, and a Route 53 action, such as listing hosted zones. At least one of these should fail, and the failure is the lesson: those services are global and do not carry an approved aws:RequestedRegion value.</p>
+          <p><strong>Step 4 — Add the exemption.</strong> Edit the policy to exempt the global services. The cleanest way is to add a NotAction element listing the global service namespaces — iam:*, route53:*, cloudfront:*, and support:* — so the Deny applies to everything except those. Re-attach and re-test. The IAM and Route 53 actions should now succeed while the unapproved-region regional action remains denied.</p>
+          <p><strong>Step 5 — Validate the ceiling behavior.</strong> In the member account, create an IAM policy that allows an action in an unapproved region and attach it to a test role. Attempt the action. It should still be denied, which demonstrates that the SCP caps the effective permission set regardless of what the identity policy grants. This is the single most important behavior to have seen with your own eyes before the exam.</p>
+          <p><strong>Step 6 — Test the rollback.</strong> Detach the SCP from the OU and confirm that the previously denied action now succeeds. Note how much faster detaching is than editing the policy in place, and record that as your incident-response move. Finally, document the policy in your organization's guardrail inventory with its attachment point, its exemptions, and the date it was validated.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="quiz">
+        <h2 class="section-heading">Scenario Question Drills</h2>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q1.</strong> A developer has an IAM policy granting s3:*, but an SCP on their OU denies s3:DeleteBucket. What happens if they call DeleteBucket?</p>
+          <div class="scenario-options" id="opts-d2q1">
             <div class="scenario-option">A. It succeeds because IAM policies take precedence</div>
             <div class="scenario-option">B. It is denied — SCPs set the ceiling and an explicit Deny always wins</div>
             <div class="scenario-option">C. It succeeds only in the management account</div>
             <div class="scenario-option">D. It depends on the S3 bucket policy</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d2q1', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d2q1"><strong>Correct answer: B.</strong> The effective permission is the intersection of IAM and SCP; an explicit Deny in either always overrides an Allow.</div>
         </div>
-        <button class="scenario-reveal-btn" onclick="revealAnswer('d2q0', 1)">Reveal Answer</button>
-        <div class="scenario-explanation" id="exp-d2q0"><strong>Correct answer: B.</strong> The effective permission is the intersection of IAM and SCP; an explicit Deny in either always overrides an Allow.</div>
-      </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q2.</strong> A security team wants to guarantee that no account in the organization can disable CloudTrail logging, even if an account administrator tries. What is the correct mechanism?</p>
+          <div class="scenario-options" id="opts-d2q2">
+            <div class="scenario-option">A. An IAM policy attached to every administrator role</div>
+            <div class="scenario-option">B. A deny-list SCP attached at the organization root denying cloudtrail:StopLogging and cloudtrail:DeleteTrail</div>
+            <div class="scenario-option">C. An AWS Config rule that reports non-compliance</div>
+            <div class="scenario-option">D. A resource-based policy on the trail</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d2q2', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d2q2"><strong>Correct answer: B.</strong> Only an SCP attached above the account can constrain account administrators who could otherwise rewrite their own IAM policies. Config is detective, not preventive.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q3.</strong> An SCP attached to an OU allows ec2:RunInstances, and an IAM role in an account under that OU has no EC2 permissions at all. Can the role launch an instance?</p>
+          <div class="scenario-options" id="opts-d2q3">
+            <div class="scenario-option">A. Yes, because the SCP allows it</div>
+            <div class="scenario-option">B. No — SCPs never grant permissions; the identity still needs an Allow</div>
+            <div class="scenario-option">C. Yes, but only in the management account</div>
+            <div class="scenario-option">D. Only if the instance is in an approved region</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d2q3', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d2q3"><strong>Correct answer: B.</strong> SCPs define the maximum available permissions, not the granted set. An Allow in an SCP is necessary but never sufficient.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q4.</strong> After attaching a region-restriction SCP to an OU, engineers report that they can no longer create IAM roles or modify Route 53 records, though EC2 in the approved regions still works. What is the most likely cause?</p>
+          <div class="scenario-options" id="opts-d2q4">
+            <div class="scenario-option">A. The SCP is attached to the wrong OU</div>
+            <div class="scenario-option">B. The policy denies all actions outside the approved regions without exempting global services such as IAM and Route 53</div>
+            <div class="scenario-option">C. IAM and Route 53 require a permissions boundary</div>
+            <div class="scenario-option">D. The accounts need to be re-enrolled in the organization</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d2q4', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d2q4"><strong>Correct answer: B.</strong> Global services do not carry an approved aws:RequestedRegion value, so a naive region-restriction policy denies them. Exempt IAM, Route 53, CloudFront, and Support.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q5.</strong> A platform team wants to enforce that every resource is created with a CostCenter tag, across all accounts, without relying on developer discipline. Which approach fits?</p>
+          <div class="scenario-options" id="opts-d2q5">
+            <div class="scenario-option">A. A monthly report of untagged resources</div>
+            <div class="scenario-option">B. An SCP denying resource-creating actions when aws:RequestTag/CostCenter is absent</div>
+            <div class="scenario-option">C. An IAM policy requiring MFA</div>
+            <div class="scenario-option">D. A Trusted Advisor check</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d2q5', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d2q5"><strong>Correct answer: B.</strong> A tag-based Deny condition in an SCP enforces tagging at creation time across every account beneath the attachment point, without depending on individual teams.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q6.</strong> A company wants to prevent any workload from running outside eu-west-1 and eu-central-1, but the management account runs the organization's billing tooling. What should the architect do?</p>
+          <div class="scenario-options" id="opts-d2q6">
+            <div class="scenario-option">A. Attach the region-restriction SCP to the management account</div>
+            <div class="scenario-option">B. Attach the SCP at the root or to the workload OUs, and recognize that the management account is exempt from SCPs</div>
+            <div class="scenario-option">C. Use an IAM policy on the management account's root user</div>
+            <div class="scenario-option">D. Region restriction is not possible with SCPs</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d2q6', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d2q6"><strong>Correct answer: B.</strong> SCPs do not apply to the management account. The correct design keeps workloads out of the management account and attaches guardrails to the OUs that contain them.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q7.</strong> An SCP at the root denies ec2:*. An OU beneath the root has an SCP that allows ec2:RunInstances. Can an account in that OU launch an instance?</p>
+          <div class="scenario-options" id="opts-d2q7">
+            <div class="scenario-option">A. Yes, because the OU-level policy is more specific</div>
+            <div class="scenario-option">B. No — SCPs are intersected, and the root-level Deny applies to every account beneath it</div>
+            <div class="scenario-option">C. Yes, if the account also has an IAM policy allowing it</div>
+            <div class="scenario-option">D. Only in the management account</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d2q7', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d2q7"><strong>Correct answer: B.</strong> SCPs are inherited downward and intersected. A Deny at the root cannot be relaxed by anything lower in the hierarchy.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q8.</strong> A central security account assumes a role in a member account to audit its configuration. The member account has an SCP denying iam:*. Does that SCP block the audit role's IAM calls?</p>
+          <div class="scenario-options" id="opts-d2q8">
+            <div class="scenario-option">A. No, because the caller is in a different account</div>
+            <div class="scenario-option">B. Yes — the SCPs of the account where the principal is acting apply, and the assumed role is acting in the member account</div>
+            <div class="scenario-option">C. Only if the security account also has the same SCP</div>
+            <div class="scenario-option">D. SCPs never apply to assumed roles</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d2q8', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d2q8"><strong>Correct answer: B.</strong> Once the role is assumed, the principal is acting within the member account and is subject to that account's SCP chain. Cross-account evaluation follows the account in which the action is performed.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q9.</strong> A team wants to lock a sandbox account down to only S3 and DynamoDB, with no other service usable. Which SCP posture is appropriate?</p>
+          <div class="scenario-options" id="opts-d2q9">
+            <div class="scenario-option">A. A deny-list SCP denying everything except S3 and DynamoDB</div>
+            <div class="scenario-option">B. An allow-list SCP permitting only s3:* and dynamodb:*, accepting the maintenance burden</div>
+            <div class="scenario-option">C. An IAM policy on the account root user</div>
+            <div class="scenario-option">D. A permissions boundary on every role</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d2q9', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d2q9"><strong>Correct answer: B.</strong> This is the rare case where an allow-list is correct: the permitted set is small and stable, and the requirement is genuinely "only these services." The tradeoff is that new AWS features will be denied until the list is updated.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q10.</strong> An SCP denies s3:* on an OU. A developer in that OU has an IAM policy allowing s3:GetObject and needs to read a bucket owned by another account whose bucket policy grants them access. What happens?</p>
+          <div class="scenario-options" id="opts-d2q10">
+            <div class="scenario-option">A. The read succeeds because the bucket policy grants it</div>
+            <div class="scenario-option">B. The read is denied — the caller's SCP caps the effective permission set regardless of the resource policy</div>
+            <div class="scenario-option">C. The read succeeds only if the bucket is in an approved region</div>
+            <div class="scenario-option">D. The read succeeds because resource policies override SCPs</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d2q10', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d2q10"><strong>Correct answer: B.</strong> Resource-based policies grant access but do not override the caller's SCPs. The effective permission is still the intersection of the caller's SCP chain and the granting policies.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q11.</strong> A new SCP attached at the root has caused an unexpected outage in a production OU. What is the fastest safe mitigation?</p>
+          <div class="scenario-options" id="opts-d2q11">
+            <div class="scenario-option">A. Edit the policy in place to add the missing exemption</div>
+            <div class="scenario-option">B. Detach the policy from the affected target, then fix and re-attach after review</div>
+            <div class="scenario-option">C. Delete the organization and recreate it</div>
+            <div class="scenario-option">D. Add an IAM policy to every role in the affected accounts</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d2q11', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d2q11"><strong>Correct answer: B.</strong> Detaching is immediately reversible and restores the previous effective permissions. Editing in place is a second change made under pressure, which is how incidents get worse.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q12.</strong> Which statement about the default FullAWSAccess SCP is correct?</p>
+          <div class="scenario-options" id="opts-d2q12">
+            <div class="scenario-option">A. It must be deleted before any restrictive SCP can take effect</div>
+            <div class="scenario-option">B. It is an ordinary SCP with a wildcard Allow, attached to the root, and restrictive SCPs are layered on top of it</div>
+            <div class="scenario-option">C. It only applies to the management account</div>
+            <div class="scenario-option">D. It grants permissions that IAM policies cannot revoke</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d2q12', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d2q12"><strong>Correct answer: B.</strong> FullAWSAccess is a normal SCP whose statement allows all actions. It exists so the organization is functional out of the box, and Deny-based guardrails are intersected with it.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q13.</strong> A company needs to prevent a delegated administrator from creating IAM roles with more permissions than the administrator themselves has. Which control is correct?</p>
+          <div class="scenario-options" id="opts-d2q13">
+            <div class="scenario-option">A. An SCP attached to the account</div>
+            <div class="scenario-option">B. A permissions boundary that the delegated administrator is required to attach to every role they create</div>
+            <div class="scenario-option">C. A resource-based policy on each new role</div>
+            <div class="scenario-option">D. An AWS Config rule</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d2q13', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d2q13"><strong>Correct answer: B.</strong> This is the canonical permissions-boundary scenario. An SCP caps the whole account, which is broader than the requirement and would not prevent the escalation within the account.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q14.</strong> An SCP denies all actions when aws:RequestedRegion is not in a two-region list. A developer calls a global service that returns an unexpected AccessDenied. What is the first diagnostic step?</p>
+          <div class="scenario-options" id="opts-d2q14">
+            <div class="scenario-option">A. Increase the IAM policy's permissions</div>
+            <div class="scenario-option">B. Check whether the service is global and therefore needs an exemption in the SCP's NotAction or condition</div>
+            <div class="scenario-option">C. Move the account to a different OU</div>
+            <div class="scenario-option">D. Disable CloudTrail and retry</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d2q14', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d2q14"><strong>Correct answer: B.</strong> Global services do not carry an approved aws:RequestedRegion value. The fix is an exemption, not a broader IAM policy, because the SCP caps the effective set.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q15.</strong> A company wants a curated, AWS-maintained set of preventive and detective controls applied to every new account, without writing SCPs and Config rules by hand. What should they use?</p>
+          <div class="scenario-options" id="opts-d2q15">
+            <div class="scenario-option">A. A hand-written SCP attached to the root</div>
+            <div class="scenario-option">B. AWS Control Tower guardrails, which deploy SCPs and Config rules on your behalf</div>
+            <div class="scenario-option">C. AWS Trusted Advisor</div>
+            <div class="scenario-option">D. An IAM policy attached to every account's root user</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d2q15', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d2q15"><strong>Correct answer: B.</strong> Control Tower guardrails are managed wrappers that deploy SCPs and Config rules. Mechanically they are still SCPs underneath, which is why understanding SCP evaluation is a prerequisite for using them well.</div>
+        </div>
       </section>
+
+      <section class="doc-section" id="preview">
+        <h2 class="section-heading">Peek into Tomorrow</h2>
+        <div class="card card-purple">
+          <p>Everything in this lesson assumed you already had an organization, an OU tree, and a set of accounts to attach policies to. That assumption is doing a lot of work, and it hides the real cost of the governance model: building the landing zone by hand is slow, error-prone, and easy to get subtly wrong. The management account, the log-archive account, and the audit account all have to exist before any of the guardrails in this lesson have somewhere to live, and each of them has its own configuration requirements. The region-restriction policy you wrote today is only useful once there is an OU to attach it to and an account inside that OU to constrain.</p>
+          <p>The open question this leaves is whether that foundation can be provisioned and maintained as a product rather than as a project. If a new business unit needs ten accounts next quarter, does someone repeat the manual setup ten times, or is there a factory? And once the accounts exist, how do you distinguish between a guardrail that must always be on and one that is merely a good idea for some teams? Those two questions — automated account provisioning and the mandatory-versus-elective distinction — are what tomorrow's material answers.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="sources">
+        <h2 class="section-heading">Sources</h2>
+        <div class="card">
+          <ul class="source-list">
+            <li><a href="https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_policies_scps.html" target="_blank" rel="noopener">AWS Organizations User Guide — Service control policies (SCPs)</a></li>
+            <li><a href="https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_policies_scps_evaluation.html" target="_blank" rel="noopener">AWS Organizations User Guide — SCP evaluation</a></li>
+            <li><a href="https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_policies_scps_examples.html" target="_blank" rel="noopener">AWS Organizations User Guide — SCP example policies</a></li>
+            <li><a href="https://docs.aws.amazon.com/organizations/latest/userguide/orgs_reference_limits.html" target="_blank" rel="noopener">AWS Organizations User Guide — Quotas for AWS Organizations</a></li>
+            <li><a href="https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_evaluation-logic.html" target="_blank" rel="noopener">IAM User Guide — Policy evaluation logic</a></li>
+            <li><a href="https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies_boundaries.html" target="_blank" rel="noopener">IAM User Guide — Permissions boundaries for IAM entities</a></li>
+            <li><a href="https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_condition-keys.html" target="_blank" rel="noopener">IAM User Guide — Global condition context keys</a></li>
+            <li><a href="https://docs.aws.amazon.com/controltower/latest/userguide/controls.html" target="_blank" rel="noopener">AWS Control Tower User Guide — Controls (guardrails)</a></li>
+            <li><a href="https://docs.aws.amazon.com/whitepapers/latest/organizing-your-aws-environment/organizing-your-aws-environment.html" target="_blank" rel="noopener">AWS Whitepaper — Organizing Your AWS Environment Using Multiple Accounts</a></li>
+          </ul>
+        </div>
+      </section>
+
       <div class="day-nav">
         <a href="day-001.html">&larr; Day 1: Multi-Account Architecture &amp; AWS Organizations</a>
         <button class="btn btn-green" onclick="markComplete(2, 'day-003.html')">Mark Day 2 Complete &rarr;</button>

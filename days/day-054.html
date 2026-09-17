@@ -23,6 +23,23 @@
   <aside class="sidebar" id="sidebar">
     <div class="search-box"><input type="text" id="navSearch" class="search-input" placeholder="Search days..." onkeyup="filterNav()"></div>
     <div class="nav-section">
+      <div class="nav-section-title">On This Page</div>
+      <a href="#recap" class="nav-link">Recap: From Commitment to Measurement</a>
+      <a href="#why-on-exam" class="nav-link">1. Why This Is on the Exam</a>
+      <a href="#mechanism" class="nav-link">2. How Each Service Actually Works</a>
+      <a href="#decision-boundary" class="nav-link">3. The Core Decision Boundary</a>
+      <a href="#config-tradeoffs" class="nav-link">4. Configuration Modes and Their Tradeoffs</a>
+      <a href="#sizing-limits" class="nav-link">5. Sizing, Limits and Quotas</a>
+      <a href="#failure-modes" class="nav-link">6. Failure Modes and What They Look Like in Production</a>
+      <a href="#sre-angle" class="nav-link">7. The Operational and SRE Angle</a>
+      <a href="#gotchas" class="nav-link">8. Edge Cases and Exam Gotchas</a>
+      <a href="#vs-comparison" class="nav-link">9. This vs. the Services It Gets Confused With</a>
+      <a href="#lab" class="nav-link">Hands-on Lab</a>
+      <a href="#quiz" class="nav-link">Scenario Question Drills</a>
+      <a href="#preview" class="nav-link">Peek into Tomorrow</a>
+      <a href="#sources" class="nav-link">Sources</a>
+    </div>
+    <div class="nav-section">
       <div class="nav-section-title">All Days</div>
       <a href="day-001.html" class="nav-link" data-day="1">Day 1: Multi-Account Architecture &amp; AWS Organizations</a>
       <a href="day-002.html" class="nav-link" data-day="2">Day 2: Service Control Policy (SCP) Mechanics</a>
@@ -104,37 +121,331 @@
         <span class="pill pill-green">Phase 4: Migration, Hybrid &amp; Cost Optimization</span>
       </div>
       <h1 class="hero-title">AWS Compute Optimizer, Cost Explorer &amp; Trusted Advisor</h1>
-      <div class="reading-meta">&#128337; ~3 min read &middot; 3 services covered</div>
+      <div class="reading-meta">&#128337; ~58 min read &middot; 3 services covered</div>
       <div class="services-grid">
         <span class="service-tag">Compute Optimizer</span>
         <span class="service-tag">Cost Explorer</span>
         <span class="service-tag">Trusted Advisor</span>
       </div>
       <div id="tracker"></div>
-      <section class="doc-section">
-        <h2 class="section-heading">Today's Concept</h2>
+      <section class="doc-section" id="recap">
+        <h2 class="section-heading">Recap: From Commitment to Measurement</h2>
         <div class="card card-accent">
-          <p>Compute Optimizer analyzes utilization metrics and recommends right-sizing (often catching over-provisioned instances). Cost Explorer visualizes spend trends and forecasts, supporting RI/Savings Plan purchase recommendations. Trusted Advisor flags cost, security, performance, and fault-tolerance issues against AWS best practices.</p>
-        </div>
-        <h3 class="sub-heading">Hands-on Lab / Practical Action (45 min)</h3>
-        <div class="card">
-          <p>Use Compute Optimizer recommendations to identify and right-size the top 5 most over-provisioned EC2 instances in a sample fleet.</p>
+          <p>Day 53 ended on a purchasing decision: match the commitment to the workload, with Compute Savings Plans buying flexibility across any family, region, and OS, EC2 Instance Savings Plans buying a deeper discount in exchange for locking to a family and region, Reserved Instances when you also want a capacity reservation, and Spot at up to roughly 90% off for fault-tolerant work that can absorb a two-minute interruption notice. That framing is correct but incomplete, because every one of those instruments is a bet placed before you know the outcome. You commit to a family, a region, a term, and a quantity, and the discount only materializes if the workload you predicted is the workload you actually run.</p>
+          <p>Today extends that thread by asking the question the purchasing decision quietly assumes away: how do you know what you should have bought? Compute Optimizer, Cost Explorer, and Trusted Advisor are the measurement layer that sits underneath the commitment layer. They do not change what you pay per hour; they change what you decide to pay for. The relationship is direct — the Savings Plan recommendation you accept in Cost Explorer is generated from the same utilization data Compute Optimizer uses to tell you an instance is oversized, and Trusted Advisor is the blunt instrument that tells you a category of waste exists before you have instrumented it precisely.</p>
         </div>
       </section>
-      <section class="doc-section">
+      <section class="doc-section" id="why-on-exam">
+        <h2 class="section-heading">1. Why This Is on the Exam</h2>
+        <p>Cost optimization is Domain 4 of SAP-C02, and it is the domain candidates most often underestimate because the questions do not look like cost questions. A scenario will describe a fleet of instances running at low utilization, a monthly bill that keeps climbing without a corresponding traffic increase, or a migration that has to justify its target instance sizes, and the correct answer is a service that produces a recommendation rather than a service that produces a discount. The exam is testing whether you know which tool answers which question, because the three services in this day overlap enough that a careless reader will pick the wrong one.</p>
+        <p>The reason this cluster is exam-relevant is that it sits at the intersection of two things the exam loves: a decision that has a defensible right answer, and a set of plausible distractors that are all real AWS services doing something adjacent. Compute Optimizer, Cost Explorer, Trusted Advisor, AWS Config, CloudWatch, and Cost and Usage Report all touch cost or utilization in some way. Only one of them will tell you that a specific m5.2xlarge should be an m5.large. Only one of them will forecast next month's bill. Only one of them will tell you that you have idle load balancers without you having to ask a specific question first. Knowing the boundary between them is the actual skill being tested.</p>
+        <p>There is also a governance dimension that shows up in multi-account scenarios. In an organization with dozens of accounts, the question of who can see cost data, at what granularity, and whether recommendations are surfaced centrally or per-account is a real architectural decision. Compute Optimizer and Trusted Advisor both have organization-level views that require explicit opt-in, and Cost Explorer's data is scoped to the management account's consolidated billing view. A scenario that asks how a central FinOps team monitors spend across forty accounts is testing whether you know these services can be aggregated, and what has to be enabled for that to work.</p>
+        <p>Finally, the exam treats these services as the evidence layer for a recommendation you are about to make. When a question asks you to justify moving a workload to Graviton, or to a smaller instance family, or onto a Savings Plan, the answer often hinges on what data supports the change. Compute Optimizer's recommendations are backed by CloudWatch metrics over a lookback window; Cost Explorer's forecasts are backed by historical spend; Trusted Advisor's checks are backed by heuristics against best practice. Understanding what evidence each service actually has access to tells you when its recommendation is trustworthy and when it is not.</p>
+      </section>
+      <section class="doc-section" id="mechanism">
+        <h2 class="section-heading">2. How Each Service Actually Works</h2>
+        <p>Compute Optimizer is a machine-learning service that consumes CloudWatch metrics and produces instance-type recommendations. It does not read your application, your logs, or your architecture diagrams. It reads CPU utilization, and for some resource types memory utilization if the CloudWatch agent is publishing it, plus a set of derived features like network throughput and disk I/O, and it compares your observed utilization pattern against a model trained on a large corpus of AWS workloads. The output is a recommendation with a finding classification — over-provisioned, under-provisioned, optimized, or none — and a projected monthly savings figure for the over-provisioned case. The critical mechanical detail is that the recommendation is only as good as the metrics it can see, and by default it cannot see memory at all.</p>
+        <p>Cost Explorer is a reporting and forecasting layer over the billing data AWS already collects. It is not a monitoring service and it does not look at your resources; it looks at your invoice. The data is available at daily and hourly granularity, filterable by service, account, region, tag, instance type, and a long list of other dimensions, and it supports grouping and filtering combinations that let you answer questions like "what did the payments team spend on RDS in eu-west-1 last quarter." Its forecasting feature projects spend forward using historical patterns, and its reservation and Savings Plan recommendations are generated by analyzing your historical usage against the commitment instruments available. The mechanical constraint worth internalizing is latency: Cost Explorer data is not real-time, and the granularity you get depends on how far back you are looking.</p>
+        <p>Trusted Advisor is a rules engine. It runs a fixed set of checks against your account — some free, some requiring Business or Enterprise Support — and reports pass, warning, or error states with a description of the issue and a link to remediation guidance. The checks span five categories: cost optimization, security, fault tolerance, performance, and service quotas. The cost category is the one relevant here, and it covers things like idle load balancers, unassociated Elastic IP addresses, underutilized EBS volumes, and low-utilization EC2 instances. Trusted Advisor is deliberately shallow and broad: it will tell you that you have idle resources, but it will not tell you what to resize them to. That is Compute Optimizer's job.</p>
+        <p>The three services compose into a rough funnel. Trusted Advisor is the wide end — it surfaces categories of waste across the account without you having to ask a specific question. Compute Optimizer is the narrow end — it takes a specific resource and tells you what to change it to. Cost Explorer is the accounting layer that tells you whether the change mattered, and it is also the source of the commitment recommendations that turn a right-sizing decision into a purchasing decision. A mature cost practice uses all three in that order, and the exam scenarios that describe a cost problem usually map cleanly onto one stage of the funnel.</p>
+      </section>
+      <section class="doc-section" id="decision-boundary">
+        <h2 class="section-heading">3. The Core Decision Boundary</h2>
+        <p>The fork every scenario question hinges on is whether the question is asking you to find waste, to quantify waste, or to act on waste. Finding waste is a discovery problem and the answer is almost always Trusted Advisor, because it is the only one of the three that proactively surfaces issues you did not ask about. Quantifying waste is a measurement problem and the answer is Compute Optimizer when the resource is compute and Cost Explorer when the question is about spend over time or across accounts. Acting on waste is a decision problem, and the answer depends on whether the action is a resize, a commitment purchase, or a decommission.</p>
+        <p>The subtlety is that the same scenario can be read at more than one stage, and the exam exploits this. A question describing an account with a rising bill and no traffic growth could be answered by Trusted Advisor if the expected answer is "find the idle resources," by Cost Explorer if the expected answer is "break the spend down by service to find the driver," or by Compute Optimizer if the expected answer is "right-size the over-provisioned instances." The discriminator is usually a phrase in the question that names the desired output: "identify," "forecast," "recommend a new instance type," "attribute to a team." Read for the output, not the problem.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Question you are actually asking</th><th>Service</th><th>Output shape</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>What waste exists in this account that I have not looked for?</td><td>Trusted Advisor</td><td>Check status (pass/warn/error) with remediation link</td></tr>
+              <tr><td>What instance type should this specific resource be?</td><td>Compute Optimizer</td><td>Recommended type + finding + projected savings</td></tr>
+              <tr><td>What did we spend, on what, and where is it trending?</td><td>Cost Explorer</td><td>Filtered/grouped cost and usage, plus forecast</td></tr>
+              <tr><td>Should we buy a Savings Plan or RI, and how much?</td><td>Cost Explorer</td><td>Commitment purchase recommendation with coverage/break-even</td></tr>
+              <tr><td>Is this resource compliant with a rule I defined?</td><td>AWS Config</td><td>Rule compliance state (not a cost recommendation)</td></tr>
+              <tr><td>What is this resource doing right now?</td><td>CloudWatch</td><td>Raw metric time series (no recommendation)</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The last two rows are the distractors that appear most often. AWS Config evaluates resources against rules you write, and while you can write a cost-flavored rule, Config does not generate recommendations — it reports compliance. CloudWatch is the raw data source that Compute Optimizer consumes, but CloudWatch itself will not tell you an instance is oversized; it will show you a CPU graph and leave the inference to you. If a scenario's correct answer is Config or CloudWatch, the question will describe a custom rule or a raw metric threshold, not a recommendation.</p>
+      </section>
+      <section class="doc-section" id="config-tradeoffs">
+        <h2 class="section-heading">4. Configuration Modes and Their Tradeoffs</h2>
+        <p>Compute Optimizer's most consequential configuration is whether it is opted in at the organization level and whether enhanced infrastructure metrics are enabled. By default, Compute Optimizer is opt-in per account, and in an organization you can enable it centrally so that the management account sees recommendations across all member accounts. Enhanced infrastructure metrics extend the lookback window from the default 14 days to three months, which matters enormously for workloads with monthly or quarterly cycles — a batch job that runs on the first of the month looks idle in a 14-day window and correctly utilized in a 90-day window. The tradeoff is that the longer window is a paid feature and the recommendations take longer to stabilize after a workload change.</p>
+        <p>The second knob is whether the CloudWatch agent is publishing memory utilization. Compute Optimizer's EC2 recommendations are materially better with memory data, because a workload that is CPU-light but memory-bound will be recommended for a smaller instance on CPU evidence alone and then fall over. This is not a Compute Optimizer setting so much as a prerequisite: if you have not installed the agent and configured it to publish the memory metric, you are getting a recommendation based on half the picture. The exam does not usually test the agent configuration directly, but it does test the consequence — a recommendation that ignores memory is a recommendation you should validate before acting on.</p>
+        <p>Cost Explorer's configuration is mostly about scope and granularity. The management account of an organization sees consolidated cost across all member accounts, and member accounts see only their own. Granularity is daily by default and hourly for recent data, with the hourly view retained for a shorter window. The tradeoff here is between precision and latency: the most recent day or two of data may be incomplete or estimated, so a forecast built on the trailing edge of the data is less reliable than one built on a settled month. Cost Explorer also has a per-account setting for whether it can be enabled at all, and in some organizations it is deliberately restricted to a central FinOps account.</p>
+        <p>Trusted Advisor's configuration is essentially a support-plan question. The full set of checks, including the cost optimization category, requires Business or Enterprise Support; the free tier exposes a small subset of security and service quota checks. In an organization, Trusted Advisor has an organizational view that aggregates check results across accounts, but it requires the management account to enable it and it requires each member account to be on a qualifying support plan. The practical tradeoff is that Trusted Advisor's breadth is purchased with support cost, which is why it is often the last of the three services an organization adopts.</p>
+      </section>
+      <section class="doc-section" id="sizing-limits">
+        <h2 class="section-heading">5. Sizing, Limits and Quotas</h2>
+        <p>The numbers that matter here are mostly about lookback windows and data retention, because those determine how much history a recommendation is built on. Compute Optimizer's default metrics lookback is 14 days, and enhanced infrastructure metrics extend that to three months. Recommendations are refreshed periodically rather than continuously, so a change you make today will not be reflected in the recommendation for some hours. Cost Explorer retains daily data for 13 months and hourly data for 14 days, which is why a year-over-year comparison is possible but a month-over-month comparison at hourly granularity is not. Trusted Advisor's checks refresh on their own cadence, with some checks updating several times a day and others less frequently.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Dimension</th><th>Value</th><th>Why it matters</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Compute Optimizer default lookback</td><td>14 days</td><td>Short window misreads cyclical workloads as idle</td></tr>
+              <tr><td>Compute Optimizer enhanced lookback</td><td>3 months</td><td>Paid feature; needed for monthly/quarterly patterns</td></tr>
+              <tr><td>Cost Explorer daily retention</td><td>13 months</td><td>Enables year-over-year comparison</td></tr>
+              <tr><td>Cost Explorer hourly retention</td><td>14 days</td><td>Recent-data precision only</td></tr>
+              <tr><td>Trusted Advisor full checks</td><td>Business or Enterprise Support</td><td>Cost category is not in the free tier</td></tr>
+              <tr><td>Trusted Advisor refresh</td><td>Varies by check</td><td>Not a real-time signal</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The resource coverage of Compute Optimizer is worth knowing because it is broader than EC2. It also produces recommendations for Auto Scaling groups, EBS volumes, Lambda functions, ECS services on Fargate, and commercial software licenses. The Auto Scaling group case is the one that trips people up: the recommendation is for the group's instance type and desired capacity, not for individual instances, and acting on it means changing the launch template rather than resizing a running instance. Lambda recommendations are about memory configuration, which is the Lambda equivalent of instance sizing and directly affects both cost and execution duration.</p>
+        <p>Trusted Advisor's cost checks have their own implicit thresholds. The low-utilization EC2 check, for example, flags instances whose CPU utilization stays below a threshold over a multi-day window, and the idle load balancer check flags load balancers with no healthy targets or negligible traffic. These thresholds are not configurable, which is the point — Trusted Advisor is a best-practice baseline, not a tunable policy engine. If you need a threshold you control, that is AWS Config or a custom CloudWatch alarm, not Trusted Advisor.</p>
+      </section>
+      <section class="doc-section" id="failure-modes">
+        <h2 class="section-heading">6. Failure Modes and What They Look Like in Production</h2>
+        <p>The most common failure mode is acting on a Compute Optimizer recommendation that was built on insufficient evidence. The symptom is a resize that improves the bill and degrades the workload: latency climbs, the instance starts swapping, or a batch job that used to finish in an hour now takes three. The cause is almost always a metric the recommendation could not see — memory, GPU, or a burst pattern outside the lookback window. The first diagnostic move is to pull the CloudWatch metrics for the recommended resource over a window longer than the recommendation's lookback and check whether the utilization pattern is actually flat or whether it has peaks the model did not observe.</p>
+        <p>The second failure mode is a Cost Explorer forecast that is confidently wrong because the historical data contains a discontinuity. A one-time migration, a reserved instance purchase, a support plan change, or a large data transfer will all bend the trend line, and the forecast will extrapolate the bend. The symptom is a forecast that looks implausible relative to what you know is happening, and the diagnostic move is to filter the cost data down to the service or account driving the change and look at the daily series rather than the monthly aggregate. Forecasts are only as good as the assumption that the future resembles the past.</p>
+        <p>The third failure mode is Trusted Advisor noise. In a large account, the cost checks will flag resources that are intentionally idle — a standby environment, a DR region, a load balancer waiting for a failover. The symptom is a check that has been in warning state for months and that everyone has learned to ignore, which is worse than not having the check at all because it trains the team to dismiss the category. The diagnostic move is to establish which flagged resources are intentional and either tag them so they can be excluded from review or accept the warning as a known exception with a documented reason.</p>
+        <p>There is a fourth, quieter failure mode: recommendations that are correct but never acted on. Compute Optimizer will happily tell you that forty instances are over-provisioned every day for a year, and nothing changes because no one owns the recommendation. This is not a technical failure, but it is the one that shows up most often in real accounts, and it is why the operational angle below matters more than the tooling.</p>
+      </section>
+      <section class="doc-section" id="sre-angle">
+        <h2 class="section-heading">7. The Operational and SRE Angle</h2>
+        <p>From an SRE perspective, these services are inputs to a recurring review process, not dashboards you look at once. The shape that works is a monthly cost review where Compute Optimizer recommendations are triaged into three buckets: act now, validate first, and ignore with a reason. The "validate first" bucket is the important one, because it is where the memory-blind recommendations and the cyclical-workload recommendations land, and it is where a careless team causes an incident. The runbook for a resize should include a check of the resource's actual peak utilization over a window longer than the recommendation's lookback, and for anything user-facing, a rollback plan.</p>
+        <p>The SLO implication is that cost optimization is a change to production, and changes to production carry availability risk. A resize that reduces memory headroom can turn a latency SLO breach into a recurring event, and the cost saving will not look like a saving once you account for the incident. The right framing is that right-sizing is a capacity change and should go through the same change management as any other capacity change, with the same monitoring and the same rollback path. The exam does not usually phrase it this way, but the scenarios that describe a cost problem in a latency-sensitive system are often testing whether you recognize that the cheapest instance is not always the correct one.</p>
+        <p>On the monitoring side, the useful alarms are not on the cost services themselves but on the resources they recommend changing. If you resize an instance, you want a CPU credit balance alarm for burstable families, a memory utilization alarm if the agent is publishing it, and a latency alarm on the service in front of it. For Cost Explorer, the useful operational artifact is a budget with a forecasted-spend alert, which turns a trend into a notification before the month closes rather than after. For Trusted Advisor, the useful artifact is a periodic export of check results into whatever system your team already reviews, so the checks are not a separate destination nobody visits.</p>
+        <p>The organizational angle is that someone has to own the recommendations. In a small team that is obvious; in an organization with a central platform team and dozens of product teams, it is not. The pattern that scales is a central FinOps function that owns the aggregate view and the commitment purchases, with per-team recommendations routed to the teams that own the workloads. Compute Optimizer's organization-level view and Trusted Advisor's organizational view exist precisely to make that split possible, and a scenario that describes a central team needing visibility across accounts is usually pointing at one of them.</p>
+      </section>
+      <section class="doc-section" id="gotchas">
+        <h2 class="section-heading">8. Edge Cases and Exam Gotchas</h2>
+        <p>The single most-tested gotcha is that Compute Optimizer needs memory metrics to make good EC2 recommendations, and those metrics come from the CloudWatch agent, not from the hypervisor. A question that describes a memory-bound workload being recommended for a smaller instance is testing whether you know the recommendation is CPU-biased without the agent. The second most-tested is that Trusted Advisor's cost checks require Business or Enterprise Support, so a scenario describing a Basic Support account that needs proactive cost findings has no correct answer involving Trusted Advisor.</p>
+        <p>Another recurring trap is confusing Cost Explorer's reservation recommendations with the act of purchasing. Cost Explorer recommends; you purchase in the RI or Savings Plans console, or via the API. A scenario that asks how to reduce cost by committing will have a correct answer that involves analyzing usage in Cost Explorer and then purchasing, and a distractor that implies Cost Explorer itself applies the discount. Similarly, Compute Optimizer recommends but does not resize — there is no auto-remediation, and a scenario implying automatic right-sizing is describing something you would have to build with EventBridge and Lambda on top of the recommendation.</p>
+        <p>The organization-level opt-in is a frequent source of wrong answers. Compute Optimizer and Trusted Advisor both have organization-wide views, but both require the management account to enable them, and Trusted Advisor additionally requires qualifying support in the member accounts. A scenario that says the management account cannot see member-account recommendations is usually describing a missing opt-in rather than a missing permission. Cost Explorer is different: consolidated billing means the management account sees member-account cost by default, with no opt-in required.</p>
+        <p>Finally, be careful with the word "idle." Trusted Advisor's idle checks and Compute Optimizer's over-provisioned finding are not the same thing. An idle resource is one that is doing nothing and could be deleted; an over-provisioned resource is one that is doing work but has more capacity than it needs and could be resized. A scenario that asks how to reduce cost from a resource that is genuinely unused is a Trusted Advisor or decommission question; one that asks about a resource that is busy but oversized is a Compute Optimizer question.</p>
+      </section>
+      <section class="doc-section" id="vs-comparison">
+        <h2 class="section-heading">9. This vs. the Services It Gets Confused With</h2>
+        <p>The comparison that matters most is against AWS Config and CloudWatch, because those are the two services that appear as distractors most often and the boundary is genuinely subtle. Config evaluates resources against rules and reports compliance; it can be used for cost governance if you write rules like "flag EBS volumes unattached for more than 30 days," but it does not generate recommendations and it does not know what an instance should be resized to. CloudWatch is the raw telemetry layer that Compute Optimizer consumes; it will show you the utilization but not the conclusion. If a scenario's correct answer is Config, the question will describe a custom rule or a compliance requirement. If it is CloudWatch, the question will describe a metric threshold or an alarm.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Service</th><th>Primary output</th><th>Pick it when…</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Compute Optimizer</td><td>Recommended resource configuration + savings</td><td>You know which resource and need to know what to change it to</td></tr>
+              <tr><td>Cost Explorer</td><td>Cost/usage breakdown, forecast, commitment recommendation</td><td>You need to attribute, trend, or forecast spend</td></tr>
+              <tr><td>Trusted Advisor</td><td>Best-practice check status across categories</td><td>You want proactive discovery of waste or risk you did not ask about</td></tr>
+              <tr><td>AWS Config</td><td>Rule compliance state</td><td>You defined a rule and need to know who violates it</td></tr>
+              <tr><td>CloudWatch</td><td>Raw metrics, logs, alarms</td><td>You need the underlying telemetry or a threshold alarm</td></tr>
+              <tr><td>Cost and Usage Report</td><td>Line-item billing data in S3</td><td>You need the most granular data for custom analysis</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The Cost and Usage Report is the other service worth separating out, because it is the one that appears in scenarios about custom FinOps tooling. CUR is not a UI; it is a scheduled delivery of line-item billing data to S3, and it is the source of truth that Cost Explorer's aggregates are built from. If a scenario asks for the most granular billing data available, or for data to feed a custom analytics pipeline, the answer is CUR. If it asks for a quick visual breakdown or a forecast, the answer is Cost Explorer. The two are complementary, not competing, and the exam expects you to know which one is the raw feed.</p>
+        <p>The practical rule for the exam is to read the scenario for the verb. "Recommend" points at Compute Optimizer. "Forecast," "attribute," or "break down" points at Cost Explorer. "Identify" or "check" points at Trusted Advisor. "Enforce" or "evaluate against a rule" points at Config. "Alert on a threshold" points at CloudWatch. "Export line items" points at CUR. The verbs are chosen deliberately, and matching the verb to the service is faster and more reliable than reasoning about the architecture.</p>
+      </section>
+      <section class="doc-section" id="lab">
+        <h2 class="section-heading">Hands-on Lab: Right-Sizing a Fleet from Evidence (45 min)</h2>
+        <div class="card card-green">
+          <p>The goal of this lab is to take a small fleet of instances and produce a defensible right-sizing decision for each one, using Compute Optimizer as the starting point and CloudWatch as the validation layer. The point is not to save money in the lab; it is to build the habit of validating a recommendation before acting on it, which is the behavior the exam scenarios reward.</p>
+          <p><strong>1. Establish the fleet.</strong> Launch five t3.medium instances in a single account, each running a different synthetic workload. Instance one should be genuinely idle — start it and do nothing. Instance two should be CPU-bound, running a busy loop that pins one core. Instance three should be memory-bound, allocating and touching a large block of memory while leaving CPU low. Instance four should be bursty, running a short CPU-intensive job every few minutes. Instance five should be steady and moderate, using roughly half a core continuously. Tag all five with a common project tag so you can find them later.</p>
+          <p><strong>2. Install the CloudWatch agent on instances three and five only.</strong> Configure it to publish the memory utilization metric. This is deliberate: you are creating a fleet where half the instances have memory visibility and half do not, so you can observe the difference in recommendation quality. Leave instances one, two, and four without the agent.</p>
+          <p><strong>3. Let the fleet run for at least 24 hours.</strong> Compute Optimizer needs a meaningful window of metrics before it produces recommendations, and the default lookback is 14 days, so a single day will produce preliminary findings rather than settled ones. Note the date and time you started the fleet so you can reason about the window later.</p>
+          <p><strong>4. Review the recommendations.</strong> Open Compute Optimizer in the console and filter to your five instances. For each one, record the finding classification, the recommended instance type, and the projected monthly savings. Pay particular attention to instance three, the memory-bound one: without the agent it would be recommended for a smaller instance on CPU evidence alone, and with the agent the recommendation should be more conservative. Compare what the console shows for instance three against what it shows for instance two.</p>
+          <p><strong>5. Validate each recommendation against raw metrics.</strong> For every instance, open CloudWatch and pull CPU utilization and, where available, memory utilization over the full period the fleet has been running. For instance four, the bursty one, look specifically at whether the recommendation's lookback window captured any of the bursts. If the bursts fall outside the window, the recommendation is built on a misleadingly flat series.</p>
+          <p><strong>6. Produce a decision table.</strong> For each of the five instances, write one row with the recommended type, the validated peak utilization, and a decision: act, validate further, or ignore. Instance one should be a decommission rather than a resize. Instance three should be flagged as needing memory evidence before acting. Instance four should be flagged as needing a longer lookback.</p>
+          <p><strong>7. Check Trusted Advisor.</strong> If your account has Business or Enterprise Support, open Trusted Advisor and look at the cost optimization category. Note which of your five instances appear in the low-utilization check and compare that list against Compute Optimizer's over-provisioned findings. The two lists will not be identical, and the difference is instructive: Trusted Advisor flags idle, Compute Optimizer flags oversized.</p>
+          <p><strong>8. Forecast the impact.</strong> Open Cost Explorer, filter to your project tag, and look at the daily cost series for the fleet. Use the forecast feature to project the next 30 days at current sizing, then estimate what the fleet would cost if you acted on every recommendation. The gap between those two numbers is the value of the exercise, and it is also the number you would take to a cost review.</p>
+          <p><strong>9. Clean up.</strong> Terminate all five instances and delete any EBS volumes and Elastic IPs you created. If you installed the CloudWatch agent, remove the agent configuration so it does not affect future instances launched from the same AMI.</p>
+        </div>
+      </section>
+      <section class="doc-section" id="quiz">
         <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
         
       <div class="scenario-card">
         <p class="scenario-question"><strong>Q1.</strong> A company suspects many EC2 instances are oversized relative to actual CPU/memory utilization but doesn't know which ones. What AWS service directly recommends right-sizing changes?</p>
-        <div class="scenario-options" id="opts-d54q0">
+        <div class="scenario-options" id="opts-d54q1">
             <div class="scenario-option">A. AWS Config</div>
             <div class="scenario-option">B. AWS Compute Optimizer</div>
             <div class="scenario-option">C. AWS Trusted Advisor cost checks only</div>
             <div class="scenario-option">D. CloudWatch Alarms</div>
         </div>
-        <button class="scenario-reveal-btn" onclick="revealAnswer('d54q0', 1)">Reveal Answer</button>
-        <div class="scenario-explanation" id="exp-d54q0"><strong>Correct answer: B.</strong> Compute Optimizer analyzes historical utilization and provides specific instance-type right-sizing recommendations with projected savings, more targeted than Trusted Advisor's general cost checks.</div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d54q1', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d54q1"><strong>Correct answer: B.</strong> Compute Optimizer analyzes historical utilization and provides specific instance-type right-sizing recommendations with projected savings, more targeted than Trusted Advisor's general cost checks.</div>
       </div>
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q2.</strong> A memory-bound application running on m5.xlarge instances is recommended by Compute Optimizer for m5.large. The application has no CloudWatch agent installed. What is the most likely explanation?</p>
+        <div class="scenario-options" id="opts-d54q2">
+            <div class="scenario-option">A. Compute Optimizer is malfunctioning and the recommendation should be ignored</div>
+            <div class="scenario-option">B. Without the CloudWatch agent publishing memory metrics, the recommendation is based on CPU evidence alone and may be unsafe</div>
+            <div class="scenario-option">C. The instances are in the wrong region</div>
+            <div class="scenario-option">D. Compute Optimizer only recommends smaller instances for burstable families</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d54q2', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d54q2"><strong>Correct answer: B.</strong> Compute Optimizer cannot see memory utilization unless the CloudWatch agent publishes it, so a CPU-light memory-bound workload will be recommended for a smaller instance on incomplete evidence.</div>
+      </div>
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q3.</strong> A FinOps team needs to see cost broken down by service and region across all 40 accounts in an AWS Organization, with a forecast for next month. What should they use?</p>
+        <div class="scenario-options" id="opts-d54q3">
+            <div class="scenario-option">A. Trusted Advisor organizational view</div>
+            <div class="scenario-option">B. Cost Explorer in the management account, using consolidated billing data</div>
+            <div class="scenario-option">C. Compute Optimizer organization-level recommendations</div>
+            <div class="scenario-option">D. CloudWatch cross-account dashboards</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d54q3', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d54q3"><strong>Correct answer: B.</strong> Consolidated billing means the management account sees member-account cost in Cost Explorer by default, with grouping, filtering, and forecasting available without any opt-in.</div>
+      </div>
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q4.</strong> An account on Basic Support wants proactive notification of idle load balancers and unassociated Elastic IP addresses. What is the blocker?</p>
+        <div class="scenario-options" id="opts-d54q4">
+            <div class="scenario-option">A. Nothing — Trusted Advisor cost checks are available on all support plans</div>
+            <div class="scenario-option">B. The full Trusted Advisor check set, including cost optimization, requires Business or Enterprise Support</div>
+            <div class="scenario-option">C. Idle load balancer checks require AWS Config instead</div>
+            <div class="scenario-option">D. Elastic IP checks are only available in the management account</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d54q4', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d54q4"><strong>Correct answer: B.</strong> The free tier exposes only a small subset of security and service quota checks; the cost optimization category requires Business or Enterprise Support.</div>
+      </div>
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q5.</strong> A batch workload runs a heavy job on the first of every month and is idle the rest of the time. Compute Optimizer flags the instances as over-provisioned. What is the most likely cause?</p>
+        <div class="scenario-options" id="opts-d54q5">
+            <div class="scenario-option">A. The instances are genuinely oversized and should be resized immediately</div>
+            <div class="scenario-option">B. The default 14-day lookback window did not capture the monthly burst, so the utilization series looks flat and low</div>
+            <div class="scenario-option">C. Compute Optimizer does not support batch workloads</div>
+            <div class="scenario-option">D. The instances need a larger instance type, not a smaller one</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d54q5', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d54q5"><strong>Correct answer: B.</strong> A 14-day window can miss monthly or quarterly patterns entirely; enhanced infrastructure metrics extend the lookback to three months and are the fix for cyclical workloads.</div>
+      </div>
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q6.</strong> A team wants to reduce cost by committing to a one-year term but needs the flexibility to change instance families and regions during the term. What should they purchase?</p>
+        <div class="scenario-options" id="opts-d54q6">
+            <div class="scenario-option">A. EC2 Instance Savings Plans</div>
+            <div class="scenario-option">B. Compute Savings Plans</div>
+            <div class="scenario-option">C. Standard Reserved Instances</div>
+            <div class="scenario-option">D. Convertible Reserved Instances in a single region</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d54q6', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d54q6"><strong>Correct answer: B.</strong> Compute Savings Plans apply across any instance family, region, and OS, trading a slightly lower discount than EC2 Instance Savings Plans for maximum flexibility. Cost Explorer's commitment recommendations are the tool that sizes the purchase.</div>
+      </div>
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q7.</strong> A company needs the most granular billing data available to feed a custom analytics pipeline that attributes spend to internal cost centers. What should they use?</p>
+        <div class="scenario-options" id="opts-d54q7">
+            <div class="scenario-option">A. Cost Explorer's built-in reports</div>
+            <div class="scenario-option">B. The AWS Cost and Usage Report, delivered as line items to S3</div>
+            <div class="scenario-option">C. Trusted Advisor cost checks</div>
+            <div class="scenario-option">D. Compute Optimizer's projected savings figures</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d54q7', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d54q7"><strong>Correct answer: B.</strong> CUR is the raw line-item billing feed delivered to S3 and is the source of truth that Cost Explorer's aggregates are built from; it is the right choice for custom tooling.</div>
+      </div>
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q8.</strong> A platform team wants Compute Optimizer recommendations from all member accounts visible in the management account. What must be done?</p>
+        <div class="scenario-options" id="opts-d54q8">
+            <div class="scenario-option">A. Nothing — organization-level visibility is automatic</div>
+            <div class="scenario-option">B. Opt in to Compute Optimizer at the organization level from the management account</div>
+            <div class="scenario-option">C. Enable AWS Config in every member account</div>
+            <div class="scenario-option">D. Attach an SCP granting compute-optimizer:* to all accounts</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d54q8', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d54q8"><strong>Correct answer: B.</strong> Compute Optimizer is opt-in per account by default; organization-level visibility requires the management account to enable it centrally.</div>
+      </div>
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q9.</strong> A team wants to automatically resize instances whenever Compute Optimizer flags them as over-provisioned. What is the correct characterization of this requirement?</p>
+        <div class="scenario-options" id="opts-d54q9">
+            <div class="scenario-option">A. Compute Optimizer performs the resize automatically once enabled</div>
+            <div class="scenario-option">B. Compute Optimizer only recommends; automation must be built on top of the recommendation using EventBridge and Lambda or similar</div>
+            <div class="scenario-option">C. Auto Scaling groups resize instances automatically based on Compute Optimizer findings</div>
+            <div class="scenario-option">D. Trusted Advisor performs the resize as part of its remediation</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d54q9', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d54q9"><strong>Correct answer: B.</strong> Compute Optimizer is a recommendation service with no auto-remediation; any automatic action has to be built on top of its findings.</div>
+      </div>
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q10.</strong> A company has a rule that no EBS volume may remain unattached for more than 30 days, and wants to know which accounts violate it. What is the right service?</p>
+        <div class="scenario-options" id="opts-d54q10">
+            <div class="scenario-option">A. Compute Optimizer</div>
+            <div class="scenario-option">B. AWS Config with a managed or custom rule</div>
+            <div class="scenario-option">C. Cost Explorer</div>
+            <div class="scenario-option">D. Trusted Advisor</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d54q10', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d54q10"><strong>Correct answer: B.</strong> Config evaluates resources against rules you define and reports compliance state; it is the right tool when the requirement is a custom policy rather than a recommendation.</div>
+      </div>
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q11.</strong> A Cost Explorer forecast for next month looks implausibly high. The account completed a large one-time data migration last month. What is the most likely explanation?</p>
+        <div class="scenario-options" id="opts-d54q11">
+            <div class="scenario-option">A. Cost Explorer is broken and the forecast should be ignored</div>
+            <div class="scenario-option">B. The forecast extrapolates the one-time migration cost as if it were recurring, bending the trend line</div>
+            <div class="scenario-option">C. The forecast only uses the last 24 hours of data</div>
+            <div class="scenario-option">D. Cost Explorer cannot forecast accounts with more than one region</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d54q11', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d54q11"><strong>Correct answer: B.</strong> Forecasts assume the future resembles the past; a one-time cost in the historical window will be extrapolated unless you filter it out or account for it.</div>
+      </div>
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q12.</strong> An operations team wants an alert before the month closes if spend is trending above the approved budget. What should they configure?</p>
+        <div class="scenario-options" id="opts-d54q12">
+            <div class="scenario-option">A. A CloudWatch alarm on the billing metric</div>
+            <div class="scenario-option">B. An AWS Budget with a forecasted-spend alert threshold</div>
+            <div class="scenario-option">C. A Trusted Advisor cost check</div>
+            <div class="scenario-option">D. A Compute Optimizer recommendation review</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d54q12', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d54q12"><strong>Correct answer: B.</strong> AWS Budgets supports forecasted-spend alerts, which fire before the period closes when the projection crosses a threshold — the operational complement to Cost Explorer's reporting.</div>
+      </div>
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q13.</strong> A Trusted Advisor cost check has been in warning state for eight months on a load balancer that is intentionally idle as a DR standby. What is the recommended handling?</p>
+        <div class="scenario-options" id="opts-d54q13">
+            <div class="scenario-option">A. Delete the load balancer to clear the warning</div>
+            <div class="scenario-option">B. Document it as a known exception with a reason, so the warning does not train the team to ignore the category</div>
+            <div class="scenario-option">C. Disable Trusted Advisor entirely</div>
+            <div class="scenario-option">D. Move the load balancer to a different account</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d54q13', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d54q13"><strong>Correct answer: B.</strong> Persistent unactioned warnings erode the value of the whole category; documenting intentional exceptions keeps the signal meaningful.</div>
+      </div>
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q14.</strong> A team needs to know the recommended instance type for an Auto Scaling group, not for individual instances. Does Compute Optimizer support this?</p>
+        <div class="scenario-options" id="opts-d54q14">
+            <div class="scenario-option">A. No, Compute Optimizer only covers standalone EC2 instances</div>
+            <div class="scenario-option">B. Yes, it produces recommendations for Auto Scaling groups covering instance type and desired capacity, acted on via the launch template</div>
+            <div class="scenario-option">C. Yes, but only for groups with a single instance</div>
+            <div class="scenario-option">D. Only if the group uses Spot instances</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d54q14', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d54q14"><strong>Correct answer: B.</strong> Compute Optimizer covers Auto Scaling groups as well as standalone instances, EBS volumes, Lambda functions, ECS services on Fargate, and commercial software licenses.</div>
+      </div>
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q15.</strong> A scenario asks how to identify which of 200 EC2 instances are running below 10% CPU utilization over the past week. Which service most directly answers this?</p>
+        <div class="scenario-options" id="opts-d54q15">
+            <div class="scenario-option">A. Cost Explorer, filtered by instance type</div>
+            <div class="scenario-option">B. CloudWatch metrics queried directly, or Trusted Advisor's low-utilization check</div>
+            <div class="scenario-option">C. AWS Config with a custom rule</div>
+            <div class="scenario-option">D. The Cost and Usage Report</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d54q15', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d54q15"><strong>Correct answer: B.</strong> The question asks for identification of low utilization, not a resize recommendation; CloudWatch holds the raw metric and Trusted Advisor's low-utilization check surfaces it proactively. Compute Optimizer would be the answer if the question asked what to resize them to.</div>
+      </div>
+      </section>
+      <section class="doc-section" id="preview">
+        <h2 class="section-heading">Peek into Tomorrow</h2>
+        <div class="card card-purple">
+          <p>Everything in this day assumed you could attribute a cost to something. Compute Optimizer attributes utilization to a resource, Cost Explorer attributes spend to a service, region, or account, and Trusted Advisor attributes waste to a check category. But the attribution that actually matters to a business is neither of those — it is which team, which product, and which environment is responsible for the spend, and none of the three services can answer that on their own. Cost Explorer can group by tag, but only if the tag exists, and only if it was applied consistently at creation time rather than retrofitted by a script six months later.</p>
+          <p>That gap is the open question tomorrow answers. Cost Allocation Tags only work if tagging is enforced at the point of resource creation, which turns a reporting problem into a governance problem — the enforcement mechanism is an SCP or a Config rule, not a Cost Explorer setting. And once spend is attributable, the next question is what to do when a team's forecasted spend crosses its allocation, which is where AWS Budgets' forecasted-versus-actual alerts come in. The Cost and Usage Report sits underneath all of it as the granular line-item feed that makes custom attribution possible when the built-in grouping is not enough. The measurement layer is in place; tomorrow is about making it accountable.</p>
+        </div>
+      </section>
+      <section class="doc-section" id="sources">
+        <h2 class="section-heading">Sources</h2>
+        <div class="card">
+          <ul class="source-list">
+            <li><a href="https://docs.aws.amazon.com/compute-optimizer/latest/ug/what-is-compute-optimizer.html" target="_blank">AWS Compute Optimizer User Guide — What Is AWS Compute Optimizer?</a></li>
+            <li><a href="https://docs.aws.amazon.com/compute-optimizer/latest/ug/metrics.html" target="_blank">AWS Compute Optimizer — Metrics and Lookback Periods</a></li>
+            <li><a href="https://docs.aws.amazon.com/compute-optimizer/latest/ug/enhanced-infrastructure-metrics.html" target="_blank">AWS Compute Optimizer — Enhanced Infrastructure Metrics</a></li>
+            <li><a href="https://docs.aws.amazon.com/awsaccountbilling/latest/aboutv2/ce-what-is.html" target="_blank">AWS Cost Explorer — Getting Started</a></li>
+            <li><a href="https://docs.aws.amazon.com/awsaccountbilling/latest/aboutv2/ce-forecast.html" target="_blank">AWS Cost Explorer — Forecasting Your Costs</a></li>
+            <li><a href="https://docs.aws.amazon.com/awssupport/latest/user/trusted-advisor.html" target="_blank">AWS Trusted Advisor — User Guide</a></li>
+            <li><a href="https://docs.aws.amazon.com/awssupport/latest/user/trusted-advisor-check-reference.html" target="_blank">AWS Trusted Advisor — Check Reference</a></li>
+            <li><a href="https://docs.aws.amazon.com/cur/latest/userguide/what-is-cur.html" target="_blank">AWS Cost and Usage Report — User Guide</a></li>
+            <li><a href="https://docs.aws.amazon.com/wellarchitected/latest/cost-optimization-pillar/welcome.html" target="_blank">AWS Well-Architected Framework — Cost Optimization Pillar</a></li>
+          </ul>
+        </div>
       </section>
       <div class="day-nav">
         <a href="day-053.html">&larr; Day 53: Cost Optimization — Savings Plans, RIs &amp; Spot Fleet Strategy</a>

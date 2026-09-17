@@ -104,38 +104,361 @@
         <span class="pill pill-green">Phase 2: Compute, Containers &amp; Global Databases</span>
       </div>
       <h1 class="hero-title">Application Load Balancer — Advanced Routing &amp; Target Groups</h1>
-      <div class="reading-meta">&#128337; ~3 min read &middot; 3 services covered</div>
+      <div class="reading-meta">&#128337; ~58 min read &middot; 3 services covered</div>
       <div class="services-grid">
         <span class="service-tag">ALB</span>
         <span class="service-tag">Target Groups</span>
         <span class="service-tag">Weighted Target Groups</span>
       </div>
       <div id="tracker"></div>
-      <section class="doc-section">
-        <h2 class="section-heading">Today's Concept</h2>
+
+      <section class="doc-section" id="recap">
+        <h2 class="section-heading">Recap: Where the Fleet Left Off</h2>
         <div class="card card-accent">
-          <p>ALB supports path-based, host-based, and header/query-string routing rules to multiple target groups, plus weighted target groups for blue/green and canary traffic shifting, and Lambda targets for serverless backends.</p>
-        </div>
-        <h3 class="sub-heading">Hands-on Lab / Practical Action (45 min)</h3>
-        <div class="card">
-          <p>Configure ALB weighted target groups to shift 10% of production traffic to a new (green) task set for a canary release.</p>
+          <p>Day 17 ended on a specific operational problem: an instance that has just been launched is not yet useful, and an instance that is about to be terminated is still holding live connections. Lifecycle hooks solve the first half of that problem by pausing an instance in <code>Pending:Wait</code> so bootstrap scripts can finish before it is considered healthy, and the mirror-image hook pauses it in <code>Terminating:Wait</code> so drain logic can run. The canonical drain action is to deregister the instance from the load balancer and wait for in-flight requests to complete, which is the point where yesterday's material and today's meet. Warm pools attack the same latency problem from the other direction: instead of making boot faster, they keep pre-initialized stopped instances on standby so scale-out promotes an already-bootstrapped instance rather than paying full boot and bootstrap cost.</p>
+          <p>Today extends that thread rather than replacing it. Lifecycle hooks and warm pools govern <em>when</em> a target is allowed to receive traffic; the Application Load Balancer governs <em>which</em> target receives it and in what proportion. The deregistration step inside a <code>Terminating:Wait</code> hook is only meaningful because the ALB maintains a target group health model that can be told to stop sending new requests to a specific target. Once you can control membership and health, the next question is whether you can control weight — and that is where weighted target groups turn a load balancer into a deployment mechanism.</p>
         </div>
       </section>
-      <section class="doc-section">
-        <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
-        
-      <div class="scenario-card">
-        <p class="scenario-question"><strong>Q1.</strong> What ALB feature enables a canary deployment shifting a small percentage of traffic to a new version before full cutover?</p>
-        <div class="scenario-options" id="opts-d18q0">
+
+      <section class="doc-section" id="why-on-exam">
+        <h2 class="section-heading">1. Why This Is on the Exam</h2>
+        <p>The Application Load Balancer sits at the intersection of three SAP-C02 concerns that are otherwise handled by separate services: traffic distribution, deployment safety, and TLS termination. That overlap is exactly why it appears so often. A question about blue/green deployment could be answered with CodeDeploy, with Route 53 weighted records, or with ALB weighted target groups, and the exam expects you to know which of those three is appropriate given the constraint stated in the scenario. A question about routing <code>/api</code> to one service and <code>/static</code> to another could be answered with a reverse proxy on EC2, with CloudFront behaviors, or with ALB listener rules — and again the discriminator is usually operational overhead rather than raw capability.</p>
+        <p>The architectural problem ALB solves is that a fleet of interchangeable compute units needs a stable, highly available entry point that can make routing decisions at layer 7. A Network Load Balancer can distribute connections but cannot inspect an HTTP path or a header, so it cannot split traffic by URL. A Classic Load Balancer can do rudimentary layer-7 work but lacks target groups, host-based rules, and native Lambda targets. ALB exists in the gap: it terminates HTTP and HTTPS, evaluates a prioritized list of rules against each request, and forwards to a named target group whose membership and health are managed independently of the listener configuration. That separation — listener rules on one side, target group membership on the other — is the design decision that makes canary releases and blue/green cutovers possible without touching DNS.</p>
+        <p>On the exam blueprint this maps most directly to the resilient architectures domain, because the failure-handling story (health checks, cross-zone balancing, connection draining) is what keeps a multi-AZ application available. It also shows up in the migration and modernization domain whenever a scenario describes decomposing a monolith into path-routed services, and in the cost domain when the correct answer is to consolidate several small load balancers behind one ALB with multiple listener rules. Expect at least one question where the deciding factor is that ALB is the only load balancer type that supports a Lambda target or a weighted split within a single rule.</p>
+      </section>
+
+      <section class="doc-section" id="mechanism">
+        <h2 class="section-heading">2. How a Request Actually Flows Through an ALB</h2>
+        <p>An ALB is not a single appliance; it is a set of load balancer nodes that AWS provisions across the Availability Zones you enable, with at least one node per enabled zone. When you create an internet-facing ALB you get a DNS name, and that name resolves to the IP addresses of those nodes. Because the node set changes as AWS scales the load balancer, AWS recommends that you never resolve the ALB DNS name to IPs and pin them — always reference the DNS name, or put a Route 53 alias record in front of it. This is the first mechanism detail worth internalizing: the ALB's own availability is a function of how many zones you enabled, and enabling only one zone makes the load balancer itself a single point of failure regardless of how many targets you registered.</p>
+        <p>When a request arrives, the listener evaluates its rules in priority order, lowest number first, and stops at the first match. Each rule has a condition (host header, path pattern, HTTP header, query string, source IP, or HTTP method) and an action. The action is either a forward to one or more target groups with optional weights, a redirect, a fixed response, or an authenticate action against a Cognito or OIDC identity provider. If no rule matches, the listener's default action applies. This ordering matters operationally: a broad rule with a low priority number will shadow every more specific rule behind it, and that is one of the most common misconfigurations in production ALBs.</p>
+        <p>Once a target group is selected, the ALB picks a target using the group's routing algorithm. The default is round robin, and the alternative is least outstanding requests, which biases toward targets with fewer in-flight requests and tends to produce better tail latency when request durations vary widely. The ALB then opens or reuses a connection to the target on the port and protocol the target group specifies, and the target group's health check determines whether that target was eligible in the first place. Health checks run on their own interval and threshold settings, independent of request traffic, which means a target can be receiving requests and still be marked unhealthy by the next check — the two systems are related but not synchronized.</p>
+        <p>Two protocol details are worth holding onto. First, ALB supports HTTP/1.1, HTTP/2, and gRPC, and it can translate between them: a client speaking HTTP/2 to the ALB can be forwarded to a target speaking HTTP/1.1. Second, when you enable a target group for a Lambda function, the ALB invokes the function with an event payload describing the request and expects a structured response, which means the Lambda target path has no persistent connection and no health check in the traditional sense. That difference is why Lambda targets behave differently under load and why they are usually the wrong answer when a scenario emphasizes steady high-throughput connection reuse.</p>
+      </section>
+
+      <section class="doc-section" id="decision-boundary">
+        <h2 class="section-heading">3. The Core Decision Boundary: Rule Conditions vs. Target Group Weights</h2>
+        <p>Almost every ALB scenario question reduces to a single fork: is the routing decision based on a property of the request, or on a proportion you want to control? If the answer is a property of the request — the hostname, the path, a header, a query parameter — the mechanism is a listener rule condition, and the rule forwards to exactly one target group. If the answer is a proportion — send 10% of traffic to the new version, or split evenly between two identical services — the mechanism is a single rule that forwards to two target groups with weights. Confusing these two produces designs that technically work but are operationally wrong, such as creating two listener rules with identical conditions and hoping the ALB splits between them, which it will not do; it will match the first rule and ignore the second.</p>
+        <p>The second-order decision is where the split should live at all. Weighted target groups keep the split inside the load balancer, which means it is instant, requires no DNS propagation, and can be changed by an API call. Route 53 weighted records put the split in DNS, which means clients cache the answer for the record's TTL and the effective split drifts from the configured one until caches expire. For a canary that you intend to ramp from 1% to 100% over an hour, the ALB approach is strictly better. For a split between two entirely separate stacks in different regions, DNS is the only option because a single ALB cannot span regions.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Requirement in the scenario</th><th>Mechanism</th><th>Why not the alternative</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Route <code>/api/*</code> to service A, everything else to service B</td><td>Two listener rules with path conditions</td><td>Weights cannot express a path predicate</td></tr>
+              <tr><td>Send 5% of all traffic to a new version</td><td>One rule, two target groups, weighted 95/5</td><td>Two identical rules never both match</td></tr>
+              <tr><td>Route by customer hostname (<code>a.example.com</code> vs <code>b.example.com</code>)</td><td>Host-header conditions on separate rules</td><td>Weights are blind to the request</td></tr>
+              <tr><td>Shift traffic between two regions</td><td>Route 53 weighted or latency records</td><td>An ALB is regional and cannot span regions</td></tr>
+              <tr><td>Serve a maintenance page without a backend</td><td>Fixed-response action on a rule</td><td>Forwarding requires a healthy target</td></tr>
+              <tr><td>Require login before reaching the app</td><td>Authenticate action (Cognito or OIDC)</td><td>Application-level auth adds code to every service</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The exam phrasing that signals the weighted-target-group answer is usually a stated desire to test a new version with a small, controllable, quickly reversible share of production traffic. The phrasing that signals a listener rule is usually a stated difference in the request itself — a path prefix, a subdomain, a mobile client sending a distinguishing header. When a scenario mentions both, the correct design is normally a listener rule that selects the target group pair, with weights applied inside that rule, so that only the canary's slice of the path-routed traffic is split.</p>
+      </section>
+
+      <section class="doc-section" id="config-tradeoffs">
+        <h2 class="section-heading">4. Configuration Modes and Their Tradeoffs</h2>
+        <p>The knobs on an ALB fall into four groups: scheme and zones, listener and rule configuration, target group settings, and attributes. The scheme decision is made once at creation and cannot be changed — an internet-facing ALB has public IPs on its nodes and an internal ALB does not. This is a genuine constraint rather than a preference, and it is why scenarios that describe a service that must be reachable only from inside a VPC and also from an on-premises network over Direct Connect point at an internal ALB with a private IP, not an internet-facing one with security group restrictions. The zone decision is also effectively permanent in the sense that enabling more zones later is easy but running with one zone is a design error you cannot patch around.</p>
+        <p>Listener configuration is where most of the operational flexibility lives. Each listener is bound to a port and protocol, and HTTPS listeners require an ACM certificate or an imported one. Rules within a listener are evaluated by priority, and the default action is the fallback. The tradeoff here is between rule count and rule clarity: you can express a great deal with a handful of well-ordered rules, but every additional rule is another chance to shadow a later one. A useful discipline is to reserve low priority numbers for the most specific conditions and let the default action handle the long tail, rather than writing an exhaustive set of rules that must all be kept in the right order.</p>
+        <p>Target group settings carry the health check configuration, the routing algorithm, the deregistration delay, and the stickiness settings. Deregistration delay is the one that most often surprises people: when a target is deregistered or fails a health check, the ALB stops sending new requests but keeps existing connections open for the configured delay, defaulting to 300 seconds, so that in-flight requests can finish. Setting it too high makes deployments slow because every removed target lingers; setting it too low causes 5xx errors during scale-in because requests are cut off mid-flight. This is the same drain concept that yesterday's <code>Terminating:Wait</code> lifecycle hook implements, and the two must be tuned together or one will undo the other.</p>
+        <p>Attributes are the least visible group and the most likely to be the hidden answer in a scenario. Cross-zone load balancing is on by default for ALBs and distributes requests evenly across all targets in all enabled zones rather than evenly across zones. Slow start gives a newly registered target a ramp-up period during which it receives a linearly increasing share of requests, which matters for JVM-based services that need to warm caches. Sticky sessions bind a client to a target using a cookie, which is sometimes necessary for stateful applications but undermines even distribution and complicates scale-in. Idle timeout controls how long an idle connection is held, and it must be shorter than the keep-alive timeout of the backend or the backend will close connections the ALB still believes are open.</p>
+      </section>
+
+      <section class="doc-section" id="sizing-limits">
+        <h2 class="section-heading">5. Sizing, Limits and Quotas</h2>
+        <p>ALB capacity is not something you provision. There is no instance size and no capacity unit to buy; AWS scales the load balancer's nodes in response to traffic, and the practical limits are expressed as quotas on configuration objects and as soft limits on new connections and requests per second that can be raised through a support request. This is a meaningful difference from an NLB, where you can attach Elastic IPs and reason about static addresses, and from a Gateway Load Balancer, which is built for a different purpose entirely. For exam purposes the important consequence is that "the load balancer is too small" is almost never the correct diagnosis; the bottleneck is nearly always the targets, the health check configuration, or a quota on a configuration object.</p>
+        <p>The quotas that actually constrain designs are the ones on rules and target groups. A listener supports a bounded number of rules, and each rule supports a bounded number of conditions and a bounded number of target groups in a forward action. Target groups have their own limits on registered targets, and each target group can be associated with a limited number of load balancers. Certificates are limited per load balancer, which matters when a scenario describes hosting hundreds of customer domains — the answer there is usually a wildcard certificate or SNI with a smaller set of certificates rather than one certificate per domain. These numbers change over time, so the exam-relevant skill is knowing which quota to check, not memorizing the current value.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Dimension</th><th>What to know</th><th>Design consequence</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Capacity model</td><td>Managed and auto-scaled; no instance sizing</td><td>Do not answer "resize the ALB"</td></tr>
+              <tr><td>Enabled zones</td><td>At least one node per enabled zone</td><td>One zone makes the ALB itself a SPOF</td></tr>
+              <tr><td>Rules per listener</td><td>Bounded, raisable by support request</td><td>Very large routing tables may need CloudFront or a different pattern</td></tr>
+              <tr><td>Targets per target group</td><td>Bounded, raisable</td><td>Huge fleets may need multiple target groups</td></tr>
+              <tr><td>Certificates per ALB</td><td>Bounded; SNI selects by hostname</td><td>Many custom domains need wildcards or a certificate strategy</td></tr>
+              <tr><td>Deregistration delay</td><td>Configurable, default 300 seconds</td><td>Directly sets deployment and scale-in duration</td></tr>
+              <tr><td>Idle timeout</td><td>Configurable, default 60 seconds</td><td>Must be shorter than backend keep-alive</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>Two sizing-adjacent behaviors are worth separating from quotas. First, the ALB's health check interval and thresholds determine how quickly a failing target is removed, and that detection latency is a real availability cost during an incident — a target that fails immediately after a check will keep receiving traffic until the next check plus the unhealthy threshold. Second, connection reuse means the ALB is not opening a new backend connection per request, so backend connection counts are governed by concurrency and keep-alive settings rather than by request rate. A scenario that describes exhausting a database's connection limit through an ALB is usually describing a target-side pooling problem, not a load balancer limit.</p>
+      </section>
+
+      <section class="doc-section" id="failure-modes">
+        <h2 class="section-heading">6. Failure Modes and What They Look Like in Production</h2>
+        <p>The most common ALB failure signature is a burst of HTTP 502 responses. A 502 from an ALB means the load balancer could not get a valid response from the target, and the usual causes are a target that crashed mid-request, a target whose security group no longer permits traffic from the ALB, a target listening on a different port than the target group expects, or a target that is being deregistered while still receiving requests because the deregistration delay is too short. The first diagnostic move is to check target health in the target group and then check the target's own logs for the request that failed — the ALB access logs will show the request reaching the load balancer, and the absence of a corresponding application log entry localizes the problem to the network path or the process.</p>
+        <p>A 503 from an ALB almost always means there are no healthy targets. That is a different failure than 502 and points at the health check rather than the application. The classic version of this is a health check path that returns a redirect or requires authentication, so every target is marked unhealthy even though the application is serving real traffic fine. The second classic version is a health check that is too aggressive relative to the application's startup time, so targets are marked unhealthy during boot and never get the chance to become healthy. Both are configuration errors that produce a total outage from a working application, which is why the health check path deserves the same review as the application code.</p>
+        <p>Timeouts present as 504 responses and are the hardest of the three to diagnose because they can originate on either side. The ALB's idle timeout governs how long it will wait on an idle connection; if the backend takes longer than that to produce a response, the ALB closes the connection and the client sees a 504. The mirror-image problem is a backend keep-alive timeout shorter than the ALB's idle timeout, which causes the backend to close connections the ALB still considers usable, producing intermittent 502s that are maddening to reproduce. The standard fix is to set the ALB idle timeout slightly longer than the backend's keep-alive timeout so the backend is always the side that closes first.</p>
+        <p>Two subtler failure modes are worth naming. Uneven distribution across targets usually means sticky sessions are enabled, or that one target is in a different zone and cross-zone balancing is disabled, or that the routing algorithm is least-outstanding-requests and one target is genuinely slower. And a canary that appears to receive no traffic at all is usually a weight configuration error rather than a routing error — a weight of zero on the new target group, or a second listener rule with a lower priority number that matches first and forwards everything to the old target group. Both are configuration mistakes that look like application bugs from the outside.</p>
+      </section>
+
+      <section class="doc-section" id="sre-angle">
+        <h2 class="section-heading">7. The Operational and SRE Angle</h2>
+        <p>From an SRE perspective the ALB is the single best place to measure the user-visible health of a service, because it sees every request before any application code does. The metrics that matter most are the target response time, the request count split by target group, the HTTP code counts broken out by 2xx, 3xx, 4xx, and 5xx, and the unhealthy host count. The 5xx count is the closest thing to a direct SLO signal available without instrumenting the application, and an alarm on the 5xx rate as a proportion of total requests is a reasonable default for any service behind an ALB. The unhealthy host count is the leading indicator: it moves before user-visible errors do, because the ALB removes targets from rotation before the error rate climbs.</p>
+        <p>Access logs are the other half of the observability story. ALB access logs record the request time, the target that handled it, the target and load balancer response codes separately, and the time spent in each phase of the request. That separation is what makes them more useful than application logs for latency work: you can tell whether time was spent waiting for the target to respond or in the connection setup, which distinguishes an application problem from a networking problem. Enabling access logs to S3 and querying them with Athena is a common pattern, and it is the mechanism behind most "which endpoint is slow" investigations.</p>
+        <p>The runbook shape for an ALB-fronted service has a predictable structure. First, check target health and the unhealthy host count to determine whether the problem is membership or performance. Second, check the 5xx breakdown to distinguish 502 (target unreachable or crashed) from 503 (no healthy targets) from 504 (timeout). Third, check whether a recent deployment changed the target group membership or the listener rules, because a rule ordering mistake produces symptoms that look exactly like an application routing bug. Fourth, check the deregistration delay and idle timeout against the backend's keep-alive settings, since a mismatch there produces intermittent errors that correlate with deployments and scale events rather than with load.</p>
+        <p>For deployment safety, the SRE-relevant property of weighted target groups is that the weight is an API-controlled number, which means a canary can be automated: shift 5%, watch the 5xx rate and target response time for a defined bake period, and either continue the ramp or set the weight back to zero. That rollback is a single API call with no DNS propagation delay and no client-side caching, which is why it is a better rollback mechanism than a DNS-based split. The corresponding discipline is to alarm on the canary target group's error rate separately from the stable group's, because a 5% canary with a 20% error rate only moves the aggregate error rate by one percentage point — invisible in the aggregate, obvious when measured per target group.</p>
+      </section>
+
+      <section class="doc-section" id="gotchas">
+        <h2 class="section-heading">8. Edge Cases and Exam Gotchas</h2>
+        <p>The single most-tested gotcha is that two listener rules with identical conditions do not split traffic. The ALB evaluates rules in priority order and stops at the first match, so the second rule is dead configuration. Any scenario that describes a percentage split must be answered with weights inside one rule, and any scenario that describes two rules with the same condition is describing a bug. A closely related trap is rule ordering: a rule matching <code>/*</code> with a low priority number will shadow a rule matching <code>/api/*</code> with a higher number, and the symptom is that the specific route appears to be ignored.</p>
+        <p>Security groups are the second recurring trap. An ALB has its own security group, and the targets have theirs; the target's security group must allow traffic from the ALB's security group on the target port. A scenario that describes targets that are healthy in the console but return 502s is often describing a security group that permits the client but not the load balancer. The related detail is that an internal ALB's nodes have private IPs from the subnet CIDR, so a target security group rule referencing the ALB's security group is more robust than one referencing a CIDR range that may change.</p>
+        <p>Health check configuration produces a cluster of gotchas. The health check port can differ from the traffic port, which is useful for a dedicated health endpoint but is also a common source of confusion. The health check protocol can be HTTP even when the traffic protocol is HTTPS, which is fine internally but must be deliberate. A health check that returns a 3xx is treated as unhealthy unless you configure the matcher to accept it, so an application that redirects unauthenticated requests to a login page will fail its health check by default. And a health check path that hits a database-backed endpoint turns a database slowdown into a total outage, because every target fails its check at once — the standard mitigation is a shallow health check that verifies the process is alive and a separate deep check that is not used for load balancer membership.</p>
+        <p>The remaining gotchas are about scope. An ALB is regional, so any scenario requiring a single endpoint across regions is describing Global Accelerator or Route 53, not an ALB. An ALB cannot do TCP or UDP passthrough, so a scenario about a non-HTTP protocol is describing an NLB. Lambda targets have no health check and no connection reuse, so a scenario emphasizing sustained throughput or long-lived connections is not a Lambda target scenario. And an ALB does not terminate traffic for a private service consumed across accounts — that is PrivateLink, which presents an NLB-backed endpoint service rather than an ALB.</p>
+      </section>
+
+      <section class="doc-section" id="vs-comparison">
+        <h2 class="section-heading">9. ALB vs. NLB vs. CLB vs. CloudFront</h2>
+        <p>The load balancer family splits along the layer at which the decision is made. An ALB makes decisions at layer 7 and therefore understands HTTP semantics; an NLB makes decisions at layer 4 and therefore understands connections and ports but not paths. A Classic Load Balancer is the legacy option that predates target groups and should not appear as the correct answer in a new design. CloudFront is not a load balancer at all but a CDN whose behaviors can perform some of the same routing work at the edge, which is why it sometimes appears as a distractor in routing questions.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Service</th><th>Decision layer</th><th>Pick it when…</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Application Load Balancer</td><td>Layer 7 (HTTP/HTTPS, gRPC)</td><td>You need path, host, header, or query routing; weighted splits; redirects; or Lambda targets</td></tr>
+              <tr><td>Network Load Balancer</td><td>Layer 4 (TCP/UDP/TLS)</td><td>You need extreme throughput, static IPs, or non-HTTP protocols</td></tr>
+              <tr><td>Classic Load Balancer</td><td>Layer 4 and limited layer 7</td><td>Legacy only; not the answer for a new design</td></tr>
+              <tr><td>CloudFront</td><td>Edge, layer 7</td><td>You need global caching, edge TLS, or WAF at the edge in front of an ALB</td></tr>
+              <tr><td>API Gateway</td><td>Layer 7, API semantics</td><td>You need API keys, usage plans, request validation, or native AWS service integrations</td></tr>
+              <tr><td>Global Accelerator</td><td>Network, anycast</td><td>You need a static global IP with fast regional failover</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The practical rule is to start from the protocol and the predicate. If the protocol is HTTP and the routing predicate is something in the request, the answer is an ALB. If the protocol is not HTTP, or the requirement is a static IP address, the answer is an NLB. If the requirement is a global entry point with caching, the answer is CloudFront in front of an ALB, and the two are complementary rather than alternatives — CloudFront terminates the client connection at the edge and forwards to the ALB, which then routes to targets. If the requirement is API management rather than traffic distribution, the answer is API Gateway, and the fact that API Gateway can also front a Lambda does not make it a substitute for an ALB in front of a container fleet.</p>
+        <p>One comparison that comes up specifically in migration scenarios is ALB versus a self-managed reverse proxy such as NGINX on EC2. The functional overlap is real, but the operational difference is that the ALB is a managed, multi-AZ, auto-scaled service with no patching, no capacity planning, and native integration with ACM, WAF, and Auto Scaling group lifecycle. A scenario that emphasizes reducing operational overhead while keeping path-based routing is pointing at the ALB, and a scenario that requires a custom module or a protocol the ALB does not support is the rare case where the self-managed proxy is correct.</p>
+      </section>
+
+      <section class="doc-section" id="lab">
+        <h2 class="section-heading">Hands-on Lab: A Weighted Canary Behind One Listener Rule</h2>
+        <div class="card card-green">
+          <p>The goal is to stand up a single ALB that serves two versions of the same service and lets you shift traffic between them by changing one number, then verify the shift with per-target-group metrics. Work in a sandbox account and tear everything down at the end.</p>
+          <p><strong>1. Create the network and the two target groups.</strong> In a VPC with at least two public subnets in different Availability Zones, create two target groups of type <code>ip</code> or <code>instance</code> — call them <code>tg-blue</code> and <code>tg-green</code>. Give both the same health check path, for example <code>/health</code>, and the same port. Register at least two targets in each group so that a single target failure does not take a whole version out of rotation. Confirm both groups report all targets healthy before continuing; a canary built on an unhealthy target group produces 502s that look like a code problem.</p>
+          <p><strong>2. Create the ALB and one listener.</strong> Create an internet-facing ALB across the same two subnets and attach a security group that permits inbound HTTP from your IP. Create an HTTP listener on port 80 with a default action that forwards to <code>tg-blue</code> with weight 100. Verify that requests to the ALB DNS name reach the blue version and that the target group shows healthy targets receiving traffic.</p>
+          <p><strong>3. Add the weighted rule.</strong> Add a listener rule with a condition that matches the traffic you want to canary — for a full canary, a path pattern of <code>/*</code>; for a scoped canary, a path prefix such as <code>/checkout/*</code>. Set the action to forward to two target groups: <code>tg-blue</code> with weight 90 and <code>tg-green</code> with weight 10. Give the rule a priority number lower than any broader rule so it is evaluated first. This is the step where the exam gotcha lives: the split is expressed as weights inside one rule, not as two rules with the same condition.</p>
+          <p><strong>4. Verify the split empirically.</strong> Send a few hundred requests to the ALB in a loop and count how many responses identify as the green version. Expect roughly the configured proportion, with variance that shrinks as the sample grows. Then check the ALB's per-target-group request count metric in CloudWatch and confirm both groups are receiving traffic in approximately the configured ratio. If green receives nothing, check the weight value and the rule priority before suspecting the application.</p>
+          <p><strong>5. Exercise the rollback path.</strong> Change the weights to 100/0 and confirm that green stops receiving traffic within seconds, with no DNS change and no client-side caching involved. Then change them to 50/50 and confirm the shift is equally immediate. This is the property that makes weighted target groups a better canary mechanism than a DNS split, and it is worth feeling directly rather than taking on faith.</p>
+          <p><strong>6. Break it deliberately.</strong> Stop the application on one green target and watch the target group mark it unhealthy while the blue group continues serving. Then set the green target group's health check path to something that returns a 404 and observe the whole green group go unhealthy — the ALB will still route the configured weight to it, and the result is 502s for that share of traffic. This is the failure mode to recognize in production: a canary that is configured correctly but unhealthy produces errors proportional to its weight.</p>
+          <p><strong>7. Tune the drain and timeout settings.</strong> Set the target group's deregistration delay to a short value such as 30 seconds, deregister one target, and observe how quickly it leaves rotation. Then compare that against the ALB idle timeout and the backend's keep-alive timeout, and set the idle timeout slightly higher than the backend's keep-alive so the backend is always the side that closes first. Record the three values in your notes; the relationship between them is a recurring exam theme.</p>
+          <p><strong>8. Clean up.</strong> Delete the listener rule, the listener, the ALB, both target groups, and any instances or tasks you launched. Confirm in the console that no load balancer remains, since an idle ALB still bills hourly.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="quiz">
+        <h2 class="section-heading">Scenario Question Drills</h2>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q1.</strong> A team wants to release a new version of a service to 5% of production traffic and be able to revert within seconds if error rates rise. The service runs behind an Application Load Balancer. What should they configure?</p>
+          <div class="scenario-options" id="opts-d18q1">
+            <div class="scenario-option">A. Two listener rules with identical conditions, one forwarding to each version</div>
+            <div class="scenario-option">B. A single listener rule forwarding to two target groups with weights of 95 and 5</div>
+            <div class="scenario-option">C. A Route 53 weighted record set with a 5-second TTL</div>
+            <div class="scenario-option">D. Sticky sessions enabled on the target group</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d18q1', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d18q1"><strong>Correct answer: B.</strong> Weighted target groups inside one rule give an instant, API-controlled split with no DNS caching. Two rules with identical conditions never both match, and a DNS split is subject to client-side TTL caching.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q2.</strong> An ALB listener has a rule with priority 10 matching <code>/*</code> and forwarding to the default target group, and a rule with priority 20 matching <code>/api/*</code> forwarding to the API target group. Requests to <code>/api/orders</code> are reaching the default target group. Why?</p>
+          <div class="scenario-options" id="opts-d18q2">
+            <div class="scenario-option">A. The API target group has no healthy targets</div>
+            <div class="scenario-option">B. Rules are evaluated in priority order and the <code>/*</code> rule matches first, shadowing the more specific rule</div>
+            <div class="scenario-option">C. Path conditions require HTTPS listeners</div>
+            <div class="scenario-option">D. The ALB needs cross-zone load balancing enabled</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d18q2', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d18q2"><strong>Correct answer: B.</strong> The ALB stops at the first matching rule, so a broad low-priority-number rule shadows every more specific rule behind it. The fix is to give the specific rule the lower priority number.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q3.</strong> Users report intermittent 502 errors from an ALB-fronted service. The application logs show no corresponding errors, and the targets are healthy in the console. What is the most likely cause?</p>
+          <div class="scenario-options" id="opts-d18q3">
+            <div class="scenario-option">A. The ALB is under-provisioned and needs a larger capacity unit</div>
+            <div class="scenario-option">B. The backend keep-alive timeout is shorter than the ALB idle timeout, so the backend closes connections the ALB still considers usable</div>
+            <div class="scenario-option">C. Cross-zone load balancing is disabled</div>
+            <div class="scenario-option">D. The health check interval is too long</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d18q3', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d18q3"><strong>Correct answer: B.</strong> A backend that closes idle connections before the ALB does produces intermittent 502s with no application-side error. Set the ALB idle timeout slightly higher than the backend keep-alive timeout.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q4.</strong> A service must be reachable from an on-premises network over Direct Connect and from other VPCs, but must never be reachable from the public internet. Which ALB configuration is correct?</p>
+          <div class="scenario-options" id="opts-d18q4">
+            <div class="scenario-option">A. An internet-facing ALB with a security group that blocks public CIDRs</div>
+            <div class="scenario-option">B. An internal ALB with private IPs in the VPC subnets</div>
+            <div class="scenario-option">C. A Network Load Balancer with an Elastic IP</div>
+            <div class="scenario-option">D. An internet-facing ALB with a WAF rule blocking all traffic</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d18q4', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d18q4"><strong>Correct answer: B.</strong> An internal ALB has only private IPs and is reachable from within the VPC, peered networks, and on-premises over Direct Connect or VPN. The scheme is set at creation and cannot be changed later.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q5.</strong> Every target in a target group is marked unhealthy, but the application responds correctly when tested directly from an instance in the same subnet. The health check path is <code>/dashboard</code>, which redirects unauthenticated requests to a login page. What is the fix?</p>
+          <div class="scenario-options" id="opts-d18q5">
+            <div class="scenario-option">A. Increase the health check timeout</div>
+            <div class="scenario-option">B. Point the health check at an unauthenticated endpoint that returns 200, or configure the matcher to accept the redirect</div>
+            <div class="scenario-option">C. Disable health checks entirely</div>
+            <div class="scenario-option">D. Move the targets to a different Availability Zone</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d18q5', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d18q5"><strong>Correct answer: B.</strong> A 3xx response is treated as unhealthy unless the matcher accepts it. Health checks should target a shallow, unauthenticated endpoint that returns 200.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q6.</strong> A team needs to serve a static maintenance page during a database migration without running any backend. What ALB feature should they use?</p>
+          <div class="scenario-options" id="opts-d18q6">
+            <div class="scenario-option">A. A target group with zero registered targets</div>
+            <div class="scenario-option">B. A fixed-response action on a listener rule</div>
+            <div class="scenario-option">C. A redirect action to an S3 website endpoint</div>
+            <div class="scenario-option">D. A Lambda target that returns HTML</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d18q6', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d18q6"><strong>Correct answer: B.</strong> A fixed-response action returns a configured status code and body directly from the ALB with no backend involved. A redirect would require the client to reach another endpoint.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q7.</strong> A canary target group is configured with a weight of 10, but CloudWatch shows it receiving zero requests. The targets are healthy. What should be checked first?</p>
+          <div class="scenario-options" id="opts-d18q7">
+            <div class="scenario-option">A. Whether the ALB has enough capacity</div>
+            <div class="scenario-option">B. Whether a higher-priority rule with a broader condition is matching first and forwarding elsewhere</div>
+            <div class="scenario-option">C. Whether the target group's routing algorithm is round robin</div>
+            <div class="scenario-option">D. Whether access logs are enabled</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d18q7', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d18q7"><strong>Correct answer: B.</strong> A broader rule with a lower priority number will match first and forward all traffic to the stable target group, leaving the weighted rule unreachable.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q8.</strong> A service behind an ALB must accept gRPC traffic from clients while the backend containers speak HTTP/1.1. Is this supported?</p>
+          <div class="scenario-options" id="opts-d18q8">
+            <div class="scenario-option">A. No, the ALB requires the same protocol end to end</div>
+            <div class="scenario-option">B. Yes, the ALB supports gRPC on the listener and can forward to HTTP/1.1 targets</div>
+            <div class="scenario-option">C. Only with a Network Load Balancer in front</div>
+            <div class="scenario-option">D. Only if the target group uses TLS</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d18q8', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d18q8"><strong>Correct answer: B.</strong> ALB supports HTTP/1.1, HTTP/2, and gRPC and can translate between them, so a gRPC listener can forward to HTTP/1.1 targets.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q9.</strong> During a scale-in event, users see a brief spike of 5xx errors as instances are removed. The application handles requests in under two seconds. What is the most likely cause?</p>
+          <div class="scenario-options" id="opts-d18q9">
+            <div class="scenario-option">A. The deregistration delay is set too low, cutting off in-flight requests</div>
+            <div class="scenario-option">B. The health check interval is too short</div>
+            <div class="scenario-option">C. Cross-zone load balancing is disabled</div>
+            <div class="scenario-option">D. The ALB needs more enabled Availability Zones</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d18q9', 0)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d18q9"><strong>Correct answer: A.</strong> Deregistration delay controls how long existing connections are allowed to finish after a target leaves rotation. Too low a value cuts off in-flight requests and produces 5xx errors during scale-in.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q10.</strong> A company hosts 200 customer-specific domains on a single ALB and needs TLS for each. What is the recommended approach?</p>
+          <div class="scenario-options" id="opts-d18q10">
+            <div class="scenario-option">A. One ALB per customer domain</div>
+            <div class="scenario-option">B. Use SNI with a wildcard certificate or a small set of certificates covering the domains, subject to the per-ALB certificate quota</div>
+            <div class="scenario-option">C. Terminate TLS on each target instead of the ALB</div>
+            <div class="scenario-option">D. Use a single self-signed certificate for all domains</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d18q10', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d18q10"><strong>Correct answer: B.</strong> ALB supports SNI and selects a certificate by hostname, but the number of certificates per load balancer is bounded, so wildcards or a consolidated certificate strategy are the practical answer.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q11.</strong> A team wants a newly launched instance to receive a gradually increasing share of traffic rather than the full round-robin share immediately, because the application needs to warm its cache. What ALB feature addresses this?</p>
+          <div class="scenario-options" id="opts-d18q11">
             <div class="scenario-option">A. Sticky sessions</div>
-            <div class="scenario-option">B. Weighted target groups on a single listener rule</div>
-            <div class="scenario-option">C. Cross-zone load balancing</div>
-            <div class="scenario-option">D. Connection draining</div>
+            <div class="scenario-option">B. Slow start mode on the target group</div>
+            <div class="scenario-option">C. Least outstanding requests routing</div>
+            <div class="scenario-option">D. A longer health check interval</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d18q11', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d18q11"><strong>Correct answer: B.</strong> Slow start gives a newly registered target a ramp-up period during which its share of requests increases linearly, which suits applications that need to warm caches or JIT-compile.</div>
         </div>
-        <button class="scenario-reveal-btn" onclick="revealAnswer('d18q0', 1)">Reveal Answer</button>
-        <div class="scenario-explanation" id="exp-d18q0"><strong>Correct answer: B.</strong> Weighted target groups let one routing rule split traffic by percentage across two target groups — the standard ALB-native canary/blue-green mechanism.</div>
-      </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q12.</strong> A scenario requires a single global entry point with a static IP address that fails over between two regions in seconds, in front of ALBs in each region. What should be used?</p>
+          <div class="scenario-options" id="opts-d18q12">
+            <div class="scenario-option">A. A single ALB with cross-zone load balancing</div>
+            <div class="scenario-option">B. AWS Global Accelerator with endpoint groups in each region</div>
+            <div class="scenario-option">C. Route 53 latency records with a 300-second TTL</div>
+            <div class="scenario-option">D. A Network Load Balancer with an Elastic IP</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d18q12', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d18q12"><strong>Correct answer: B.</strong> Global Accelerator provides static anycast IPs and reroutes at the AWS network edge, avoiding DNS caching delays. An ALB is regional and cannot span regions.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q13.</strong> An ALB forwards to a Lambda target. Which statement about this configuration is accurate?</p>
+          <div class="scenario-options" id="opts-d18q13">
+            <div class="scenario-option">A. The Lambda target participates in target group health checks like an instance</div>
+            <div class="scenario-option">B. The ALB invokes the function per request with a structured event and there is no persistent connection or traditional health check</div>
+            <div class="scenario-option">C. Lambda targets require an NLB in front of the ALB</div>
+            <div class="scenario-option">D. Lambda targets cannot be used with path-based routing</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d18q13', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d18q13"><strong>Correct answer: B.</strong> Lambda targets are invoked per request with a structured event payload and have no persistent connection or instance-style health check, which is why they behave differently under sustained load.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q14.</strong> A team wants to alarm on the user-visible error rate of a service behind an ALB before application-level instrumentation is in place. Which metric is the most direct signal?</p>
+          <div class="scenario-options" id="opts-d18q14">
+            <div class="scenario-option">A. The ALB's active connection count</div>
+            <div class="scenario-option">B. The target group's HTTPCode_Target_5XX_Count as a proportion of total requests</div>
+            <div class="scenario-option">C. The number of enabled Availability Zones</div>
+            <div class="scenario-option">D. The target group's healthy host count only</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d18q14', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d18q14"><strong>Correct answer: B.</strong> The 5xx count as a proportion of total requests is the closest thing to a direct SLO signal available without instrumenting the application. The unhealthy host count is a leading indicator but not a user-visible error measure.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q15.</strong> A canary is running at 5% weight. The canary version has a 20% error rate while the stable version is healthy. The aggregate ALB error rate has barely moved. What should the team do to detect this reliably?</p>
+          <div class="scenario-options" id="opts-d18q15">
+            <div class="scenario-option">A. Alarm on the aggregate 5xx rate only, since it is the user-visible metric</div>
+            <div class="scenario-option">B. Alarm on the canary target group's error rate separately from the stable group's</div>
+            <div class="scenario-option">C. Increase the canary weight to 50% so the signal is stronger</div>
+            <div class="scenario-option">D. Disable health checks on the canary target group</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d18q15', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d18q15"><strong>Correct answer: B.</strong> A 5% canary with a 20% error rate moves the aggregate error rate by only about one percentage point, which is invisible. Per-target-group alarms make the canary's own error rate obvious.</div>
+        </div>
       </section>
+
+      <section class="doc-section" id="preview">
+        <h2 class="section-heading">Peek into Tomorrow</h2>
+        <div class="card card-purple">
+          <p>Everything in today's design assumes the backend is a long-running process that the load balancer can hold a connection to and health-check on an interval. That assumption is what makes weighted target groups, deregistration delay, and slow start meaningful — they all describe the lifecycle of a persistent target. Tomorrow's material breaks that assumption. When the compute unit is a Lambda function, there is no persistent connection to drain, no instance to warm with a slow start, and no health check that can mark a function unhealthy before it is invoked. The load balancer's job of deciding <em>which</em> target receives a request is replaced by a different question: how many concurrent invocations should be allowed to exist at once, and what happens to the requests that arrive when that ceiling is reached.</p>
+          <p>That question has two answers that sound similar and behave very differently. One caps concurrency and makes excess invocations wait or fail; the other pre-warms execution environments so that a burst of traffic does not pay the initialization cost that a cold start imposes. Choosing between them is the same kind of decision as choosing between a weighted canary and a full cutover — it depends on whether the constraint is a downstream system that must be protected or a latency budget that must be met. The other unresolved thread is what happens when the event source is a stream rather than an HTTP request, because a stream delivers batches and a batch can fail partially, which is a failure mode with no analogue in the ALB world we just finished.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="sources">
+        <h2 class="section-heading">Sources</h2>
+        <div class="card">
+          <ul class="source-list">
+            <li><a href="https://docs.aws.amazon.com/elasticloadbalancing/latest/application/introduction.html" target="_blank" rel="noopener">What is an Application Load Balancer? — AWS Elastic Load Balancing User Guide</a></li>
+            <li><a href="https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-listeners.html" target="_blank" rel="noopener">Listeners for your Application Load Balancer — AWS Elastic Load Balancing User Guide</a></li>
+            <li><a href="https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-target-groups.html" target="_blank" rel="noopener">Target groups for your Application Load Balancers — AWS Elastic Load Balancing User Guide</a></li>
+            <li><a href="https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-target-group-attributes.html" target="_blank" rel="noopener">Target group attributes — AWS Elastic Load Balancing User Guide</a></li>
+            <li><a href="https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-limits.html" target="_blank" rel="noopener">Quotas for your Application Load Balancers — AWS Elastic Load Balancing User Guide</a></li>
+            <li><a href="https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-access-logs.html" target="_blank" rel="noopener">Access logs for your Application Load Balancer — AWS Elastic Load Balancing User Guide</a></li>
+            <li><a href="https://docs.aws.amazon.com/elasticloadbalancing/latest/application/lambda-functions.html" target="_blank" rel="noopener">Lambda targets for your Application Load Balancer — AWS Elastic Load Balancing User Guide</a></li>
+            <li><a href="https://docs.aws.amazon.com/elasticloadbalancing/latest/application/application-load-balancer-cloudwatch-metrics.html" target="_blank" rel="noopener">CloudWatch metrics for your Application Load Balancer — AWS Elastic Load Balancing User Guide</a></li>
+            <li><a href="https://docs.aws.amazon.com/whitepapers/latest/blue-green-deployments/welcome.html" target="_blank" rel="noopener">Blue/Green Deployments on AWS — AWS Whitepaper</a></li>
+            <li><a href="https://docs.aws.amazon.com/wellarchitected/latest/reliability-pillar/welcome.html" target="_blank" rel="noopener">Reliability Pillar — AWS Well-Architected Framework</a></li>
+          </ul>
+        </div>
+      </section>
+
       <div class="day-nav">
         <a href="day-017.html">&larr; Day 17: Auto Scaling Groups — Lifecycle Hooks &amp; Warm Pools</a>
         <button class="btn btn-green" onclick="markComplete(18, 'day-019.html')">Mark Day 18 Complete &rarr;</button>

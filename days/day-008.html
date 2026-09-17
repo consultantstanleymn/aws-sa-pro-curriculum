@@ -104,36 +104,364 @@
         <span class="pill pill-green">Phase 1: Multi-Account Governance &amp; Networking</span>
       </div>
       <h1 class="hero-title">Transit Gateway (TGW) Core Routing</h1>
-      <div class="reading-meta">&#128337; ~3 min read &middot; 2 services covered</div>
+      <div class="reading-meta">&#128337; ~58 min read &middot; 2 services covered</div>
       <div class="services-grid">
         <span class="service-tag">Transit Gateway</span>
         <span class="service-tag">TGW Route Tables</span>
       </div>
       <div id="tracker"></div>
-      <section class="doc-section">
-        <h2 class="section-heading">Today's Concept</h2>
+
+      <section class="doc-section" id="recap">
+        <h2 class="section-heading">Recap: From Governance to Connectivity</h2>
         <div class="card card-accent">
-          <p>Transit Gateway is a regional network transit hub connecting VPCs and on-prem networks via a hub-and-spoke model, replacing an unmanageable full mesh of VPC peering. Each attachment associates with one TGW route table and propagates routes into others, enabling fine-grained segmentation (e.g. isolating a shared-services VPC from production VPCs).</p>
-        </div>
-        <h3 class="sub-heading">Hands-on Lab / Practical Action (45 min)</h3>
-        <div class="card">
-          <p>Build a hub-and-spoke VPC topology connecting three isolated VPCs through a single Transit Gateway with segmented route tables.</p>
+          <p>Week 1 closed on a composition argument rather than a new service: landing zone design, SCP guardrails, Control Tower automation, centralized SSO, and shared networking composition are not five separate topics but one governance model where each layer makes the others cheaper to operate. The shared networking piece was the thinnest of the five, and deliberately so. AWS RAM let a central network account share subnets, Transit Gateways, and Resolver rules with application accounts, which answered the ownership question — who owns the VPC — without answering the routing question that follows immediately behind it. Once three or four accounts are launching into shared subnets, or each running their own VPC, the traffic between them still has to go somewhere.</p>
+          <p>Today extends that shared networking composition into the routing layer it was always going to require. RAM told you who owns the network; Transit Gateway decides how packets actually traverse it, and the segmentation model you build there is what makes the isolation promises in your SCPs and OU structure real at the packet level. The governance model from Week 1 is the constraint set; TGW is where those constraints get enforced on the wire.</p>
         </div>
       </section>
-      <section class="doc-section">
+
+      <section class="doc-section" id="why-on-exam">
+        <h2 class="section-heading">1. Why Transit Gateway Is on the Exam</h2>
+        <p>The architectural problem Transit Gateway solves is combinatorial. VPC peering is a one-to-one relationship: every pair of VPCs that needs to talk requires its own peering connection, its own route table entries on both sides, and its own non-overlapping CIDR guarantee. Ten VPCs that all need to reach each other is 45 peering connections. Add a second region and you double it. Add an on-premises network and every VPC that needs to reach it needs its own VPN attachment or its own Direct Connect virtual interface. The operational surface grows quadratically while the actual requirement — "these networks need to reach those networks" — stays linear. Peering also has no native segmentation primitive: once two VPCs are peered, the route tables are the only place to express "reachable but not trusted," and route tables are per-VPC, so the policy is scattered across every spoke.</p>
+        <p>Transit Gateway replaces the mesh with a hub. Each VPC, VPN, or Direct Connect gateway attaches to the hub once, and the hub decides what reaches what. That inverts the scaling curve: adding the eleventh VPC is one attachment and a handful of route table associations, not ten new peering connections. More importantly, it centralizes the segmentation decision in a place a network team can own, audit, and change without touching every spoke's route tables. This is the same ownership inversion RAM performed for subnets, applied to routing.</p>
+        <p>On SAP-C02 this lands squarely in Domain 1, Design Solutions for Organizational Complexity, and it is one of the highest-frequency services in that domain. The exam rarely asks what TGW is. It asks you to choose between TGW, peering, PrivateLink, and Direct Connect for a stated connectivity requirement, and then to design the route table topology that satisfies an isolation constraint. The isolation constraint is almost always the real question. A scenario that says "Dev and Prod must both reach Shared Services but must never reach each other" is not testing whether you know TGW exists — it is testing whether you understand that TGW route tables, not security groups, are the mechanism that expresses that requirement.</p>
+        <p>There is a second, quieter reason the topic carries weight. TGW is the connective tissue for several other exam clusters: centralized egress through Network Firewall, hybrid DNS through Route 53 Resolver, inspection VPC patterns, and multi-region designs all assume a transit hub exists. If the TGW route table model is fuzzy, those downstream scenarios become guesswork. Getting the association-versus-propagation distinction solid here pays off across a dozen later questions.</p>
+      </section>
+
+      <section class="doc-section" id="mechanism">
+        <h2 class="section-heading">2. How Transit Gateway Actually Works</h2>
+        <p>Transit Gateway is a regional, highly available routing appliance that AWS operates on your behalf. You do not see its instances, its Availability Zones, or its failure domains; you see attachments and route tables. An attachment is the on-ramp: a VPC attachment connects one VPC (and specifically one or more of its subnets) to the TGW, a VPN attachment connects a Site-to-Site VPN, a Direct Connect gateway attachment connects a Transit VIF, and a peering attachment connects another region's TGW. Each attachment has an elastic network interface inside the attached VPC's subnet, which is why a VPC attachment requires you to nominate subnets — the TGW needs an ENI to land on, and that ENI's subnet determines the Availability Zone reachability of the attachment.</p>
+        <p>The routing model has two independent halves, and conflating them is the single most common source of confusion. The first half is the VPC's own route table: for a spoke to send traffic to the TGW, the spoke subnet's route table needs a route whose target is the TGW (or the VPC attachment). That is the spoke's outbound direction. The second half is the TGW route table: once a packet arrives at the TGW, the TGW consults its own route table to decide which attachment to forward it to. A packet can leave a spoke successfully and still be dropped at the hub because the hub has no route back, or because the hub's route points at an attachment that has no route back to the source. Both halves must be correct, and they are configured in different places by potentially different teams.</p>
+        <p>Inside the TGW, route tables are populated two ways. Association binds an attachment to exactly one route table, and that binding determines which table the TGW consults when a packet arrives from that attachment. Propagation is how routes get into a table: an attachment can be configured to propagate its CIDR into one or more route tables, which is how the TGW learns that "the Dev VPC attachment can reach 10.1.0.0/16." Association is one-to-one and mandatory; propagation is many-to-many and optional. That asymmetry is the entire design vocabulary. You build isolation by controlling propagation, and you control which table a given attachment's traffic is evaluated against by controlling association.</p>
+        <p>There is also a static route option. You can add a route to a TGW route table manually, pointing a CIDR at a specific attachment, without relying on propagation. Static routes matter for two cases: blackhole routes, where you deliberately point a CIDR at a blackhole to drop traffic, and peering attachments, which do not propagate at all. The blackhole route is worth remembering as a design tool rather than an error state — it is how you express "this CIDR is reachable in principle but must never be routed here" in a way that is visible in the route table rather than implicit in the absence of a route.</p>
+        <p>Finally, the appliance mode flag deserves attention because it is invisible until it breaks something. When traffic flows from a spoke through a TGW to a stateful appliance (a firewall instance, an IDS) and back through the TGW to another spoke, the TGW must keep both directions of a given flow pinned to the same Availability Zone, or the appliance sees asymmetric traffic and drops it. Appliance mode VPC attachments enable that flow stickiness. Any centralized inspection design that routes spoke-to-spoke traffic through a middlebox needs it, and forgetting it produces intermittent, hard-to-reproduce connection failures that look like application bugs.</p>
+      </section>
+
+      <section class="doc-section" id="decision-boundary">
+        <h2 class="section-heading">3. The Core Decision Boundary: Association vs. Propagation</h2>
+        <p>Every TGW segmentation scenario reduces to one question: which route table does this attachment's traffic get evaluated against, and what routes are in that table? Association answers the first half, propagation answers the second, and the isolation requirement is satisfied by making sure the routes that would violate it are simply absent from the relevant table. There is no deny rule in a TGW route table. You cannot write "Dev may not reach Prod." You can only ensure that the table Dev's traffic is evaluated against contains no route to Prod's CIDR. This is a meaningful difference from security groups and NACLs, which are deny-capable, and it is why the exam's isolation scenarios are answered with topology rather than policy.</p>
+        <p>The practical consequence is that a TGW design is a matrix. Rows are attachments, columns are route tables, and the cells are association (exactly one per row) and propagation (zero or more per row). Reading a scenario, the fastest path to the answer is to sketch that matrix and ask which cells must be empty. The table below lays out the canonical three-tier pattern — a shared services VPC, a production VPC, and a development VPC — and shows how the same physical hub produces two different isolation outcomes depending on propagation.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Attachment</th><th>Associated table</th><th>Propagates into</th><th>Resulting reachability</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Shared Services VPC</td><td>Shared table</td><td>Shared table, Prod table, Dev table</td><td>Reachable from Prod and Dev; can reach both</td></tr>
+              <tr><td>Production VPC</td><td>Prod table</td><td>Prod table only</td><td>Reaches Shared Services; cannot reach Dev</td></tr>
+              <tr><td>Development VPC</td><td>Dev table</td><td>Dev table only</td><td>Reaches Shared Services; cannot reach Prod</td></tr>
+              <tr><td>On-prem VPN</td><td>Shared table</td><td>Shared table only</td><td>Reaches Shared Services only, not Prod or Dev</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>Read the third column carefully, because it is where the design lives. Shared Services propagates into all three tables, which is what makes it universally reachable. Prod and Dev propagate only into their own tables, which means the Prod table contains a route to Shared Services and a route to Prod, but no route to Dev. When a Prod packet arrives at the TGW, the TGW looks in the Prod table, finds no Dev route, and drops the packet. No security group was involved. The isolation is a property of the route table contents.</p>
+        <p>The subtlety that catches people is that propagation is directional in a way that is easy to misread. "Prod propagates into the Prod table" does not mean Prod can reach itself; it means the TGW now knows that the Prod attachment can reach the Prod CIDR, so other attachments associated with the Prod table can route to it. If you want Shared Services to reach Prod, the Prod attachment must propagate into the Shared table — or the Shared table must have a static route to Prod. The direction of the arrow is "this attachment's CIDR is now known to this table," not "this attachment can now reach things in this table." Getting that backwards produces designs that look correct on paper and drop traffic in both directions.</p>
+      </section>
+
+      <section class="doc-section" id="config-tradeoffs">
+        <h2 class="section-heading">4. Configuration Modes and Their Tradeoffs</h2>
+        <p>The first real fork is how many route tables you run. A single flat TGW route table with everything propagating into it is the simplest possible configuration: every attachment associates with the one table, every attachment propagates into it, and every spoke can reach every other spoke. This is genuinely the right answer for some scenarios — a small organization with a single trust boundary, or a hub-and-spoke where the spokes are all equally trusted. It is also the configuration that most exam distractors describe, because it is the obvious thing to build and it fails every isolation requirement. The tradeoff is stark: one table costs nothing to operate and provides zero segmentation.</p>
+        <p>At the other end, one route table per trust boundary gives you maximum control and a correspondingly larger operational surface. Each new spoke means deciding which table it associates with and which tables it propagates into, and each of those decisions is a place to get the direction wrong. The middle ground that most production designs land on is a small number of tables organized by function rather than by account: a shared-services table, a production table, a development table, and an inspection table for traffic that must traverse a firewall. Four tables cover a surprising amount of ground, and the naming makes the intent legible to whoever inherits the design.</p>
+        <p>The second fork is whether to use propagation or static routes. Propagation is self-maintaining: when a VPC's CIDR changes, the propagated route follows. Static routes do not, which is both their weakness and their point. For peering attachments, static routes are mandatory because peering does not propagate. For blackhole routes, static is the only option. For everything else, propagation is the default and the right choice, because a static route to a spoke CIDR is a piece of configuration that will silently become wrong the day someone re-addresses that VPC.</p>
+        <p>The third fork is attachment type, and it determines what the TGW can even see. A VPC attachment is scoped to specific subnets, so the TGW's ENI lives in those subnets and the attachment's Availability Zone coverage is a function of which subnets you nominated. Nominate subnets in one AZ and you have a single-AZ attachment with a single-AZ failure mode, even though the TGW itself is regional and multi-AZ. This is a common and expensive mistake: the TGW is highly available, but your attachment to it is not, and the failure looks like a TGW problem when it is a subnet-selection problem. Nominate subnets in every AZ your spokes use.</p>
+        <p>Finally, there is the question of whether to enable appliance mode, and the answer is a clean conditional rather than a tradeoff. If traffic from one spoke reaches another spoke by passing through a stateful appliance that is itself attached to the TGW, appliance mode must be enabled on the VPC attachments involved. If no such middlebox exists in the path, appliance mode is unnecessary and enabling it costs you nothing but also buys you nothing. The failure it prevents — asymmetric flow placement across AZs — is intermittent and load-dependent, which makes it one of the more expensive bugs to diagnose after the fact.</p>
+      </section>
+
+      <section class="doc-section" id="sizing-limits">
+        <h2 class="section-heading">5. Sizing, Limits and Quotas</h2>
+        <p>Transit Gateway quotas matter on the exam mostly because they define when a design stops working, and because a few of them are adjustable while others are hard ceilings. The numbers below are the ones worth carrying into the exam; verify current values against the AWS Transit Gateway quotas page before relying on them in a real design, since AWS adjusts these periodically.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Dimension</th><th>Default</th><th>Adjustable</th><th>Design implication</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Attachments per Transit Gateway</td><td>5,000</td><td>Yes</td><td>Effectively unbounded for normal enterprises</td></tr>
+              <tr><td>Transit Gateways per account</td><td>5</td><td>Yes</td><td>One per region is typical; multi-region designs need more</td></tr>
+              <tr><td>Route tables per Transit Gateway</td><td>20</td><td>Yes</td><td>Enough for function-based segmentation; not per-account</td></tr>
+              <tr><td>Routes per Transit Gateway route table</td><td>10,000</td><td>Yes</td><td>Large VPC estates with /24s can approach this</td></tr>
+              <tr><td>Associations per route table</td><td>Unlimited</td><td>n/a</td><td>Association is one-to-one per attachment, not per table</td></tr>
+              <tr><td>Bandwidth per VPC attachment</td><td>Up to 100 Gbps</td><td>n/a</td><td>Burst capacity; not a per-flow guarantee</td></tr>
+              <tr><td>Bandwidth per VPN tunnel</td><td>1.25 Gbps</td><td>n/a</td><td>ECMP across multiple tunnels is how you scale VPN</td></tr>
+              <tr><td>MTU (VPC and VPN attachments)</td><td>8,500 bytes</td><td>n/a</td><td>Higher than internet paths; matters for tunnel-in-tunnel</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The route table count is the quota that shapes design most often. Twenty tables sounds generous until you consider a design that wants per-account isolation across forty accounts, at which point you are forced into a functional grouping whether you wanted one or not. This is usually a good thing — per-account route tables are an operational burden that rarely earns its keep — but it is worth knowing that the ceiling exists and that it is adjustable, because a scenario that describes an unusually fine-grained segmentation requirement may be testing whether you know to request an increase rather than whether you know to redesign.</p>
+        <p>The bandwidth numbers deserve a caveat. The per-attachment figure is aggregate capacity for the attachment, not a promise to any individual flow, and it is shared across all traffic traversing that attachment. A spoke VPC with a single attachment carrying both bulk data transfer and latency-sensitive API traffic has those two workloads competing for the same attachment capacity. Where that matters, the answer is usually more attachments or a different path for the bulk traffic, not a bigger number.</p>
+        <p>The MTU asymmetry is a genuine gotcha. VPC and VPN attachments support 8,500-byte MTU, which is larger than what most internet paths carry. Traffic that leaves the TGW and traverses a path with a smaller MTU — an internet gateway, a peering connection to another region, a third-party appliance — will need fragmentation or path MTU discovery to work correctly. Applications that assume jumbo frames end-to-end will work fine inside the TGW fabric and fail at the boundary, which makes the symptom look like a problem with the boundary service rather than an MTU mismatch.</p>
+      </section>
+
+      <section class="doc-section" id="failure-modes">
+        <h2 class="section-heading">6. Failure Modes and What They Look Like in Production</h2>
+        <p>The most common TGW failure is not a failure at all but a missing route, and it presents as one-directional connectivity. Traffic flows from A to B but not B to A, or the initial TCP handshake completes and the response never arrives. The diagnostic instinct should be to check both halves of the path independently: does the source VPC's route table have a route to the TGW, and does the TGW route table associated with the source attachment have a route to the destination CIDR? A route that exists in the destination's table but not the source's produces exactly this asymmetry, and it is invisible from either end in isolation.</p>
+        <p>The second failure class is the blackhole route. A TGW route table entry can be in a blackhole state, which means the target attachment no longer exists or is no longer valid — a deleted VPC attachment, a VPN that has gone down, a peering attachment that was removed. The route remains in the table, pointing at nothing, and traffic matching it is silently dropped. This is worse than a missing route because the route table looks correct at a glance. The first diagnostic move is to check route state, not route presence, and the second is to check whether the attachment the route points at is still in the available state.</p>
+        <p>The third class is asymmetric AZ placement, which is the appliance mode problem described earlier. It appears as intermittent connection failures under load, with no consistent pattern in which connections fail. Because it is load-dependent, it often survives testing and appears only in production. The tell is that failures correlate with traffic volume rather than with any particular source or destination, and the fix is enabling appliance mode on the relevant attachments.</p>
+        <p>The fourth class is attachment-level AZ failure. Because a VPC attachment is scoped to the subnets you nominated, an attachment with subnets in only one AZ loses connectivity entirely if that AZ has a problem, even though the TGW itself is unaffected. The symptom is total loss of connectivity from one VPC while every other VPC on the same TGW is fine. The diagnostic move is to look at the attachment's subnet list before looking anywhere else.</p>
+        <p>Finally, there is the quota exhaustion failure, which is the least interesting and the easiest to prevent. Hitting the route table limit or the routes-per-table limit produces an error at configuration time rather than a runtime failure, so it is caught early — but only if someone is watching the quota. In an environment where VPCs are provisioned by automation, a quota ceiling can silently block new account onboarding, and the failure surfaces as a pipeline error rather than a network outage.</p>
+      </section>
+
+      <section class="doc-section" id="sre-angle">
+        <h2 class="section-heading">7. The Operational and SRE Angle</h2>
+        <p>Transit Gateway is a shared dependency, which makes it a shared blast radius, and that changes how you monitor it. A single spoke VPC's health is that team's problem; the TGW's health is everyone's problem simultaneously. The monitoring posture that follows is to treat the TGW as a tier-zero service with its own SLOs, and to alert on the things that indicate the hub is degrading rather than on the spokes that depend on it. CloudWatch publishes TGW metrics per attachment, and the ones that matter most are the byte and packet counters, which let you detect a spoke that has gone silent — traffic dropping to zero on an attachment that normally carries load is a strong signal that something upstream of the TGW has broken.</p>
+        <p>The metric that catches route-level problems is less obvious: there is no native "dropped due to no route" counter on the TGW itself, so route misconfiguration tends to surface as application-level errors rather than network-level metrics. The practical mitigation is to monitor the things that would break if a route disappeared — health checks from each spoke to a known endpoint in each other spoke — rather than trying to monitor the route table directly. Synthetic canaries that exercise cross-VPC paths give you the coverage that the TGW's own metrics do not.</p>
+        <p>On the runbook side, the shape of a TGW incident response is different from a typical service incident because the remediation is usually a configuration change rather than a restart. There is nothing to fail over and nothing to reboot. The runbook should therefore be a diagnostic sequence: confirm the source VPC route table, confirm the TGW route table association for the source attachment, confirm the route exists and is not blackholed, confirm the destination attachment is available, and confirm the destination VPC route table has a return path. That sequence resolves the large majority of TGW incidents, and it is worth writing down precisely because the failure modes are configuration-shaped and therefore easy to reason about once you have the checklist.</p>
+        <p>Change management deserves more weight here than it usually gets. TGW route table changes are high-blast-radius by construction: a propagation change on a shared attachment can affect every spoke associated with the affected table. The Operational Excellence practice of small, reversible changes applies directly — change one propagation at a time, verify, and keep the previous state documented so a rollback is a known quantity rather than an improvisation. Where the environment supports it, expressing TGW configuration as infrastructure-as-code and reviewing changes through the same pipeline as application code is the difference between a controlled change and an outage with a plausible explanation.</p>
+      </section>
+
+      <section class="doc-section" id="gotchas">
+        <h2 class="section-heading">8. Edge Cases and Exam Gotchas</h2>
+        <p>The first gotcha is the one the whole day has been building toward: TGW route tables have no deny rules. If a scenario asks you to prevent traffic between two attachments, the answer is always about removing the route, never about adding a block. Answers that propose security groups, NACLs, or an SCP to solve a TGW routing isolation problem are describing a different layer and will not satisfy the requirement as stated.</p>
+        <p>The second is that association is one-to-one. An attachment associates with exactly one route table. If a scenario implies an attachment needs to be evaluated against two different tables depending on the source, that is not expressible — you need two attachments, or a different table design. Propagation, by contrast, is many-to-many, and confusing the two directions is the most common conceptual error.</p>
+        <p>The third is that peering attachments do not propagate. This is tomorrow's topic in detail, but it belongs on the gotcha list today because it is the exception that proves the propagation rule: every other attachment type propagates, peering does not, and the fix is static routes on both sides.</p>
+        <p>The fourth is the CIDR overlap constraint. TGW cannot route between attachments with overlapping CIDRs, and unlike PrivateLink there is no ENI-level workaround. A scenario describing two networks with the same address space that need to communicate is pointing at PrivateLink, not TGW, and recognizing that early saves time.</p>
+        <p>The fifth is the shared-attachment trap. A TGW can be shared across accounts via AWS RAM, which means the account that owns the TGW controls the route tables while the accounts that use it control their own VPC route tables. A scenario that describes a spoke account unable to reach another spoke account may be testing whether you understand that the spoke account cannot fix the problem by changing its own route tables — the missing route is in the TGW owner's route table, and the fix requires the owner to act.</p>
+        <p>The sixth is the blackhole route as a deliberate design tool rather than an error. A scenario that asks how to make a CIDR explicitly unreachable while keeping the route table legible is describing a blackhole route, and it is a legitimate answer rather than a misconfiguration.</p>
+      </section>
+
+      <section class="doc-section" id="vs-comparison">
+        <h2 class="section-heading">9. Transit Gateway vs. the Alternatives</h2>
+        <p>The exam's connectivity questions are almost always a choice among four options, and the differentiator is the granularity of what you are connecting. VPC peering connects two VPCs at the network layer with no intermediary, which makes it cheap and simple for a small number of VPCs and unmanageable beyond that. Transit Gateway connects many networks through a hub with centralized policy, which is the right answer whenever the count is large or the segmentation requirement is real. PrivateLink connects a consumer to a specific service rather than to a network, which is the only option that works across overlapping CIDRs. Direct Connect connects your data center to AWS over a private circuit, and it is orthogonal to the other three — it answers "how do I get to AWS," not "how do AWS networks talk to each other."</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Option</th><th>Granularity</th><th>Scales to</th><th>Overlapping CIDRs</th><th>Central policy</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>VPC peering</td><td>VPC to VPC</td><td>~10 VPCs before it hurts</td><td>No</td><td>No — per-VPC route tables</td></tr>
+              <tr><td>Transit Gateway</td><td>Network to network via hub</td><td>Thousands of attachments</td><td>No</td><td>Yes — TGW route tables</td></tr>
+              <tr><td>PrivateLink</td><td>Consumer to one service</td><td>Many consumers per service</td><td>Yes</td><td>Per-endpoint policy</td></tr>
+              <tr><td>Direct Connect</td><td>On-prem to AWS</td><td>Circuit capacity bound</td><td>n/a</td><td>Via VIF and gateway</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The pick rules that follow from that table are worth stating explicitly. Pick VPC peering when you have two or three VPCs, a stable topology, and no segmentation requirement — the operational simplicity is real and TGW is not free. Pick Transit Gateway when the VPC count is growing, when you need centralized segmentation, when you need to connect on-prem to many VPCs through one attachment, or when a network team needs to own routing policy independently of the application teams. Pick PrivateLink when the requirement is service-level exposure rather than network-level reachability, or when CIDRs overlap. Pick Direct Connect when the requirement is a private, predictable path to AWS rather than a way to interconnect AWS networks.</p>
+        <p>The combination that appears most often in mature designs is TGW for the AWS-internal fabric plus Direct Connect with a Transit VIF for the on-prem path, with PrivateLink used selectively for specific cross-account service exposures that should not be network-reachable. Those three are complementary rather than competing, and a scenario that describes all three requirements is usually looking for exactly that composition.</p>
+      </section>
+
+      <section class="doc-section" id="lab">
+        <h2 class="section-heading">Hands-on Lab: Hub-and-Spoke with Segmented Route Tables (45 min)</h2>
+        <div class="card card-green">
+          <p>The goal is to build the three-tier topology from Section 3 and verify both the reachability and the isolation empirically. You will end up with three VPCs attached to one Transit Gateway, two TGW route tables, and a demonstrated inability for Dev to reach Prod despite both being attached to the same hub. Work in a single region and a single account to keep the moving parts visible; the cross-account and cross-region variants are later days.</p>
+          <p><strong>1. Create the three VPCs.</strong> Build three VPCs with non-overlapping CIDRs: Shared Services at 10.0.0.0/16, Production at 10.1.0.0/16, and Development at 10.2.0.0/16. In each, create a private subnet in at least two Availability Zones — this matters later when you check attachment AZ coverage. Launch one small instance in each VPC's first private subnet, in the same AZ across all three so you can reason about the path without AZ placement complicating it. Note the private IP of each instance.</p>
+          <p><strong>2. Create the Transit Gateway.</strong> Create a TGW with default settings and wait for it to reach the available state. Do not attach anything yet. Create two additional route tables beyond the default: name them <code>prod-table</code> and <code>dev-table</code>, and rename the default to <code>shared-table</code> so the naming matches the design. At this point all three tables are empty and no attachment is associated with anything.</p>
+          <p><strong>3. Attach the VPCs.</strong> Create a VPC attachment for each of the three VPCs, selecting subnets in both Availability Zones for each. Wait for each attachment to become available. Note that creating an attachment does not associate it with a route table or propagate anything — the attachment exists but is inert from a routing perspective until you configure the tables.</p>
+          <p><strong>4. Configure associations.</strong> Associate the Shared Services attachment with <code>shared-table</code>, the Production attachment with <code>prod-table</code>, and the Development attachment with <code>dev-table</code>. Each attachment now has exactly one table it is evaluated against. Verify in the console that each association shows the expected table and that no attachment has more than one association.</p>
+          <p><strong>5. Configure propagation.</strong> Enable propagation of the Shared Services attachment into all three tables. Enable propagation of the Production attachment into <code>prod-table</code> only. Enable propagation of the Development attachment into <code>dev-table</code> only. Inspect each table's routes afterward: <code>shared-table</code> should contain routes to all three CIDRs, <code>prod-table</code> should contain routes to Shared Services and Production but not Development, and <code>dev-table</code> should contain routes to Shared Services and Development but not Production.</p>
+          <p><strong>6. Add spoke routes to the TGW.</strong> In each VPC's subnet route table, add a route for the other VPC CIDRs with the TGW as the target. For Production, add routes for 10.0.0.0/16 and 10.2.0.0/16. For Development, add routes for 10.0.0.0/16 and 10.1.0.0/16. For Shared Services, add routes for 10.1.0.0/16 and 10.2.0.0/16. This is the half of the configuration that lives outside the TGW, and it is the half people forget.</p>
+          <p><strong>7. Verify reachability.</strong> From the Production instance, ping the Shared Services instance. It should succeed. From the Development instance, ping the Shared Services instance. It should also succeed. Both spokes reach the hub's shared services, which is the intended behavior.</p>
+          <p><strong>8. Verify isolation.</strong> From the Production instance, ping the Development instance. It should fail. Then check why: the Production VPC route table has a route to 10.2.0.0/16 pointing at the TGW, so the packet leaves the spoke successfully. The TGW then evaluates it against <code>prod-table</code>, finds no route to 10.2.0.0/16, and drops it. Confirm this by inspecting <code>prod-table</code>'s routes and noting the absence of the Development CIDR. This is the key observation of the lab: the isolation is enforced at the hub, not at the spoke.</p>
+          <p><strong>9. Break it deliberately.</strong> Enable propagation of the Development attachment into <code>prod-table</code>. Retry the ping from Production to Development. It should now succeed. This demonstrates that the isolation was a property of propagation and nothing else — no security group changed, no NACL changed, no policy changed. Disable the propagation again to restore the intended state.</p>
+          <p><strong>10. Test the blackhole route.</strong> Add a static route in <code>prod-table</code> for 10.2.0.0/16 with a blackhole target. Confirm the route shows as blackholed and that Production-to-Development traffic is dropped even if propagation is enabled. This is the explicit-deny pattern available in TGW route tables, and it is worth seeing once so you recognize it in a scenario.</p>
+          <p><strong>11. Clean up.</strong> Delete the attachments, then the TGW, then the VPCs. Deleting the TGW before the attachments will fail, which is itself a useful reminder that attachments are the dependency edge.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="quiz">
         <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
-        
-      <div class="scenario-card">
-        <p class="scenario-question"><strong>Q1.</strong> You need Dev and Prod VPCs to both reach a Shared-Services VPC, but never reach each other. How do you design TGW route tables?</p>
-        <div class="scenario-options" id="opts-d8q0">
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q1.</strong> You need Dev and Prod VPCs to both reach a Shared-Services VPC, but never reach each other. How do you design TGW route tables?</p>
+          <div class="scenario-options" id="opts-d8q1">
             <div class="scenario-option">A. A single flat TGW route table with all routes propagated</div>
             <div class="scenario-option">B. Separate TGW route tables for Dev and Prod that each only propagate Shared-Services routes, with no propagation between Dev and Prod</div>
             <div class="scenario-option">C. VPC Peering directly between Dev and Prod</div>
             <div class="scenario-option">D. Use only Security Groups to block traffic</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d8q1', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d8q1"><strong>Correct answer: B.</strong> TGW route table segmentation is the standard way to implement network isolation between spokes while still allowing shared access to common services. Isolation is expressed by the absence of a route, not by a deny rule.</div>
         </div>
-        <button class="scenario-reveal-btn" onclick="revealAnswer('d8q0', 1)">Reveal Answer</button>
-        <div class="scenario-explanation" id="exp-d8q0"><strong>Correct answer: B.</strong> TGW route table segmentation is the standard way to implement network isolation between spokes while still allowing shared access to common services.</div>
-      </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q2.</strong> A VPC attachment is associated with a route table, and the same attachment is also configured to propagate into two other tables. How many route tables is the attachment associated with?</p>
+          <div class="scenario-options" id="opts-d8q2">
+            <div class="scenario-option">A. Three — one association plus two propagations</div>
+            <div class="scenario-option">B. One — association is one-to-one, while propagation is many-to-many</div>
+            <div class="scenario-option">C. Two — the propagated tables count as associations</div>
+            <div class="scenario-option">D. Zero — association and propagation are the same setting</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d8q2', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d8q2"><strong>Correct answer: B.</strong> An attachment associates with exactly one route table, which determines how its inbound traffic is evaluated. Propagation is separate and can target multiple tables, telling the TGW which tables should learn this attachment's CIDR.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q3.</strong> Traffic from a spoke VPC reaches the TGW but is dropped before reaching the destination VPC. The destination VPC's route table has a return route to the source. What is the most likely cause?</p>
+          <div class="scenario-options" id="opts-d8q3">
+            <div class="scenario-option">A. The TGW route table associated with the source attachment has no route to the destination CIDR</div>
+            <div class="scenario-option">B. The TGW needs to be recreated</div>
+            <div class="scenario-option">C. Security groups on the TGW are blocking the traffic</div>
+            <div class="scenario-option">D. The destination VPC's CIDR overlaps with the source</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d8q3', 0)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d8q3"><strong>Correct answer: A.</strong> The TGW evaluates inbound traffic against the route table associated with the source attachment. If that table lacks a route to the destination CIDR, the packet is dropped at the hub regardless of the destination's return path.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q4.</strong> A TGW route table shows a route to a spoke CIDR, but traffic matching it is silently dropped. The attachment it points to was deleted last week. What is the route's state?</p>
+          <div class="scenario-options" id="opts-d8q4">
+            <div class="scenario-option">A. Active — routes persist independently of attachments</div>
+            <div class="scenario-option">B. Blackhole — the route remains but points at a target that no longer exists</div>
+            <div class="scenario-option">C. Propagated — it will self-heal</div>
+            <div class="scenario-option">D. Static — static routes cannot be blackholed</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d8q4', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d8q4"><strong>Correct answer: B.</strong> A blackhole route is one whose target attachment is no longer valid. The route stays visible in the table, which makes it more dangerous than a missing route — the first diagnostic move is to check route state, not route presence.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q5.</strong> A spoke VPC loses all connectivity to every other VPC on the TGW during an Availability Zone event, while all other spokes remain reachable. What is the most likely cause?</p>
+          <div class="scenario-options" id="opts-d8q5">
+            <div class="scenario-option">A. The TGW itself failed over and needs to be recreated</div>
+            <div class="scenario-option">B. The VPC attachment was created with subnets in only one Availability Zone</div>
+            <div class="scenario-option">C. The spoke's security groups were reset</div>
+            <div class="scenario-option">D. The TGW route table exceeded its route limit</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d8q5', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d8q5"><strong>Correct answer: B.</strong> A VPC attachment is scoped to the subnets you nominate. An attachment with subnets in a single AZ loses connectivity entirely if that AZ is impaired, even though the TGW itself is regional and multi-AZ.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q6.</strong> Spoke-to-spoke traffic passes through a stateful firewall instance that is itself attached to the TGW. Connections fail intermittently under load with no consistent pattern. What should you enable?</p>
+          <div class="scenario-options" id="opts-d8q6">
+            <div class="scenario-option">A. Route propagation on the peering attachment</div>
+            <div class="scenario-option">B. Appliance mode on the VPC attachments involved</div>
+            <div class="scenario-option">C. A larger MTU on the TGW</div>
+            <div class="scenario-option">D. Cross-zone load balancing on the firewall</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d8q6', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d8q6"><strong>Correct answer: B.</strong> Appliance mode keeps both directions of a flow pinned to the same Availability Zone when traffic traverses a stateful middlebox via the TGW. Without it, the appliance sees asymmetric traffic and drops connections intermittently.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q7.</strong> A design requires per-account isolation across 40 accounts, with each account unable to reach any other account but all able to reach a shared services VPC. What is the most practical TGW route table design?</p>
+          <div class="scenario-options" id="opts-d8q7">
+            <div class="scenario-option">A. One route table per account, 40 tables total</div>
+            <div class="scenario-option">B. A single flat route table with all accounts propagating into it</div>
+            <div class="scenario-option">C. Two tables — one for shared services and one for all accounts, with accounts propagating only into the shared table</div>
+            <div class="scenario-option">D. One table per Availability Zone</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d8q7', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d8q7"><strong>Correct answer: C.</strong> Accounts associate with a table that contains only the shared services route, and propagate only into the shared table. This achieves full mutual isolation with two tables rather than forty, and stays well inside the default route table quota.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q8.</strong> Two VPCs both use 10.0.0.0/16 and need to communicate. Which connectivity option works?</p>
+          <div class="scenario-options" id="opts-d8q8">
+            <div class="scenario-option">A. Transit Gateway with a VPC attachment for each</div>
+            <div class="scenario-option">B. VPC peering between them</div>
+            <div class="scenario-option">C. AWS PrivateLink with an interface endpoint</div>
+            <div class="scenario-option">D. A TGW peering attachment</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d8q8', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d8q8"><strong>Correct answer: C.</strong> TGW and peering both require non-overlapping CIDRs because they merge routing domains. PrivateLink connects at the ENI level in the consumer VPC and never merges route tables, so it works across fully overlapping address spaces.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q9.</strong> A spoke account cannot reach another spoke account on a TGW that is shared with it via AWS RAM. The spoke account has verified its own VPC route tables are correct. Who must make the fix?</p>
+          <div class="scenario-options" id="opts-d8q9">
+            <div class="scenario-option">A. The spoke account, by adding a route to its own VPC route table</div>
+            <div class="scenario-option">B. The account that owns the TGW, by changing the TGW route table configuration</div>
+            <div class="scenario-option">C. Neither — shared TGWs cannot route between spoke accounts</div>
+            <div class="scenario-option">D. AWS Support, by adjusting the attachment</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d8q9', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d8q9"><strong>Correct answer: B.</strong> The TGW owner controls the TGW route tables; spoke accounts control only their own VPC route tables. A missing route at the hub cannot be fixed from the spoke, which is a common source of cross-account troubleshooting dead ends.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q10.</strong> A scenario asks how to make a specific CIDR explicitly unreachable through a TGW while keeping the intent visible in the route table. What do you configure?</p>
+          <div class="scenario-options" id="opts-d8q10">
+            <div class="scenario-option">A. A security group rule denying the CIDR</div>
+            <div class="scenario-option">B. A static route to the CIDR with a blackhole target</div>
+            <div class="scenario-option">C. An SCP denying the CIDR</div>
+            <div class="scenario-option">D. Remove the attachment entirely</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d8q10', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d8q10"><strong>Correct answer: B.</strong> A blackhole route is the explicit-drop primitive in a TGW route table. It documents the intent in the route table itself, unlike the implicit isolation you get from simply omitting a route.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q11.</strong> An application works correctly between two VPCs on the same TGW but fails when the same traffic traverses an internet gateway. The application uses large frames. What is the most likely explanation?</p>
+          <div class="scenario-options" id="opts-d8q11">
+            <div class="scenario-option">A. The TGW route table is missing a route</div>
+            <div class="scenario-option">B. An MTU mismatch — TGW attachments support 8,500-byte MTU while the internet path does not</div>
+            <div class="scenario-option">C. The security group is blocking large packets</div>
+            <div class="scenario-option">D. The TGW attachment bandwidth is exhausted</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d8q11', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d8q11"><strong>Correct answer: B.</strong> VPC and VPN attachments support 8,500-byte MTU, larger than most internet paths. Applications assuming jumbo frames end-to-end work inside the TGW fabric and fail at the boundary, which makes the symptom look like a problem with the boundary service.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q12.</strong> Which attachment type does NOT propagate routes into TGW route tables, requiring static routes instead?</p>
+          <div class="scenario-options" id="opts-d8q12">
+            <div class="scenario-option">A. VPC attachment</div>
+            <div class="scenario-option">B. VPN attachment</div>
+            <div class="scenario-option">C. Peering attachment</div>
+            <div class="scenario-option">D. Direct Connect gateway attachment</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d8q12', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d8q12"><strong>Correct answer: C.</strong> TGW peering attachments do not support route propagation. Routes must be added statically in each TGW route table on both sides of the peering, which is the exception to the propagation rule that applies to every other attachment type.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q13.</strong> A spoke VPC's route table has a route to the TGW for the destination CIDR, and the TGW route table has a route to the destination attachment. Traffic still fails. What should you check next?</p>
+          <div class="scenario-options" id="opts-d8q13">
+            <div class="scenario-option">A. Whether the destination VPC's route table has a return path to the source CIDR</div>
+            <div class="scenario-option">B. Whether the TGW needs to be recreated</div>
+            <div class="scenario-option">C. Whether the source VPC has an internet gateway</div>
+            <div class="scenario-option">D. Whether the TGW route table has too many routes</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d8q13', 0)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d8q13"><strong>Correct answer: A.</strong> Both halves of the path must be correct. The outbound direction can be fully configured while the return path is missing, producing one-directional connectivity that looks like a firewall problem.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q14.</strong> An organization wants a single on-premises connection to reach 30 VPCs without creating 30 separate VPN attachments. What is the standard design?</p>
+          <div class="scenario-options" id="opts-d8q14">
+            <div class="scenario-option">A. 30 Site-to-Site VPNs, one per VPC</div>
+            <div class="scenario-option">B. A single VPN or Direct Connect attachment to a Transit Gateway, with the VPCs attached to the same TGW</div>
+            <div class="scenario-option">C. VPC peering between all 30 VPCs and one hub VPC</div>
+            <div class="scenario-option">D. PrivateLink endpoints in each VPC</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d8q14', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d8q14"><strong>Correct answer: B.</strong> Attaching the on-prem connection to a TGW and the VPCs to the same TGW gives one connection that reaches all of them, with segmentation controlled by TGW route tables rather than by attachment count.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q15.</strong> A team wants to prevent a specific spoke from reaching a sensitive CIDR, and proposes adding a deny rule to the TGW route table. Why does this not work?</p>
+          <div class="scenario-options" id="opts-d8q15">
+            <div class="scenario-option">A. TGW route tables support deny rules but only for IPv6</div>
+            <div class="scenario-option">B. TGW route tables have no deny rules — isolation is expressed by the absence of a route, or by a blackhole route</div>
+            <div class="scenario-option">C. Deny rules require an SCP to be attached first</div>
+            <div class="scenario-option">D. Deny rules only work on peering attachments</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d8q15', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d8q15"><strong>Correct answer: B.</strong> TGW route tables are allow-only. You cannot write a deny rule. Isolation comes from ensuring the route is absent from the relevant table, or from a static blackhole route when you want the intent to be explicit.</div>
+        </div>
+      </section>
+
+      <section class="doc-section" id="preview">
+        <h2 class="section-heading">Peek into Tomorrow</h2>
+        <div class="card card-purple">
+          <p>Everything in today's design assumed a single region and a single TGW. The moment a second region enters the picture, the hub-and-spoke model has to be extended across a boundary that the TGW's own routing fabric does not cross, and the mechanism for doing that is TGW peering. The open question today's content leaves unresolved is what happens to the propagation model at that boundary. Every attachment type covered today propagates routes automatically — that is what made the segmentation design self-maintaining, and it is why a new spoke CIDR appears in the right tables without anyone editing them by hand.</p>
+          <p>Peering attachments break that assumption. They do not propagate, which means the route tables on both sides of a cross-region peering have to be maintained statically, and every spoke CIDR that needs to be reachable across the boundary becomes a route someone has to add and keep current. That changes the operational character of the design considerably, and it raises a second question about the path itself: traffic between regions traverses the AWS backbone rather than the public internet, but the MTU on that path is capped lower than the 8,500 bytes the attachments inside a region support. Both of those constraints shape what a multi-region TGW topology actually looks like, and both are the subject of tomorrow's work.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="sources">
+        <h2 class="section-heading">Sources</h2>
+        <div class="card">
+          <ul class="source-list">
+            <li><a href="https://docs.aws.amazon.com/vpc/latest/tgw/what-is-transit-gateway.html" target="_blank" rel="noopener">AWS Docs — What is a transit gateway?</a></li>
+            <li><a href="https://docs.aws.amazon.com/vpc/latest/tgw/tgw-route-tables.html" target="_blank" rel="noopener">AWS Docs — Transit gateway route tables</a></li>
+            <li><a href="https://docs.aws.amazon.com/vpc/latest/tgw/tgw-vpc-attachments.html" target="_blank" rel="noopener">AWS Docs — Transit gateway VPC attachments</a></li>
+            <li><a href="https://docs.aws.amazon.com/vpc/latest/tgw/tgw-route-tables.html#tgw-route-tables-associations" target="_blank" rel="noopener">AWS Docs — Associations and propagations</a></li>
+            <li><a href="https://docs.aws.amazon.com/vpc/latest/tgw/tgw-quotas.html" target="_blank" rel="noopener">AWS Docs — Transit gateway quotas</a></li>
+            <li><a href="https://docs.aws.amazon.com/vpc/latest/tgw/tgw-best-practices.html" target="_blank" rel="noopener">AWS Docs — Transit gateway best practices</a></li>
+            <li><a href="https://docs.aws.amazon.com/whitepapers/latest/building-scalable-secure-multi-vpc-network-infrastructure/transit-gateway.html" target="_blank" rel="noopener">AWS Whitepaper — Building a scalable and secure multi-VPC network infrastructure</a></li>
+            <li><a href="https://docs.aws.amazon.com/vpc/latest/tgw/tgw-cloudwatch-metrics.html" target="_blank" rel="noopener">AWS Docs — CloudWatch metrics for Transit Gateway</a></li>
+          </ul>
+        </div>
       </section>
       <div class="day-nav">
         <a href="day-007.html">&larr; Day 7: Week 1 Synthesis &amp; Multi-Account Drill</a>

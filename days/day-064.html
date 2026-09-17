@@ -104,27 +104,311 @@
         <span class="pill pill-green">Phase 5: Practice Exams &amp; Exam Technique</span>
       </div>
       <h1 class="hero-title">Deep Review — Domain 4 Weak Areas (Cost Control)</h1>
-      <div class="reading-meta">&#128337; ~3 min read &middot; 3 services covered</div>
+      <div class="reading-meta">&#128337; ~58 min read &middot; 15 distractor patterns &middot; 15 drill questions</div>
       <div class="services-grid">
         <span class="service-tag">Savings Plans</span>
+        <span class="service-tag">Reserved Instances</span>
+        <span class="service-tag">Spot / Spot Fleet</span>
         <span class="service-tag">Compute Optimizer</span>
+        <span class="service-tag">Cost Explorer</span>
+        <span class="service-tag">Trusted Advisor</span>
         <span class="service-tag">AWS Budgets</span>
+        <span class="service-tag">Cost Allocation Tags</span>
+        <span class="service-tag">Cost and Usage Report</span>
       </div>
       <div id="tracker"></div>
-      <section class="doc-section">
-        <h2 class="section-heading">Today's Concept</h2>
+
+      <section class="doc-section" id="recap">
+        <h2 class="section-heading">Recap — From Migration Mechanics to Cost Mechanics</h2>
         <div class="card card-accent">
-          <p>Revisit cost optimization content (Savings Plans vs RIs vs Spot, Compute Optimizer, FinOps tagging/budgets) focused on flagged weak areas.</p>
+          <p>Yesterday's pass over Domain 3 was about movement: the 7 Rs as a classification discipline, MGN's continuous block-level replication, the SCT-then-DMS split for heterogeneous engines, DataSync for file and object transfer, and the Snow Family as the answer whenever the network itself is the bottleneck. The through-line was that migration questions are almost always decided by a constraint you cannot negotiate — a deadline, a licensing blocker, a link that cannot carry the volume in the window. Cost questions are the same shape but a different concern: the constraint is a commitment you are about to sign, and the wrong answer is usually wrong because it locks flexibility you still need.</p>
+          <p>That is the same lifecycle stage with a different concern. Migration decides how a workload arrives; cost optimization decides what you promise about it once it is running. Both domains punish the candidate who reaches for the most aggressive-sounding option. In migration that was Snowmobile for a 300TB dataset; here it is a three-year EC2 Instance Savings Plan for a fleet whose instance families are still moving. The distractor patterns below are the cost-domain versions of that same reflex.</p>
         </div>
-        <h3 class="sub-heading">Hands-on Lab / Practical Action (45 min)</h3>
+      </section>
+
+      <section class="doc-section" id="patterns">
+        <h2 class="section-heading">Distractor Patterns — Domain 4</h2>
+        <p>Domain 4 questions rarely ask you to compute a number. They ask you to pick a commitment, a visibility tool, or an accountability mechanism, and the wrong options are engineered to sound either more aggressive or more precise than the right one. The fifteen patterns below are the ones that recur across practice banks. Each entry names the tempting answer, explains why it is tempting, and gives the tell that separates it from the correct choice.</p>
+
+        <h3 class="sub-heading">Pattern 1 — The Most Flexible Commitment Is Not Always the Right One</h3>
+        <p>The tempting answer is always Compute Savings Plans, because they apply across any instance family, region, and operating system, and they even cover Fargate and Lambda usage. That flexibility is real and it is the reason the option appears so often. The trap is that a question can describe a fleet that is genuinely frozen — a fixed instance family, a fixed region, a workload that has not changed shape in two years and will not change shape during the commitment term — and still offer Compute Savings Plans as the "safe" answer.</p>
+        <p>The tell is whether the scenario gives you any reason to believe the fleet will change. If the question says the workload is steady-state and predictable and the only stated goal is maximum discount, the correct answer is the EC2 Instance Savings Plan, which trades flexibility for a deeper rate. If the question mentions any of the things that force change — a pending migration, a re-platform, a move to containers, a region expansion — Compute Savings Plans win because the alternative would strand the commitment. Read the scenario for verbs of change, not for adjectives of stability.</p>
+
+        <h3 class="sub-heading">Pattern 2 — Reserved Instances When You Actually Need a Capacity Reservation</h3>
+        <p>Savings Plans and Reserved Instances are both commitment-based discounts, so a question that only mentions cost will usually accept either. The distractor is the reverse case: a scenario that quietly requires guaranteed capacity — a regulated workload that must be able to launch a specific instance type in a specific AZ during a regional event, or a capacity-constrained instance family — where a Savings Plan is offered as the answer because it is cheaper and more flexible.</p>
+        <p>The tell is the word "guarantee," or any phrasing about being able to launch during a shortage. Savings Plans are a billing construct; they discount usage but reserve nothing. Only zonal Reserved Instances carry a capacity reservation, and only for that specific instance type in that specific AZ. If the scenario's requirement is availability rather than price, the discount mechanism is the wrong axis entirely and the answer is the RI with the reservation, or an On-Demand Capacity Reservation paired with whatever discount instrument you like.</p>
+
+        <h3 class="sub-heading">Pattern 3 — Spot for Anything With a Stateful or Long-Running Component</h3>
+        <p>Spot pricing is the most aggressive discount on the exam and therefore the most attractive distractor. The option shows up attached to workloads that are described as "cost-sensitive" without any statement about fault tolerance, and candidates who have internalized "Spot is up to 90% off" reach for it. The interruption notice is only two minutes, which is enough to drain a stateless web tier and nowhere near enough to checkpoint a long-running simulation or fail over a primary database.</p>
+        <p>The tell is whether the scenario describes work that can be restarted from scratch without consequence. Batch rendering, CI runners, stateless API workers behind a load balancer, and big-data jobs with checkpointing all qualify. Anything holding a lock, a leader election, a session, or an in-memory state that would be lost does not. A second tell is whether the scenario mentions a mixed-instance policy or Spot Fleet — if the question is testing Spot correctly, it usually gives you the diversification mechanism as part of the setup rather than asking you to invent it.</p>
+
+        <h3 class="sub-heading">Pattern 4 — Confusing Right-Sizing With Discounting</h3>
+        <p>Compute Optimizer and Savings Plans both reduce your bill, so a question about an over-provisioned fleet can be answered with either if you are reading only the headline. The distractor is a commitment purchase offered for a fleet whose utilization data shows the instances are simply too large. Committing to three years of an oversized instance locks in the waste at a discount, which is worse than fixing the size and paying On-Demand for a month while you measure.</p>
+        <p>The tell is whether the scenario gives you utilization numbers. If it says instances are running at low CPU or memory utilization, the question is about right-sizing and the answer is Compute Optimizer's recommendations. If it says utilization is high and stable and the goal is to reduce the rate, the question is about commitment. A scenario that gives you both — high utilization on an oversized family — is testing whether you right-size first and commit second, in that order.</p>
+
+        <h3 class="sub-heading">Pattern 5 — Cost Explorer as a Forecasting Tool vs. a Reporting Tool</h3>
+        <p>Cost Explorer appears in almost every cost question and is correct in most of them, which makes it a weak distractor and a dangerous one. The trap is a scenario that needs granular, line-item billing data exported to a data warehouse for custom analysis, where Cost Explorer is offered because it is the tool everyone knows. Cost Explorer is a visualization and forecasting console; it is not the source of the most granular billing data.</p>
+        <p>The tell is the word "granular," or any mention of hourly or resource-level line items, or of feeding a BI tool. That is the Cost and Usage Report, which lands in S3 and can be queried with Athena. Cost Explorer is the right answer when the question is about trends, forecasts, or the RI and Savings Plan purchase recommendations it generates. When the question is about the raw data underneath those views, the answer moves to CUR.</p>
+
+        <h3 class="sub-heading">Pattern 6 — Trusted Advisor as a Right-Sizing Engine</h3>
+        <p>Trusted Advisor is a broad best-practice scanner covering cost, security, performance, fault tolerance, and service quotas, and its cost category does flag idle resources. That breadth makes it a plausible answer to almost any cost question, including ones that need a specific instance-type recommendation. The distractor is a scenario asking which service will tell you the exact smaller instance type to move to.</p>
+        <p>The tell is whether the question wants a recommendation or a flag. Trusted Advisor tells you that you have low-utilization instances; Compute Optimizer tells you which instance type to move to and what the projected savings are, based on historical utilization metrics. If the scenario asks for a list of problems, Trusted Advisor is fine. If it asks for a specific target configuration, it is Compute Optimizer.</p>
+
+        <h3 class="sub-heading">Pattern 7 — Budgets as an Enforcement Mechanism</h3>
+        <p>AWS Budgets alerts on actual and forecasted spend, and the distractor is a scenario that needs spending to actually stop when a threshold is crossed. Budgets can trigger actions, but the reflex answer — "create a budget" — does not by itself prevent anything. The question is usually testing whether you understand that alerting and enforcement are separate concerns.</p>
+        <p>The tell is the verb. If the scenario says "notify," "alert," or "warn," a budget with a notification threshold is correct. If it says "prevent," "block," or "stop," you need something that acts on the account — a budget action that applies an SCP or stops instances, or an SCP that denies expensive resource creation outright. A budget alone will happily let you spend past the threshold while it emails you about it.</p>
+
+        <h3 class="sub-heading">Pattern 8 — Tagging as a Reporting Fix Rather Than a Prerequisite</h3>
+        <p>Cost allocation by team, project, or environment is a common scenario, and the tempting answer is to enable Cost Explorer or build a report. The trap is that the scenario has already told you tagging is inconsistent. No reporting tool can attribute spend to a dimension that is not recorded on the resource, so the report will simply show a large "untagged" bucket.</p>
+        <p>The tell is any sentence about tags being missing, inconsistent, or applied after the fact. The correct answer is to enforce the tags at creation time — an SCP that denies resource creation without the required cost-allocation tags, or a Config rule that flags and remediates untagged resources — and only then activate those tags for cost allocation. The ordering matters and the exam tests it: enforcement first, reporting second.</p>
+
+        <h3 class="sub-heading">Pattern 9 — The Single-Account Answer to a Multi-Account Cost Problem</h3>
+        <p>When a scenario describes an organization with many accounts and asks how to see total spend, one distractor is to consolidate everything into one account so the bill is simpler. That solves the reporting problem by destroying the isolation the organization was built for, and it is almost never the intended answer.</p>
+        <p>The tell is whether the scenario mentions AWS Organizations, OUs, or separate accounts for security or blast-radius reasons. If it does, the answer is consolidated billing at the management account plus cost allocation tags and CUR for the breakdown — you get one bill and per-account attribution without merging accounts. The distractor is attractive because it is simple, and the exam is specifically checking whether you will trade governance for simplicity.</p>
+
+        <h3 class="sub-heading">Pattern 10 — Storage Class Selection Driven by Price Alone</h3>
+        <p>Cost questions that touch storage often offer the cheapest class as the answer, and the cheapest class is usually Glacier Deep Archive. The trap is a scenario with a retrieval requirement — a compliance hold that legal may need to produce within hours, or an analytics job that reads the data monthly — where the price is right and the retrieval time is not.</p>
+        <p>The tell is any stated retrieval latency or access frequency. Deep Archive is correct when the data is genuinely cold and a twelve-hour retrieval is acceptable. If the scenario says the data is accessed occasionally, or that retrieval must complete within a working day, the answer moves up the ladder to Glacier Flexible Retrieval or Standard-IA. A second tell is durability scope: if the scenario requires surviving the loss of an entire Availability Zone, One Zone-IA is disqualified regardless of price.</p>
+
+        <h3 class="sub-heading">Pattern 11 — Intelligent-Tiering as a Universal Answer</h3>
+        <p>S3 Intelligent-Tiering is the answer that requires no analysis, which makes it the default distractor for any storage-cost question. It monitors access patterns and moves objects between tiers automatically, so it is genuinely correct when access patterns are unknown or changing. It is the wrong answer when the scenario tells you the access pattern explicitly.</p>
+        <p>The tell is whether the scenario gives you a known lifecycle. If it says logs are written once and read only during incident response, or that objects are hot for thirty days and then never touched, a lifecycle policy with explicit transitions is cheaper because Intelligent-Tiering charges a monitoring and automation fee per object. If the scenario says access patterns are unpredictable or the team does not know how the data will be used, Intelligent-Tiering is the right call and the fee is the price of not guessing.</p>
+
+        <h3 class="sub-heading">Pattern 12 — Data Transfer Costs Attributed to the Wrong Hop</h3>
+        <p>Cost scenarios involving multi-AZ or multi-region architectures often include a distractor that blames the wrong component. The classic is a scenario where a chatty application crosses Availability Zones on every request, and the offered answers focus on instance sizing or storage class rather than the cross-AZ traffic itself.</p>
+        <p>The tell is whether the architecture diagram or description shows traffic crossing a boundary — AZ, region, or the internet — on a high-frequency path. Cross-AZ traffic is billed in both directions, and a service that makes many small calls between AZs can cost more in transfer than in compute. The correct answer is usually to co-locate the chatty components in a single AZ with the understanding that you are trading some resilience, or to reduce the call volume. If the scenario mentions NAT Gateway data processing charges, the same logic applies: the fix is a gateway endpoint for S3 and DynamoDB traffic, not a bigger NAT.</p>
+
+        <h3 class="sub-heading">Pattern 13 — Savings Plans Applied to the Wrong Scope</h3>
+        <p>Both Savings Plan types are commitment instruments, and a scenario can be constructed where the candidate picks the right type but the wrong scope. The distractor is an EC2 Instance Savings Plan offered for a workload that includes Fargate tasks or Lambda invocations, where the commitment would not apply to that portion of the spend at all.</p>
+        <p>The tell is the composition of the bill. If the scenario mentions containers on Fargate, Lambda functions, or a mix of compute types, only Compute Savings Plans cover that breadth. EC2 Instance Savings Plans apply to EC2 usage within a specific instance family in a specific region and nothing else. Read the scenario for the words "Fargate" and "Lambda" specifically — they are the signal that the narrower plan is disqualified.</p>
+
+        <h3 class="sub-heading">Pattern 14 — Spot Fleet Without Interruption Handling</h3>
+        <p>Spot Fleet and mixed-instance Auto Scaling Groups are the correct mechanism for running fault-tolerant work on Spot capacity, and the distractor is a scenario that names Spot Fleet but never addresses what happens when a Spot instance is reclaimed. The exam expects you to know that the two-minute notice has to be consumed by something.</p>
+        <p>The tell is whether the scenario mentions draining, checkpointing, or a handler. A correct Spot answer includes a mechanism that reacts to the interruption notice — a lifecycle hook that drains connections, a checkpoint written to durable storage, or a queue that lets the work be picked up elsewhere. If the scenario describes a workload that cannot tolerate any interruption and the offered answer is Spot with a diversification policy, the diversification reduces the frequency of interruptions but does not eliminate them, and the answer is wrong.</p>
+
+        <h3 class="sub-heading">Pattern 15 — The Commitment That Outlives the Workload</h3>
+        <p>The last pattern is the one that ties the domain together. A scenario describes a project with a known end date — a six-month migration, a seasonal campaign, a proof of concept — and offers a one- or three-year commitment because the discount is larger. The math in the scenario is a trap: the discount only pays if the usage continues for the full term.</p>
+        <p>The tell is any explicit duration on the workload itself. If the scenario says the environment will be decommissioned, or that the workload is temporary, the correct answer is On-Demand or Spot for the duration, or a shorter commitment if one is offered. This is the same reflex that produced the wrong answers in yesterday's migration review — reaching for the most powerful tool without checking whether the constraint permits it. In Domain 4, the constraint is almost always time.</p>
+      </section>
+
+      <section class="doc-section" id="lab">
+        <h2 class="section-heading">Hands-On Lab — Building a Cost Review From Your Own Bill (45 min)</h2>
+        <div class="card card-green">
+          <p>The most useful version of this review is not abstract. Take a real or sample account and work the patterns in order, because the order matters: you cannot commit to anything until you know what you are running, and you cannot attribute anything until the tags exist.</p>
+          <p>Start in Cost Explorer and group by service for the last three months. Identify the top three services by spend and write down, for each, whether the cost is driven by rate, by volume, or by waste. Rate problems are commitment candidates; volume problems are architectural; waste problems are right-sizing. Most accounts have one of each and the temptation is to buy a Savings Plan to fix all three, which only addresses the first.</p>
+          <p>Next, open Compute Optimizer and look at the recommendations for the same period. For every over-provisioned instance it flags, note the recommended type and the projected savings. Compare that number against what a one-year Compute Savings Plan would save on the same instance at its current size. In most fleets the right-sizing number is larger, which is the empirical version of Pattern 4.</p>
+          <p>Then check tag coverage. Pick the cost allocation tags you would want — CostCenter, Environment, Owner — and count how many resources in the top three services actually carry them. If coverage is below roughly ninety percent, stop and fix that before doing anything else, because every report you build afterward will be wrong in a way that is hard to notice. Write the SCP or Config rule that would enforce the tags at creation time, even if you do not apply it.</p>
+          <p>Finally, build one budget per cost center with a forecasted-spend alert at eighty percent and an actual-spend alert at one hundred percent, and decide explicitly whether either should trigger an action rather than a notification. That decision is Pattern 7 in practice, and writing it down forces you to be honest about whether you want enforcement or just visibility.</p>
+          <p>Finish by writing a one-page summary in the same shape as the pattern entries above: for each of the three services, the tempting fix, the correct fix, and the tell that distinguishes them. That page is what you review on Day 68, and it is more valuable than any of the individual numbers you collected.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="quiz">
+        <h2 class="section-heading">Drill — 15 Distractor-Pattern Questions</h2>
+        <p>Each question below is built around one of the patterns above, and each includes the tempting wrong answer as a live option. Answer before revealing.</p>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q1.</strong> A company runs a steady-state EC2 fleet in a single region on a single instance family. The fleet has not changed in two years and there are no plans to change it. The only stated goal is the largest possible discount. Which commitment should they purchase?</p>
+          <div class="scenario-options" id="opts-d64q1">
+            <div class="scenario-option">A. Compute Savings Plans, because they cover any family and region</div>
+            <div class="scenario-option">B. EC2 Instance Savings Plans, because the fleet is frozen to a family and region</div>
+            <div class="scenario-option">C. Spot Instances with a diversification policy</div>
+            <div class="scenario-option">D. On-Demand with Compute Optimizer recommendations</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d64q1', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d64q1"><strong>Correct answer: B.</strong> EC2 Instance Savings Plans give a deeper discount than Compute Savings Plans in exchange for locking to an instance family and region. When the scenario explicitly removes the need for flexibility, the narrower plan is correct. Compute Savings Plans are the right answer only when the scenario gives you a reason the fleet will change.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q2.</strong> A regulated workload must be able to launch a specific instance type in a specific Availability Zone during a regional capacity shortage. Cost is a secondary concern. What should be provisioned?</p>
+          <div class="scenario-options" id="opts-d64q2">
+            <div class="scenario-option">A. A three-year Compute Savings Plan</div>
+            <div class="scenario-option">B. A zonal Reserved Instance for that instance type in that AZ</div>
+            <div class="scenario-option">C. Spot Fleet with capacity-optimized allocation</div>
+            <div class="scenario-option">D. A larger instance family to absorb the demand</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d64q2', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d64q2"><strong>Correct answer: B.</strong> Savings Plans are a billing construct and reserve no capacity. Only zonal Reserved Instances carry a capacity reservation for a specific instance type in a specific AZ. The scenario's requirement is availability, not price, so the discount mechanism is the wrong axis.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q3.</strong> A team runs a nightly batch rendering job that processes independent frames and can restart any frame from scratch. They want the lowest possible cost. What is the appropriate capacity strategy?</p>
+          <div class="scenario-options" id="opts-d64q3">
+            <div class="scenario-option">A. On-Demand instances with a Savings Plan</div>
+            <div class="scenario-option">B. Spot Instances with a mixed-instance policy and a checkpoint on interruption</div>
+            <div class="scenario-option">C. Dedicated Hosts</div>
+            <div class="scenario-option">D. A single large instance to reduce per-instance overhead</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d64q3', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d64q3"><strong>Correct answer: B.</strong> The workload is stateless and restartable, which is exactly what Spot is for. The mixed-instance policy diversifies across pools to reduce interruption frequency, and the checkpoint handles the two-minute notice. Spot is wrong only when the work holds state that cannot be lost.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q4.</strong> Compute Optimizer reports that a fleet of m5.2xlarge instances is running at under ten percent CPU utilization. The team wants to reduce cost. What should they do first?</p>
+          <div class="scenario-options" id="opts-d64q4">
+            <div class="scenario-option">A. Purchase a three-year EC2 Instance Savings Plan on the current fleet</div>
+            <div class="scenario-option">B. Right-size to the recommended instance types, then consider a commitment on the new baseline</div>
+            <div class="scenario-option">C. Move the fleet to Spot</div>
+            <div class="scenario-option">D. Enable S3 Intelligent-Tiering</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d64q4', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d64q4"><strong>Correct answer: B.</strong> Committing to an oversized instance locks in the waste at a discount. Right-sizing comes first because it reduces the baseline that any commitment is measured against. The order — right-size, then commit — is the point of the question.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q5.</strong> Finance needs hourly, resource-level billing line items loaded into a data warehouse for custom analysis. Which source provides this?</p>
+          <div class="scenario-options" id="opts-d64q5">
+            <div class="scenario-option">A. Cost Explorer's built-in reports</div>
+            <div class="scenario-option">B. The Cost and Usage Report delivered to S3</div>
+            <div class="scenario-option">C. AWS Budgets</div>
+            <div class="scenario-option">D. Trusted Advisor cost checks</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d64q5', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d64q5"><strong>Correct answer: B.</strong> The Cost and Usage Report is the most granular billing dataset and lands in S3 where it can be queried with Athena. Cost Explorer is a visualization and forecasting console; it is not the raw line-item source.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q6.</strong> A team wants to know which specific smaller instance type to move their over-provisioned instances to, with projected savings. Which service answers this?</p>
+          <div class="scenario-options" id="opts-d64q6">
+            <div class="scenario-option">A. AWS Trusted Advisor</div>
+            <div class="scenario-option">B. AWS Compute Optimizer</div>
+            <div class="scenario-option">C. AWS Config</div>
+            <div class="scenario-option">D. Cost Explorer's RI recommendations</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d64q6', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d64q6"><strong>Correct answer: B.</strong> Trusted Advisor flags that low-utilization instances exist; Compute Optimizer analyzes historical utilization and recommends a specific target instance type with projected savings. The question asks for a recommendation, not a flag.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q7.</strong> A company wants spending to actually stop when a project exceeds its monthly budget, not just be reported. What should be configured?</p>
+          <div class="scenario-options" id="opts-d64q7">
+            <div class="scenario-option">A. An AWS Budget with a notification threshold</div>
+            <div class="scenario-option">B. A budget action that applies a restrictive SCP or stops resources when the threshold is breached</div>
+            <div class="scenario-option">C. Cost Explorer alerts</div>
+            <div class="scenario-option">D. A Trusted Advisor cost check</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d64q7', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d64q7"><strong>Correct answer: B.</strong> A budget notification only alerts; it does not prevent spend. Enforcement requires a budget action that takes effect on the account, or an SCP that denies the expensive resource creation outright. The verb in the scenario — "stop" — is the tell.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q8.</strong> Finance wants spend broken out per business unit, but an audit shows that fewer than half of the resources carry any cost allocation tags. What should be done first?</p>
+          <div class="scenario-options" id="opts-d64q8">
+            <div class="scenario-option">A. Build a Cost Explorer report grouped by business unit</div>
+            <div class="scenario-option">B. Enforce mandatory cost allocation tags at resource creation, then activate them for cost allocation</div>
+            <div class="scenario-option">C. Consolidate all business units into one account</div>
+            <div class="scenario-option">D. Enable the Cost and Usage Report</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d64q8', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d64q8"><strong>Correct answer: B.</strong> No reporting tool can attribute spend to a dimension that is not recorded on the resource. Tag enforcement at creation time — via SCP or Config rule — is the prerequisite, and the ordering is what the question is testing.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q9.</strong> An organization with forty accounts under AWS Organizations wants a single view of total spend with per-account attribution, without weakening account isolation. What is the correct approach?</p>
+          <div class="scenario-options" id="opts-d64q9">
+            <div class="scenario-option">A. Consolidate all workloads into the management account</div>
+            <div class="scenario-option">B. Use consolidated billing at the management account with cost allocation tags and CUR for the breakdown</div>
+            <div class="scenario-option">C. Give each account its own Cost Explorer subscription</div>
+            <div class="scenario-option">D. Move all accounts into a single OU with a shared budget</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d64q9', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d64q9"><strong>Correct answer: B.</strong> Consolidated billing already produces one bill across the organization; tags and CUR provide the per-account and per-project breakdown. Merging accounts solves the reporting problem by destroying the isolation the organization exists to provide.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q10.</strong> A compliance team must be able to produce archived records within a working day if requested, and the records are otherwise never accessed. The data must survive the loss of an entire Availability Zone. Which storage class fits?</p>
+          <div class="scenario-options" id="opts-d64q10">
+            <div class="scenario-option">A. S3 Glacier Deep Archive</div>
+            <div class="scenario-option">B. S3 Glacier Flexible Retrieval</div>
+            <div class="scenario-option">C. S3 One Zone-IA</div>
+            <div class="scenario-option">D. S3 Standard</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d64q10', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d64q10"><strong>Correct answer: B.</strong> Deep Archive's retrieval time is measured in hours and can exceed a working day, and One Zone-IA does not survive an AZ loss. Glacier Flexible Retrieval meets the retrieval window and is replicated across Availability Zones.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q11.</strong> A team has a large S3 bucket whose access patterns are genuinely unpredictable — some objects are read daily, others never. They want to minimize cost without analyzing access patterns themselves. What should they use?</p>
+          <div class="scenario-options" id="opts-d64q11">
+            <div class="scenario-option">A. A lifecycle policy transitioning everything to Glacier Deep Archive after thirty days</div>
+            <div class="scenario-option">B. S3 Intelligent-Tiering</div>
+            <div class="scenario-option">C. S3 Standard-IA for the whole bucket</div>
+            <div class="scenario-option">D. S3 One Zone-IA for the whole bucket</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d64q11', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d64q11"><strong>Correct answer: B.</strong> Intelligent-Tiering is correct precisely when access patterns are unknown or changing, and the per-object monitoring fee is the price of not guessing. A lifecycle policy is cheaper when the pattern is known, which this scenario explicitly denies.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q12.</strong> A three-tier application makes a high volume of small calls between services in different Availability Zones, and the bill shows unexpectedly high data transfer charges. What is the most likely cause and fix?</p>
+          <div class="scenario-options" id="opts-d64q12">
+            <div class="scenario-option">A. Instance sizing; move to a larger family</div>
+            <div class="scenario-option">B. Cross-AZ traffic on a chatty path; co-locate the chatty components or reduce call volume</div>
+            <div class="scenario-option">C. Storage class; move to Glacier</div>
+            <div class="scenario-option">D. NAT Gateway sizing; increase the NAT capacity</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d64q12', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d64q12"><strong>Correct answer: B.</strong> Cross-AZ traffic is billed in both directions, and a service making many small calls across AZs can spend more on transfer than on compute. The fix is architectural — co-locate the chatty components, accepting the resilience trade-off, or reduce the call volume.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q13.</strong> A company's bill includes significant EC2 usage, a large Fargate footprint, and steady Lambda invocations. They want a single commitment instrument covering all three. What should they buy?</p>
+          <div class="scenario-options" id="opts-d64q13">
+            <div class="scenario-option">A. EC2 Instance Savings Plans</div>
+            <div class="scenario-option">B. Compute Savings Plans</div>
+            <div class="scenario-option">C. Standard Reserved Instances</div>
+            <div class="scenario-option">D. Convertible Reserved Instances</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d64q13', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d64q13"><strong>Correct answer: B.</strong> Only Compute Savings Plans apply across EC2, Fargate, and Lambda. EC2 Instance Savings Plans apply to EC2 usage within a specific family and region and would leave the Fargate and Lambda spend undiscounted.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q14.</strong> A team runs a fault-tolerant workload on Spot Fleet and wants to minimize the impact of interruptions. Which addition is required for the design to be complete?</p>
+          <div class="scenario-options" id="opts-d64q14">
+            <div class="scenario-option">A. A larger instance type to reduce the number of instances</div>
+            <div class="scenario-option">B. A handler that consumes the two-minute interruption notice — draining connections or checkpointing work</div>
+            <div class="scenario-option">C. A Savings Plan layered on top of the Spot capacity</div>
+            <div class="scenario-option">D. A dedicated Availability Zone for the fleet</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d64q14', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d64q14"><strong>Correct answer: B.</strong> Diversification reduces how often interruptions happen but does not eliminate them. The two-minute notice has to be consumed by something — a lifecycle hook that drains, or a checkpoint written to durable storage so the work can resume elsewhere.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q15.</strong> A six-month migration project needs a temporary environment that will be decommissioned when the project ends. The team wants to minimize cost. What is the appropriate commitment?</p>
+          <div class="scenario-options" id="opts-d64q15">
+            <div class="scenario-option">A. A three-year Compute Savings Plan, because the discount is largest</div>
+            <div class="scenario-option">B. On-Demand or Spot for the duration, with no long-term commitment</div>
+            <div class="scenario-option">C. A one-year EC2 Instance Savings Plan</div>
+            <div class="scenario-option">D. Convertible Reserved Instances for three years</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d64q15', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d64q15"><strong>Correct answer: B.</strong> A commitment only pays if the usage continues for the full term. The scenario states the environment will be decommissioned in six months, so any multi-year commitment would be paid on capacity that no longer exists. The constraint in Domain 4 is almost always time.</div>
+        </div>
+      </section>
+
+      <section class="doc-section" id="preview">
+        <h2 class="section-heading">Preview — Mock Exam 3</h2>
+        <div class="card card-purple">
+          <p>Everything in this review assumed you already know which answer is right and are working on why the wrong ones are tempting. That assumption is about to be tested under conditions where you will not have time to run the pattern list in your head. Mock Exam 3 is the third full 75-question, 180-minute sitting, and by this point the score itself matters less than the shape of the misses. If the cost patterns above have landed, Domain 4 questions should stop producing the "I narrowed it to two and picked wrong" outcome and start producing clean, fast answers.</p>
+          <p>The open question is whether the deep reviews on Days 59 through 64 have actually moved the needle, or whether they have only made the material feel more familiar. Familiarity is the failure mode here: recognizing a pattern on review and applying it under a 2.4-minute-per-question clock are different skills, and only the timed sitting distinguishes them. Take Mock Exam 3 without pausing, without notes, and without the pattern list open, and let the score tell you which of those two things you actually have.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="sources">
+        <h2 class="section-heading">Sources</h2>
         <div class="card">
-          <p>Re-do all missed cost-optimization practice questions, plus 10 new scenario questions on Savings Plans vs Reserved Instance selection.</p>
+          <ul class="source-list">
+            <li><a href="https://docs.aws.amazon.com/savingsplans/latest/userguide/what-is-savings-plans.html" target="_blank">AWS Savings Plans User Guide — plan types and scope</a></li>
+            <li><a href="https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ri-market-concepts-buying.html" target="_blank">Amazon EC2 User Guide — Reserved Instances and capacity reservations</a></li>
+            <li><a href="https://docs.aws.amazon.com/compute-optimizer/latest/ug/what-is-compute-optimizer.html" target="_blank">AWS Compute Optimizer User Guide — right-sizing recommendations</a></li>
+            <li><a href="https://docs.aws.amazon.com/cur/latest/userguide/what-is-cur.html" target="_blank">AWS Cost and Usage Report User Guide — granular billing data</a></li>
+            <li><a href="https://docs.aws.amazon.com/awsaccountbilling/latest/aboutv2/budgets-managing-costs.html" target="_blank">AWS Budgets — alerts and budget actions</a></li>
+          </ul>
         </div>
       </section>
-      <section class="doc-section">
-        <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
-        <p style="color:var(--text-muted);font-style:italic;">Detailed scenario questions for this day will be added when the curriculum reaches it — see the <a href="day-056.html">Day 56 DMS lesson</a> for the full format this site is building toward.</p>
-      </section>
+
       <div class="day-nav">
         <a href="day-063.html">&larr; Day 63: Deep Review — Domain 3 Weak Areas (Migration &amp; Modernization)</a>
         <button class="btn btn-green" onclick="markComplete(64, 'day-065.html')">Mark Day 64 Complete &rarr;</button>

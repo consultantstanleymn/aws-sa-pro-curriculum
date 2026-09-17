@@ -104,37 +104,357 @@
         <span class="pill pill-green">Phase 2: Compute, Containers &amp; Global Databases</span>
       </div>
       <h1 class="hero-title">Amazon EKS Architecture &amp; Managed Node Groups vs Fargate</h1>
-      <div class="reading-meta">&#128337; ~3 min read &middot; 3 services covered</div>
+      <div class="reading-meta">&#128337; ~58 min read &middot; 3 services covered</div>
       <div class="services-grid">
         <span class="service-tag">EKS</span>
         <span class="service-tag">Managed Node Groups</span>
         <span class="service-tag">EKS Fargate Profiles</span>
       </div>
       <div id="tracker"></div>
-      <section class="doc-section">
-        <h2 class="section-heading">Today's Concept</h2>
+
+      <section class="doc-section" id="recap">
+        <h2 class="section-heading">Recap: Where We Left Off</h2>
         <div class="card card-accent">
-          <p>EKS runs the Kubernetes control plane as a managed service; worker capacity comes from self-managed nodes, managed node groups (AWS-managed Auto Scaling Groups), or Fargate profiles (per-pod serverless, no node management, but no DaemonSets and higher per-pod cost).</p>
-        </div>
-        <h3 class="sub-heading">Hands-on Lab / Practical Action (45 min)</h3>
-        <div class="card">
-          <p>Compare a managed node group vs an EKS Fargate profile for a namespace with unpredictable, bursty batch workloads.</p>
+          <p>Day 15 established that Fargate on ECS removes the EC2 layer entirely: a task definition declares CPU, memory, and an IAM task role, and the scheduler places each task into its own isolated compute allocation. The <code>awsvpc</code> network mode then gives every task its own ENI and security group, which is what makes per-task network policy meaningful rather than decorative. That model is clean, and it is also the source of the trap this day sets up in a different service.</p>
+          <p>The trap is that "serverless containers" is a phrase that travels across services without carrying its constraints with it. On ECS, Fargate's isolation is mostly a gift — you get per-task security groups and no host patching. On EKS, the same launch type sits underneath a Kubernetes control plane that assumes nodes exist, and a large fraction of the Kubernetes ecosystem is built on that assumption. DaemonSets, host-path volumes, node-level autoscaling, and node affinity all quietly stop working. The exam does not ask you to recite that Fargate is serverless; it asks you to notice when a stated requirement — a log agent on every node, a GPU, a privileged container — makes Fargate structurally impossible. Same trap, different service.</p>
         </div>
       </section>
-      <section class="doc-section">
-        <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
-        
-      <div class="scenario-card">
-        <p class="scenario-question"><strong>Q1.</strong> A workload requires DaemonSets for log collection on every node. Which EKS compute option should you avoid?</p>
-        <div class="scenario-options" id="opts-d16q0">
-            <div class="scenario-option">A. Managed node groups</div>
-            <div class="scenario-option">B. Self-managed EC2 node groups</div>
-            <div class="scenario-option">C. EKS Fargate profiles — Fargate does not support DaemonSets</div>
-            <div class="scenario-option">D. Cluster Autoscaler on EC2</div>
+
+      <section class="doc-section" id="why-on-exam">
+        <h2 class="section-heading">1. Why EKS Compute Choice Is on the Exam</h2>
+        <p>EKS appears on SAP-C02 primarily as a decision problem rather than a configuration problem. The exam rarely asks you to write a manifest or recall a kubectl flag. It gives you a workload description — a team with existing Kubernetes tooling, a batch job with unpredictable arrival, a compliance requirement that no two tenants share a kernel — and asks which compute substrate you would place it on. The four answers are almost always self-managed nodes, managed node groups, Fargate profiles, and "not EKS at all, use ECS."</p>
+        <p>That framing maps to Domain 2 (Design Resilient Architectures) and Domain 3 (Design High-Performing Architectures), with a recurring cost thread from Domain 4. The resilience angle is about what happens when a node dies and how much of your capacity is self-healing. The performance angle is about scheduling latency, bin-packing efficiency, and whether your pods can actually get the resources they request. The cost angle is the one candidates most often get wrong: Fargate is frequently described as "more expensive," which is true per-vCPU-hour but not necessarily true per-workload once you account for the idle capacity that node groups carry.</p>
+        <p>The reason this is worth a full day rather than a paragraph is that the wrong answer is usually plausible. A scenario describing a small, bursty, low-utilization workload with no operational team reads like a Fargate scenario, and often is — but if the same scenario mentions a sidecar log shipper deployed as a DaemonSet, Fargate is disqualified and the correct answer flips to managed node groups. The exam is testing whether you hold both the cost intuition and the structural constraints in your head at once.</p>
+        <p>There is also a governance dimension that connects back to Week 1. EKS clusters are frequently multi-tenant, and the isolation model you choose determines what a tenant can reach. Fargate gives you a per-pod VM boundary, which is a stronger isolation primitive than a shared node with cgroups and namespaces. When a scenario mentions untrusted or mutually suspicious tenants, that boundary becomes an architectural requirement rather than a cost line, and it pushes the answer toward Fargate even when the utilization math argues the other way.</p>
+      </section>
+
+      <section class="doc-section" id="mechanism">
+        <h2 class="section-heading">2. How EKS Actually Works Underneath</h2>
+        <p>EKS splits the Kubernetes control plane from the data plane and manages only the former. The API server, etcd, the scheduler, and the controller manager run in an AWS-owned account, spread across multiple Availability Zones, with the etcd volume replicated and the API server endpoints fronted by an elastic network interface that you can restrict with security groups. You never see those instances, never patch them, and never get SSH access. What you get back is a standard Kubernetes API endpoint and a certificate authority, which means every upstream Kubernetes tool — kubectl, Helm, Argo CD, the operator ecosystem — works unmodified.</p>
+        <p>The data plane is where the choice lives. A node in EKS is an EC2 instance that has been bootstrapped with the kubelet, the container runtime, and the AWS VPC CNI plugin, then joined to the cluster via a bootstrap script that authenticates against the cluster's endpoint. Managed node groups automate that bootstrap: you declare an instance type, a desired/min/max size, subnets, and optionally a launch template, and EKS provisions an Auto Scaling Group behind the scenes, runs the bootstrap, and registers the nodes. Self-managed nodes are the same thing without the automation — you own the Auto Scaling Group, the AMI, the bootstrap, and the lifecycle. Fargate profiles take a third path: instead of joining a node, each pod scheduled into a matching namespace and label selector gets its own micro-VM, with the kubelet and runtime injected by AWS and no node object that you can see or schedule against.</p>
+        <p>The networking model is the part that most often surprises people coming from ECS. EKS uses the AWS VPC CNI by default, which allocates a real VPC IP address to every pod from the subnet's CIDR range. That is different from overlay networks like Calico or Flannel, where pods get addresses from a private range that is then encapsulated. The practical consequence is that pod IPs are routable inside the VPC, which makes VPC security groups, VPC Flow Logs, and Network Firewall inspection work on pod traffic without any extra plumbing. The cost is IP address consumption: each node pre-allocates a pool of secondary IPs based on its instance type's ENI limits, and a cluster with many small nodes can exhaust a subnet faster than the node count suggests.</p>
+        <p>Authentication and authorization are split in a way that trips people up. The cluster's IAM role controls who can call the EKS API — creating node groups, updating the cluster — but it does not control what happens inside Kubernetes. Inside the cluster, the aws-auth ConfigMap (or, on newer clusters, EKS access entries) maps IAM principals to Kubernetes users and groups, and then standard Kubernetes RBAC decides what those users can do. A very common production incident is an engineer with full EKS API permissions who cannot run kubectl get pods because nobody added them to aws-auth. The two layers are independent, and the exam does occasionally probe whether you know that.</p>
+      </section>
+
+      <section class="doc-section" id="decision-boundary">
+        <h2 class="section-heading">3. The Core Decision Boundary: Nodes or No Nodes</h2>
+        <p>Every EKS compute question reduces to a single fork: does this workload need to be aware of, or share, a node? If the answer is yes — because it runs a per-node agent, needs a GPU, mounts a host path, requires privileged mode, or depends on a node-level autoscaler — then Fargate is off the table and you are choosing between managed and self-managed node groups. If the answer is no, Fargate becomes viable and the decision shifts to a cost and operational-overhead comparison.</p>
+        <p>The reason this fork is so clean is that Fargate's isolation is implemented by removing the node from your view entirely. There is no shared kernel between pods, no node filesystem to mount, no device to pass through, and no node object for a DaemonSet to target. That is exactly what makes it a strong security boundary and exactly what makes it incompatible with a large slice of the Kubernetes ecosystem. When a scenario describes a requirement that only makes sense in the presence of a node, you have your answer.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Requirement in the scenario</th><th>Self-managed nodes</th><th>Managed node groups</th><th>Fargate profiles</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>DaemonSet on every node</td><td>Yes</td><td>Yes</td><td>No — no node to target</td></tr>
+              <tr><td>GPU / specialized hardware</td><td>Yes</td><td>Yes (GPU instance types)</td><td>No</td></tr>
+              <tr><td>Privileged containers, hostPath mounts</td><td>Yes</td><td>Yes</td><td>No</td></tr>
+              <tr><td>Custom AMI / kernel tuning</td><td>Yes</td><td>Yes (launch template AMI)</td><td>No</td></tr>
+              <tr><td>Strong per-pod isolation for untrusted tenants</td><td>Weak (shared kernel)</td><td>Weak (shared kernel)</td><td>Strong (per-pod micro-VM)</td></tr>
+              <tr><td>No node patching or capacity planning</td><td>No</td><td>Partial</td><td>Yes</td></tr>
+              <tr><td>Bin-packing efficiency at high utilization</td><td>High</td><td>High</td><td>Lower — per-pod overhead</td></tr>
+              <tr><td>Spot / mixed capacity with graceful drain</td><td>Manual</td><td>Native</td><td>Not applicable</td></tr>
+            </tbody>
+          </table>
         </div>
-        <button class="scenario-reveal-btn" onclick="revealAnswer('d16q0', 2)">Reveal Answer</button>
-        <div class="scenario-explanation" id="exp-d16q0"><strong>Correct answer: C.</strong> Fargate pods run in isolated micro-VMs with no shared node, so DaemonSets (which require a persistent per-node agent) are not supported.</div>
-      </div>
+        <p>Read the table as a filter rather than a scorecard. The first four rows are hard disqualifiers for Fargate; the last four are soft preferences that only matter once Fargate is still in the running. A scenario that mentions a DaemonSet and a tight budget is not asking you to weigh cost against isolation — it is telling you the answer is a node group and the cost discussion is a distractor.</p>
+      </section>
+
+      <section class="doc-section" id="config-tradeoffs">
+        <h2 class="section-heading">4. Configuration Modes and What Each Costs You</h2>
+        <p>Managed node groups are the default recommendation for most production clusters, and the reason is that they remove the two most error-prone parts of running Kubernetes on EC2: the AMI lifecycle and the join process. You specify an instance type and a size range, and EKS handles the Auto Scaling Group, the bootstrap, and — if you opt in — the AMI updates. The managed AMI update path is worth understanding because it is not a rolling replacement of your nodes in the naive sense. EKS creates a new node group with the updated AMI, cordons and drains the old nodes one at a time, and deletes the old group when the migration completes. That drain respects PodDisruptionBudgets, which means a badly configured PDB can stall the update indefinitely.</p>
+        <p>Self-managed nodes exist for the cases where you need control that managed node groups do not expose. Custom AMIs with hardened kernels, specific instance types that the managed path does not yet support, unusual bootstrap logic, or a requirement to run the nodes in a way that conflicts with the managed lifecycle. The cost is that you now own the AMI pipeline, the bootstrap script, the Auto Scaling Group configuration, and the node upgrade process. In practice, teams that choose self-managed nodes usually do so because of a specific constraint, not because they prefer the operational burden.</p>
+        <p>Fargate profiles are configured as a namespace plus an optional label selector. Any pod that matches gets scheduled onto Fargate; anything that does not match falls back to node-based scheduling. That selector is the mechanism that lets you run a mixed cluster — a Fargate profile for the stateless web tier and a managed node group for the DaemonSet-dependent observability stack — which is a common and defensible production pattern. The tradeoff is that Fargate pods are billed per vCPU and per GB of memory per second, rounded up, with a minimum billing increment, and the pod spec must fit within the supported CPU/memory combinations. You cannot request an arbitrary 3.5 vCPU; you pick from a fixed set.</p>
+        <p>There is a fourth mode that the exam sometimes implies without naming: EKS Auto Mode, which shifts node provisioning, scaling, and patching to AWS-managed infrastructure while still giving you nodes. It sits between managed node groups and Fargate in the operational-overhead spectrum. If a scenario asks for "no node management but DaemonSets must work," that is the shape of the answer, and it is worth knowing that the middle ground exists rather than treating the choice as strictly binary.</p>
+      </section>
+
+      <section class="doc-section" id="sizing-limits">
+        <h2 class="section-heading">5. Sizing, Limits, and Quotas</h2>
+        <p>The numbers that matter for EKS compute decisions fall into three buckets: what Fargate will accept, what a node can hold, and what the cluster as a whole will allow. Fargate pod sizing is constrained to a defined set of vCPU and memory pairs — the smallest is a quarter vCPU with half a gigabyte, and the largest is 16 vCPU with 120 GB — and the memory you can request scales with the vCPU you choose. A pod that requests a combination outside that set is rejected at admission, not at runtime, which is a useful thing to know when a scenario describes a pod that "fails to schedule" with no obvious resource pressure.</p>
+        <p>Node capacity is governed by the instance type's ENI and IP limits, not just its CPU and memory. Because the VPC CNI assigns a real VPC IP to every pod, the number of pods a node can host is capped by how many secondary IP addresses its ENIs can hold. A small instance type may have plenty of spare CPU but run out of pod slots first. This is the single most common cause of "the node has capacity but pods are stuck Pending," and the fix is either a larger instance type or enabling prefix delegation, which lets the CNI allocate /28 prefixes instead of individual IPs and raises the pod ceiling substantially.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Dimension</th><th>What constrains it</th><th>First thing to check</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Fargate pod size</td><td>Fixed vCPU/memory combinations</td><td>Is the requested pair in the supported set?</td></tr>
+              <tr><td>Pods per node</td><td>ENI secondary IP limits for the instance type</td><td>Prefix delegation enabled? Instance type large enough?</td></tr>
+              <tr><td>Subnet IP exhaustion</td><td>VPC CNI warm pool per node</td><td>Subnet CIDR size vs. node count and pod density</td></tr>
+              <tr><td>Cluster node ceiling</td><td>Service quota per cluster and per Region</td><td>Quota dashboard before a large scale-out</td></tr>
+              <tr><td>Fargate concurrent pods</td><td>Account-level quota</td><td>Request an increase ahead of a launch</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>Quotas deserve a specific mention because they are the classic launch-day failure. EKS has per-cluster and per-Region limits on nodes, and Fargate has an account-level limit on concurrent pods. Neither is visible in the cluster's own metrics, and both are raised by support request rather than automatically. A scenario that describes a planned tenfold scale-out for a product launch is often really asking whether you would pre-emptively request a quota increase, and the answer is yes.</p>
+      </section>
+
+      <section class="doc-section" id="failure-modes">
+        <h2 class="section-heading">6. Failure Modes and What They Look Like in Production</h2>
+        <p>The most common EKS failure is not a crash — it is a pod that never starts. A pod stuck in Pending with an "Insufficient pods" or "Too many pods" event means the scheduler found a node with CPU and memory but no available pod slots, which points at the CNI IP ceiling rather than at resource pressure. A pod stuck in Pending with "no nodes available to schedule pods" in a Fargate profile usually means the namespace or label selector does not match, so the pod is looking for nodes that do not exist. Both look identical in a dashboard that only shows pod count, which is why the first diagnostic move is always <code>kubectl describe pod</code> and reading the Events section rather than looking at aggregate metrics.</p>
+        <p>Node-level failures present differently. When an EC2 instance backing a node group is terminated — by a Spot interruption, an unhealthy status check, or an AZ event — the node goes NotReady and the pods on it are rescheduled, but only after the node's taint toleration period expires. That default is five minutes, which means a Spot-heavy node group can have a visible five-minute gap in capacity after every interruption unless you tune the toleration. The symptom is a periodic dip in available replicas that correlates with Spot reclaim events, and the fix is either a shorter toleration or a mixed-instance strategy that keeps enough On-Demand baseline to absorb the gap.</p>
+        <p>Fargate failures tend to be admission-time rather than runtime. A pod that requests a resource combination outside the supported set, mounts a hostPath, or declares a DaemonSet will fail to schedule with an event that names the constraint. Because there is no node to inspect, the diagnostic surface is smaller — you read the pod events and the Fargate profile configuration, and there is nothing else to look at. That is a genuine advantage operationally, but it also means that when something does go wrong at the infrastructure layer, you have no visibility into it and must wait for AWS.</p>
+        <p>Control-plane failures are rare but worth recognizing. The EKS control plane is multi-AZ and managed, so an API server outage is an AWS-side event, but you can still cause your own by misconfiguring the cluster security group or the public/private endpoint access settings. A cluster with only private endpoint access and no VPC connectivity from your bastion is unreachable, and the symptom is a kubectl timeout rather than an error. That is a configuration failure, not a service failure, and it is a common self-inflicted wound during initial setup.</p>
+      </section>
+
+      <section class="doc-section" id="sre-angle">
+        <h2 class="section-heading">7. The Operational and SRE Angle</h2>
+        <p>From an SRE perspective, the compute choice determines what you monitor and what you can automate. On node-based clusters, the metrics that matter are node-level: CPU and memory reservation versus allocation, the ratio of requested to allocatable resources, and the count of pods per node against the CNI ceiling. A cluster that is 40% utilized by actual consumption but 95% reserved by requests is effectively full, and the only way to see that is to track requests and limits separately from usage. Container Insights gives you this, but the default dashboards emphasize usage, so the reservation view has to be built deliberately.</p>
+        <p>On Fargate, node metrics do not exist, so the monitoring shifts entirely to pod-level and application-level signals. That is simpler in one sense and harder in another: you lose the early-warning signal that a node is filling up, and you gain a billing model where a runaway pod is a cost event rather than a capacity event. The alarm that matters most on Fargate is not CPU utilization but pod count against the account quota, because that is the limit you will hit first during a scale-out.</p>
+        <p>The runbook shape differs too. A node-based incident runbook starts with identifying the affected node, cordoning it, draining it, and letting the Auto Scaling Group replace it. A Fargate incident runbook has no node step — it starts with the pod events and the profile configuration, and the remediation is usually a spec change rather than an infrastructure action. Teams that run mixed clusters need both runbooks, and the triage step is determining which substrate the affected workload is on before opening either one.</p>
+        <p>For SLO purposes, the substrate affects your error budget math in a subtle way. Node-based clusters have a capacity headroom that absorbs short bursts without any user-visible impact, which makes them forgiving of traffic spikes. Fargate scales per pod and is bounded by the account quota and the scheduler's reaction time, so a sudden spike can produce a brief period of unschedulable pods that shows up as elevated latency or 5xx before the new pods are ready. If your SLO is tight, that reaction time is part of your error budget whether you planned for it or not.</p>
+      </section>
+
+      <section class="doc-section" id="gotchas">
+        <h2 class="section-heading">8. Edge Cases and Exam Gotchas</h2>
+        <p>The single most-tested gotcha is the DaemonSet incompatibility, and it is worth stating precisely: Fargate pods run in isolated micro-VMs with no shared node, so any workload that requires a persistent per-node agent cannot run there. That covers log shippers, node exporters, service meshes that install a per-node component, and security agents. The exam will describe the requirement in workload terms — "collect logs from every node" — rather than naming DaemonSets, so the translation step is the actual test.</p>
+        <p>The second gotcha is the cost inversion. Fargate is more expensive per vCPU-hour than an equivalent EC2 instance, but a node group that runs at 15% average utilization is paying for 85% idle capacity. For spiky, low-duty-cycle workloads, Fargate can be cheaper in absolute terms despite the higher unit price. The exam rarely asks you to compute this, but it does ask you to recognize that "Fargate is more expensive" is not a universally valid reason to reject it.</p>
+        <p>The third is the aws-auth versus IAM distinction. Having <code>eks:*</code> in an IAM policy does not grant you any Kubernetes RBAC permissions. A scenario where an administrator "cannot access the cluster" despite full IAM permissions is almost always an aws-auth or access-entry mapping problem, and the fix is on the Kubernetes side, not the IAM side.</p>
+        <p>The fourth is the mixed-cluster pattern. Fargate profiles and node groups coexist in the same cluster, and the profile's namespace and label selector determine which pods land where. A pod that matches no profile and has no node selector will land on nodes; a pod that matches a profile will land on Fargate even if nodes have capacity. Getting the selector wrong is a common cause of "why is this pod on Fargate when I have nodes?"</p>
+        <p>The fifth is the pod-slot ceiling. A node with free CPU and memory can still refuse to schedule pods because the CNI has exhausted its allocatable IPs. If a scenario describes pods stuck Pending on a node that appears to have capacity, the answer is almost always the ENI/IP limit or prefix delegation, not a resource request problem.</p>
+      </section>
+
+      <section class="doc-section" id="vs-comparison">
+        <h2 class="section-heading">9. EKS Compute Options vs. the Alternatives</h2>
+        <p>The comparison that matters most is EKS against ECS, because the exam frequently offers both as answers to the same scenario. The deciding factor is almost never technical capability — both run containers well — but organizational. If the team already runs Kubernetes elsewhere, has existing manifests and Helm charts, or needs portability across clouds, EKS preserves that investment. If the team is AWS-native and wants the lowest operational overhead, ECS with Fargate is simpler and has fewer moving parts. Choosing EKS for a team with no Kubernetes experience is a common wrong answer.</p>
+        <p>Within EKS, the three compute options are not mutually exclusive and the best production answer is often a combination. The table below is the decision rule in compact form.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Option</th><th>Pick it when…</th><th>Avoid it when…</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Managed node groups</td><td>You need DaemonSets, GPUs, custom AMIs, or high bin-packing efficiency, and want AWS to handle the AMI lifecycle</td><td>You need kernel-level control or an instance type the managed path does not support</td></tr>
+              <tr><td>Self-managed nodes</td><td>You need a hardened custom AMI, unusual bootstrap logic, or a specific instance type</td><td>You have no capacity to own the AMI pipeline and node upgrade process</td></tr>
+              <tr><td>Fargate profiles</td><td>Pods are stateless, need strong isolation, and the workload is spiky or low-duty-cycle</td><td>Any pod needs a node-level agent, GPU, hostPath, or privileged mode</td></tr>
+              <tr><td>ECS on Fargate</td><td>The team is AWS-native, has no Kubernetes investment, and wants minimal operational surface</td><td>You need Kubernetes APIs, CRDs, or multi-cloud portability</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The rule of thumb worth carrying into the exam: start from the workload's structural requirements, not from its cost profile. If nothing in the description requires a node, Fargate is a legitimate answer and the cost discussion becomes a tiebreaker. If anything in the description requires a node, the cost discussion is irrelevant and the answer is a node group. The exam's distractors are built to make you skip that first step.</p>
+      </section>
+
+      <section class="doc-section" id="lab">
+        <h2 class="section-heading">Hands-On Lab: Choosing a Substrate for a Bursty Batch Namespace</h2>
+        <div class="card card-green">
+          <p>The scenario is a namespace running batch jobs that arrive unpredictably — some hours it is idle, some hours it runs forty concurrent jobs, and the jobs are short-lived and stateless. The team has no interest in patching nodes. Your job is to determine empirically whether a managed node group or a Fargate profile is the better fit, and to find the point at which each one breaks.</p>
+          <p><strong>1. Establish the baseline cluster.</strong> Create an EKS cluster with one managed node group of a modest instance type, sized to a minimum of two nodes across two Availability Zones. Confirm the cluster is healthy with <code>kubectl get nodes</code> and note the allocatable pod count per node from <code>kubectl describe node</code>. That number is your ceiling for the node-based path, and it is almost always lower than the instance's CPU would suggest.</p>
+          <p><strong>2. Deploy the batch workload on nodes.</strong> Apply a Job manifest with a modest CPU request and a parallelism of ten. Watch the pods schedule and record how long from apply to all pods Running. Then scale parallelism to forty and repeat. Note whether the cluster autoscaler adds nodes, how long that takes, and whether any pods sit Pending during the ramp. The time-to-capacity figure you record here is the number that matters for the comparison.</p>
+          <p><strong>3. Create a Fargate profile for the namespace.</strong> Add a profile matching the batch namespace with a label selector that matches the job pods. Confirm that new pods land on Fargate by checking that they have no node name and that <code>kubectl get nodes</code> shows no new nodes. Re-run the same parallelism ramp and record the same time-to-capacity figure.</p>
+          <p><strong>4. Deliberately break Fargate.</strong> Add a DaemonSet to the namespace and observe what happens — it will not schedule, and the event will name the constraint. Then modify the Job to request a CPU/memory combination outside the supported Fargate set and observe the admission failure. Record both error messages verbatim; they are the diagnostic signatures you will recognize in production.</p>
+          <p><strong>5. Deliberately break the node path.</strong> On the node-based namespace, deploy enough pods to exhaust the CNI IP allocation on a single node while leaving CPU and memory free. Observe the Pending state and the event message. Then enable prefix delegation on the VPC CNI add-on and re-test to confirm the ceiling moves.</p>
+          <p><strong>6. Compare cost and record the crossover.</strong> Using the utilization you observed — which for a bursty batch workload will be low on average — estimate the monthly cost of the node group at its minimum size versus the Fargate cost for the same total job-seconds. Write down the duty cycle at which the two cross over. That number is the answer to the "is Fargate more expensive" question for this specific workload, and it is usually lower than people expect.</p>
+          <p><strong>7. Write the decision memo.</strong> In one page, state which substrate you would choose for this namespace and why, citing the time-to-capacity figures, the structural constraints you hit, and the crossover duty cycle. Include the mixed-cluster option explicitly: a Fargate profile for the batch namespace plus a small managed node group for cluster-level DaemonSets is a legitimate answer, and the memo should say why you did or did not choose it.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="quiz">
+        <h2 class="section-heading">Scenario Question Drills</h2>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q1.</strong> A platform team runs a log-collection agent as a DaemonSet across an EKS cluster. They want to move the application tier to Fargate to reduce node management. What happens to the DaemonSet?</p>
+          <div class="scenario-options" id="opts-d16q1">
+            <div class="scenario-option">A. It runs normally on the Fargate micro-VMs</div>
+            <div class="scenario-option">B. It fails to schedule, because Fargate pods have no shared node for a per-node agent to target</div>
+            <div class="scenario-option">C. It converts automatically into a sidecar in each pod</div>
+            <div class="scenario-option">D. It runs only on the control plane nodes</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d16q1', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d16q1"><strong>Correct answer: B.</strong> Fargate pods run in isolated micro-VMs with no shared node, so DaemonSets — which require a persistent per-node agent — cannot be scheduled. The application tier can move to Fargate, but the DaemonSet must stay on a node group.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q2.</strong> A team has deep existing Kubernetes tooling, Helm charts, and a requirement to run the same manifests on another cloud. Which AWS compute platform best fits?</p>
+          <div class="scenario-options" id="opts-d16q2">
+            <div class="scenario-option">A. Amazon ECS with the EC2 launch type</div>
+            <div class="scenario-option">B. Amazon EKS</div>
+            <div class="scenario-option">C. AWS Lambda with container images</div>
+            <div class="scenario-option">D. AWS Batch on Fargate</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d16q2', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d16q2"><strong>Correct answer: B.</strong> EKS runs standard upstream Kubernetes, so existing manifests, Helm charts, and CRDs work unmodified and the same artifacts are portable to other Kubernetes environments. ECS is AWS-proprietary and would require rewriting the deployment tooling.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q3.</strong> Pods are stuck in Pending on a node that shows plenty of free CPU and memory. The scheduler event reads "Too many pods." What is the most likely cause?</p>
+          <div class="scenario-options" id="opts-d16q3">
+            <div class="scenario-option">A. The node's kubelet has crashed</div>
+            <div class="scenario-option">B. The VPC CNI has exhausted the node's allocatable secondary IP addresses, capping pod slots below what CPU and memory would allow</div>
+            <div class="scenario-option">C. The pods have an incorrect nodeSelector</div>
+            <div class="scenario-option">D. The cluster's service quota for nodes has been reached</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d16q3', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d16q3"><strong>Correct answer: B.</strong> Because the AWS VPC CNI assigns a real VPC IP to every pod, the number of pods a node can host is capped by its ENI secondary IP limits. Enabling prefix delegation raises that ceiling substantially.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q4.</strong> A workload runs at roughly 12% average CPU utilization with sharp, unpredictable spikes. The team has no capacity to patch nodes. Which substrate is most likely to be both operationally and financially appropriate?</p>
+          <div class="scenario-options" id="opts-d16q4">
+            <div class="scenario-option">A. A large managed node group sized for peak</div>
+            <div class="scenario-option">B. EKS Fargate profiles, since per-pod billing avoids paying for idle node capacity</div>
+            <div class="scenario-option">C. Self-managed nodes with Reserved Instances</div>
+            <div class="scenario-option">D. A single large EC2 instance running kubeadm</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d16q4', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d16q4"><strong>Correct answer: B.</strong> At low duty cycle, a node group sized for peak pays for idle capacity most of the time. Fargate's higher unit price is offset by billing only for what runs, and it removes node patching entirely — provided no pod needs node-level features.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q5.</strong> An engineer has an IAM policy granting <code>eks:*</code> on all resources but receives "error: You must be logged in to the server (Unauthorized)" from kubectl. What is the most likely cause?</p>
+          <div class="scenario-options" id="opts-d16q5">
+            <div class="scenario-option">A. The cluster's security group is blocking port 443</div>
+            <div class="scenario-option">B. The IAM principal is not mapped to a Kubernetes user or group in aws-auth (or via EKS access entries), so Kubernetes RBAC denies the request</div>
+            <div class="scenario-option">C. The kubeconfig is pointing at the wrong Region</div>
+            <div class="scenario-option">D. The EKS control plane is down</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d16q5', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d16q5"><strong>Correct answer: B.</strong> IAM controls access to the EKS API; Kubernetes RBAC controls what happens inside the cluster. The two layers are independent, and an unmapped IAM principal has no Kubernetes identity.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q6.</strong> A machine-learning team needs GPU-backed pods in an EKS cluster. Which compute option can satisfy this?</p>
+          <div class="scenario-options" id="opts-d16q6">
+            <div class="scenario-option">A. EKS Fargate profiles</div>
+            <div class="scenario-option">B. Managed node groups with GPU instance types</div>
+            <div class="scenario-option">C. Either option works identically</div>
+            <div class="scenario-option">D. Neither — EKS does not support GPUs</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d16q6', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d16q6"><strong>Correct answer: B.</strong> Fargate does not expose GPUs or other specialized hardware. GPU workloads require node-based compute, typically a managed node group using GPU instance types with the appropriate device plugin.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q7.</strong> A cluster runs a Fargate profile for the <code>web</code> namespace and a managed node group for everything else. A pod in the <code>web</code> namespace has no matching label selector for the profile. Where does it run?</p>
+          <div class="scenario-options" id="opts-d16q7">
+            <div class="scenario-option">A. It fails to schedule</div>
+            <div class="scenario-option">B. It falls back to the node group, since Fargate profiles only claim pods that match both namespace and selector</div>
+            <div class="scenario-option">C. It runs on Fargate regardless of the selector</div>
+            <div class="scenario-option">D. It runs on the control plane</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d16q7', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d16q7"><strong>Correct answer: B.</strong> A Fargate profile claims a pod only when both the namespace and the label selector match. Non-matching pods fall through to node-based scheduling, which is what makes mixed clusters work.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q8.</strong> A Spot-heavy managed node group shows a recurring five-minute dip in available replicas that correlates with Spot reclaim events. What is the most likely explanation?</p>
+          <div class="scenario-options" id="opts-d16q8">
+            <div class="scenario-option">A. The Auto Scaling Group is misconfigured</div>
+            <div class="scenario-option">B. Pods are waiting out the default node NotReady toleration period before being rescheduled</div>
+            <div class="scenario-option">C. The load balancer health checks are too aggressive</div>
+            <div class="scenario-option">D. The VPC CNI is leaking IP addresses</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d16q8', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d16q8"><strong>Correct answer: B.</strong> When a node goes NotReady, pods wait out the toleration period (five minutes by default) before being evicted and rescheduled. Tuning the toleration or keeping an On-Demand baseline absorbs the gap.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q9.</strong> A regulated workload requires that no two tenants share a kernel. Which EKS compute option provides the strongest isolation boundary?</p>
+          <div class="scenario-options" id="opts-d16q9">
+            <div class="scenario-option">A. Managed node groups with pod security policies</div>
+            <div class="scenario-option">B. EKS Fargate profiles, where each pod runs in its own micro-VM</div>
+            <div class="scenario-option">C. Self-managed nodes with namespaces</div>
+            <div class="scenario-option">D. Network policies alone</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d16q9', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d16q9"><strong>Correct answer: B.</strong> Fargate gives each pod its own micro-VM, so there is no shared kernel between tenants. Node-based options share a kernel across all pods on the node, which namespaces and network policies do not change.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q10.</strong> A pod spec requests 3.5 vCPU and 7 GB of memory and is rejected before it ever runs. Why?</p>
+          <div class="scenario-options" id="opts-d16q10">
+            <div class="scenario-option">A. The cluster has insufficient capacity</div>
+            <div class="scenario-option">B. Fargate only accepts a fixed set of vCPU/memory combinations, and that pair is not one of them</div>
+            <div class="scenario-option">C. The pod needs a node selector</div>
+            <div class="scenario-option">D. The IAM task role is missing</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d16q10', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d16q10"><strong>Correct answer: B.</strong> Fargate pod sizing is constrained to a defined set of vCPU and memory pairs. A request outside that set is rejected at admission rather than failing at runtime.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q11.</strong> A team wants AWS to handle node provisioning, scaling, and patching but still needs DaemonSets to work. Which option fits?</p>
+          <div class="scenario-options" id="opts-d16q11">
+            <div class="scenario-option">A. EKS Fargate profiles</div>
+            <div class="scenario-option">B. EKS Auto Mode, which manages nodes on your behalf while still providing node objects</div>
+            <div class="scenario-option">C. Self-managed nodes with a custom AMI</div>
+            <div class="scenario-option">D. ECS on Fargate</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d16q11', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d16q11"><strong>Correct answer: B.</strong> EKS Auto Mode shifts node provisioning, scaling, and patching to AWS-managed infrastructure while still giving you nodes, so DaemonSets continue to work. Fargate cannot satisfy the DaemonSet requirement.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q12.</strong> A product launch is expected to increase pod count tenfold in a single Region. What should be done before the launch?</p>
+          <div class="scenario-options" id="opts-d16q12">
+            <div class="scenario-option">A. Nothing — EKS scales automatically without limits</div>
+            <div class="scenario-option">B. Request service quota increases for cluster nodes and, if using Fargate, for concurrent Fargate pods</div>
+            <div class="scenario-option">C. Switch the cluster to a single Availability Zone</div>
+            <div class="scenario-option">D. Disable the cluster autoscaler</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d16q12', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d16q12"><strong>Correct answer: B.</strong> EKS has per-cluster and per-Region node quotas, and Fargate has an account-level concurrent-pod quota. Neither is visible in cluster metrics and both require a support request to raise.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q13.</strong> A managed node group AMI update appears to hang indefinitely, with old nodes never draining. What is the most likely cause?</p>
+          <div class="scenario-options" id="opts-d16q13">
+            <div class="scenario-option">A. The new AMI is corrupt</div>
+            <div class="scenario-option">B. A PodDisruptionBudget is preventing the drain from evicting pods</div>
+            <div class="scenario-option">C. The cluster's IAM role lacks permissions</div>
+            <div class="scenario-option">D. The VPC CNI is misconfigured</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d16q13', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d16q13"><strong>Correct answer: B.</strong> The managed AMI update path cordons and drains nodes one at a time, respecting PodDisruptionBudgets. A PDB that cannot be satisfied will stall the drain indefinitely.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q14.</strong> A team is AWS-native, has no Kubernetes experience, and wants the lowest possible operational overhead for a containerized web application. Which choice is most appropriate?</p>
+          <div class="scenario-options" id="opts-d16q14">
+            <div class="scenario-option">A. Amazon EKS with managed node groups</div>
+            <div class="scenario-option">B. Amazon ECS on Fargate</div>
+            <div class="scenario-option">C. Self-managed Kubernetes on EC2</div>
+            <div class="scenario-option">D. Amazon EKS with Fargate profiles</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d16q14', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d16q14"><strong>Correct answer: B.</strong> With no existing Kubernetes investment, ECS on Fargate has fewer moving parts and a smaller operational surface than EKS. Choosing EKS for a team without Kubernetes experience is a common wrong answer.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q15.</strong> A cluster is configured with private endpoint access only, and an engineer's kubectl commands time out rather than returning an authorization error. What does this indicate?</p>
+          <div class="scenario-options" id="opts-d16q15">
+            <div class="scenario-option">A. The engineer lacks Kubernetes RBAC permissions</div>
+            <div class="scenario-option">B. The engineer has no network path to the private API endpoint, which is a connectivity problem rather than an authorization one</div>
+            <div class="scenario-option">C. The control plane is in a different Region</div>
+            <div class="scenario-option">D. The kubeconfig certificate has expired</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d16q15', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d16q15"><strong>Correct answer: B.</strong> A timeout rather than an Unauthorized error points at network reachability. With private-only endpoint access, the client must be inside the VPC or connected via VPN/Direct Connect to reach the API server.</div>
+        </div>
+      </section>
+
+      <section class="doc-section" id="preview">
+        <h2 class="section-heading">Peek into Tomorrow</h2>
+        <div class="card card-purple">
+          <p>Everything in this day assumed that capacity appears when you ask for it. A node group scales out, a Fargate pod schedules, and the workload starts. What we have not examined is the gap between the moment a scaling decision is made and the moment the new capacity can actually serve traffic — and on node-based compute that gap is not small. An EC2 instance has to boot, the kubelet has to join the cluster, the container runtime has to pull images, and the application has to initialize before it is useful. For a workload with a four-minute bootstrap, a scale-out triggered by a traffic spike arrives four minutes after the spike, which is often too late to matter.</p>
+          <p>Tomorrow's material addresses that gap directly, and it does so with two mechanisms that are easy to confuse. One pauses an instance at a defined point in its lifecycle so a script can run — registering it with a load balancer on the way in, or draining connections on the way out — which is about correctness rather than speed. The other keeps a pool of instances already past the expensive part of startup, so scale-out promotes something that is nearly ready instead of beginning from a cold boot. The open question worth carrying forward is which of those two you reach for when the problem is latency rather than correctness, and what the tradeoff is when you keep pre-initialized capacity sitting idle.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="sources">
+        <h2 class="section-heading">Sources</h2>
+        <div class="card">
+          <ul class="source-list">
+            <li><a href="https://docs.aws.amazon.com/eks/latest/userguide/what-is-eks.html" target="_blank">Amazon EKS User Guide — What is Amazon EKS</a></li>
+            <li><a href="https://docs.aws.amazon.com/eks/latest/userguide/managed-node-groups.html" target="_blank">Amazon EKS User Guide — Managed node groups</a></li>
+            <li><a href="https://docs.aws.amazon.com/eks/latest/userguide/fargate.html" target="_blank">Amazon EKS User Guide — AWS Fargate for EKS</a></li>
+            <li><a href="https://docs.aws.amazon.com/eks/latest/userguide/pod-configuration.html" target="_blank">Amazon EKS User Guide — Pod configuration for Fargate</a></li>
+            <li><a href="https://docs.aws.amazon.com/eks/latest/userguide/managing-vpc-cni.html" target="_blank">Amazon EKS User Guide — VPC CNI plugin and prefix delegation</a></li>
+            <li><a href="https://docs.aws.amazon.com/eks/latest/userguide/cluster-auth.html" target="_blank">Amazon EKS User Guide — Granting Kubernetes access (aws-auth and access entries)</a></li>
+            <li><a href="https://docs.aws.amazon.com/eks/latest/userguide/service-quotas.html" target="_blank">Amazon EKS User Guide — Service quotas</a></li>
+            <li><a href="https://docs.aws.amazon.com/eks/latest/userguide/eks-optimized-ami.html" target="_blank">Amazon EKS User Guide — Amazon EKS optimized AMIs</a></li>
+            <li><a href="https://docs.aws.amazon.com/whitepapers/latest/overview-eks-architecture/introduction.html" target="_blank">AWS Whitepaper — Overview of Amazon EKS Architecture</a></li>
+          </ul>
+        </div>
       </section>
       <div class="day-nav">
         <a href="day-015.html">&larr; Day 15: Amazon ECS Fargate Architecture &amp; Task Definitions</a>

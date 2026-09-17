@@ -104,36 +104,354 @@
         <span class="pill pill-green">Phase 1: Multi-Account Governance &amp; Networking</span>
       </div>
       <h1 class="hero-title">AWS Network Firewall &amp; Centralized Egress</h1>
-      <div class="reading-meta">&#128337; ~3 min read &middot; 2 services covered</div>
+      <div class="reading-meta">&#128337; ~58 min read &middot; 2 services covered</div>
       <div class="services-grid">
         <span class="service-tag">Network Firewall</span>
         <span class="service-tag">Suricata Rules</span>
       </div>
       <div id="tracker"></div>
-      <section class="doc-section">
-        <h2 class="section-heading">Today's Concept</h2>
+
+      <section class="doc-section" id="recap">
+        <h2 class="section-heading">Recap: From Peered Transit Gateways to a Single Inspection Point</h2>
         <div class="card card-accent">
-          <p>AWS Network Firewall provides stateful and stateless traffic inspection using Suricata-compatible rules, typically deployed in a centralized inspection VPC that all egress/ingress traffic is routed through via Transit Gateway and route table tricks (appliance VPC pattern).</p>
-        </div>
-        <h3 class="sub-heading">Hands-on Lab / Practical Action (45 min)</h3>
-        <div class="card">
-          <p>Route all outbound internet traffic from spoke VPCs through a centralized inspection VPC running AWS Network Firewall.</p>
+          <p>Day 9 established that TGW peering runs across regions over the AWS backbone rather than the public internet, and that peering attachments do not propagate routes — static routes are required in each TGW route table, with inter-region MTU capped at 1500 bytes. That is a connectivity lesson: how to make two regional hubs reach each other. Today extends it into a control lesson. Once spokes can reach each other and reach a shared hub, the natural next question is what happens to traffic that leaves the network entirely, and whether you can inspect it in one place instead of everywhere.</p>
+          <p>The mechanism is the same one Day 9 relied on — route tables deciding where packets go next — but the destination is now an appliance rather than a peer. A spoke VPC's default route points at the Transit Gateway, the TGW route table points at an inspection VPC attachment, and the inspection VPC's subnet route table points at a Network Firewall endpoint. Each hop is a static decision, which is exactly why the pattern is auditable and exactly why it breaks silently when one route is missing.</p>
         </div>
       </section>
-      <section class="doc-section">
-        <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
-        
-      <div class="scenario-card">
-        <p class="scenario-question"><strong>Q1.</strong> What is the standard pattern for forcing all internet-bound traffic from multiple VPCs through a single AWS Network Firewall?</p>
-        <div class="scenario-options" id="opts-d10q0">
-            <div class="scenario-option">A. Deploy Network Firewall independently in every VPC</div>
-            <div class="scenario-option">B. Centralized inspection VPC attached to Transit Gateway, with spoke route tables directing 0.0.0.0/0 to the TGW</div>
-            <div class="scenario-option">C. Use only NACLs on each spoke subnet</div>
-            <div class="scenario-option">D. Network Firewall cannot inspect cross-VPC traffic</div>
+
+      <section class="doc-section" id="why-on-exam">
+        <h2 class="section-heading">1. Why This Is on the Exam</h2>
+        <p>Every organization that runs more than a handful of VPCs eventually hits the same governance problem: outbound internet access is the single largest uncontrolled surface in the account, and the default answer — a NAT Gateway per VPC — gives you connectivity with no visibility and no policy. A NAT Gateway will happily forward traffic to any destination on any port. It logs nothing about what was requested. If a workload is compromised and starts beaconing to a command-and-control domain, the NAT Gateway is a perfect accomplice. The architectural problem Network Firewall solves is inserting a policy enforcement and inspection point into that path without forcing every VPC to own and operate its own firewall fleet.</p>
+        <p>This maps most directly to SAP-C02 Domain 1, Design Solutions for Organizational Complexity, and it shows up in two recurring shapes. The first is a governance scenario: a security team wants a single place to enforce egress allowlists, block categories of domains, and produce evidence that inspection happened, across dozens of accounts. The second is a hybrid scenario: traffic from on-premises over Direct Connect or VPN must be inspected before it reaches workload VPCs, and the same inspection layer must handle east-west traffic between VPCs. Both shapes point at the same answer, and the distractors are predictable — per-VPC firewalls, security groups alone, NACLs alone, or a third-party appliance fleet that the question has quietly made operationally infeasible.</p>
+        <p>The reason this is worth a full day rather than a paragraph is that the exam tests the routing, not the firewall rules. Candidates who understand Suricata syntax but cannot explain why a spoke's route table needs a specific entry will pick the wrong option. The inspection VPC pattern is fundamentally a routing architecture with a firewall sitting inside it, and the questions are written to reward that framing.</p>
+      </section>
+
+      <section class="doc-section" id="mechanism">
+        <h2 class="section-heading">2. How Network Firewall Actually Works</h2>
+        <p>A Network Firewall is a managed, highly available appliance that AWS deploys into subnets you designate, one firewall endpoint per Availability Zone. You do not manage instances, patching, or scaling; you manage policy. The firewall is attached to a VPC, and you choose which subnets it lives in — conventionally a dedicated firewall subnet in each AZ of the inspection VPC. Each of those subnets gets an endpoint with its own IP address, and traffic reaches the firewall by being routed to that endpoint's IP. This is the detail that makes the whole pattern work: the firewall is not transparent. It is a routable next hop.</p>
+        <p>Policy is expressed in a firewall policy, which references stateless rule groups and stateful rule groups, plus a default action for each direction. Stateless rules are evaluated first, in priority order, against individual packets with no connection tracking. They are fast and cheap, and they are the right tool for coarse decisions — drop all traffic to a known-bad CIDR, or pass traffic destined for a specific range without further inspection. Stateful rules are evaluated after, using a flow table that tracks connections, and they are where Suricata-compatible rules live. A stateful rule can match on domain names, TLS SNI, HTTP host headers, and payload signatures, which is what makes domain-based egress control possible at all.</p>
+        <p>The Suricata compatibility matters more than it first appears. Network Firewall accepts Suricata rule syntax for stateful rule groups, which means an organization with an existing Suricata ruleset or an IDS team already fluent in the format can port rules rather than relearn a proprietary language. AWS also ships managed rule groups maintained by AWS threat intelligence, covering known malicious domains and threat signatures, which you can attach without writing anything. The practical consequence is that a firewall policy is usually a composition: managed rule groups for baseline threat detection, custom Suricata rules for organization-specific allowlists and blocks, and stateless rules for the coarse traffic you want to short-circuit before it reaches the stateful engine.</p>
+        <p>Logging is a first-class part of the mechanism, not an afterthought. Network Firewall can emit flow logs, alert logs, and TLS logs to CloudWatch Logs, S3, or Kinesis Data Firehose, and the choice of which log types to enable is a real cost and volume decision. Alert logs record traffic that matched a rule with an alert action; flow logs record connection-level metadata; TLS logs record SNI and certificate information for inspected TLS flows. In a centralized inspection VPC, these logs are typically shipped to the same log-archive account that Day 3's Control Tower landing zone provisions, which is how the pattern composes with the rest of the governance baseline.</p>
+      </section>
+
+      <section class="doc-section" id="decision-boundary">
+        <h2 class="section-heading">3. The Core Decision Boundary: Where Does Inspection Live?</h2>
+        <p>The fork every scenario question hinges on is whether inspection is distributed or centralized. Distributed means each VPC owns its own firewall, its own policy, and its own logs. Centralized means one inspection VPC — usually in a dedicated network account — owns the firewall, and every other VPC routes through it. The exam almost always rewards centralized, but the reason is not dogma; it is that the centralized pattern makes policy consistent by construction and makes the audit trail single-sourced. A distributed fleet drifts: one team tightens a rule, another never applies the update, and six months later nobody can answer what the organization's actual egress policy is.</p>
+        <p>The cost of centralization is that the inspection VPC becomes a critical path. If its route tables are wrong, every spoke loses internet access simultaneously. That is a real tradeoff and the exam does probe it, usually by asking what happens when the inspection VPC's firewall endpoint is unavailable in one AZ. The answer is that traffic in that AZ fails unless the spoke subnets have routes to firewall endpoints in multiple AZs, which is why the pattern always deploys endpoints in every AZ the inspection VPC spans.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Dimension</th><th>Distributed (per-VPC firewall)</th><th>Centralized (inspection VPC)</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Policy consistency</td><td>Drifts per team; hard to audit</td><td>Single policy, single source of truth</td></tr>
+              <tr><td>Cost model</td><td>Firewall endpoint hours multiplied by VPC count</td><td>Endpoint hours for one VPC, shared</td></tr>
+              <tr><td>Blast radius of misconfiguration</td><td>One VPC loses egress</td><td>All spokes lose egress</td></tr>
+              <tr><td>Cross-account visibility</td><td>Logs scattered across accounts</td><td>Logs centralized in one account</td></tr>
+              <tr><td>On-prem traffic inspection</td><td>Requires per-VPC handling</td><td>Single ingress path through the hub</td></tr>
+              <tr><td>Operational ownership</td><td>Every app team</td><td>Central network/security team</td></tr>
+            </tbody>
+          </table>
         </div>
-        <button class="scenario-reveal-btn" onclick="revealAnswer('d10q0', 1)">Reveal Answer</button>
-        <div class="scenario-explanation" id="exp-d10q0"><strong>Correct answer: B.</strong> The centralized/hub inspection VPC pattern routes all spoke egress through TGW into a shared Network Firewall, avoiding per-VPC firewall duplication and cost.</div>
-      </div>
+        <p>The decision boundary is therefore not "should we use Network Firewall" but "which traffic must traverse the inspection VPC." A common and exam-relevant refinement is to inspect only egress to the internet and traffic crossing a trust boundary, while allowing intra-VPC traffic and traffic between tightly coupled services to bypass inspection entirely. Routing everything through the hub is simpler to reason about but adds latency and cost to traffic that never needed inspection.</p>
+      </section>
+
+      <section class="doc-section" id="config-tradeoffs">
+        <h2 class="section-heading">4. Configuration Modes and Their Tradeoffs</h2>
+        <p>The first knob is stateless versus stateful evaluation, and the tradeoff is throughput against expressiveness. Stateless rule groups are evaluated per packet with no flow tracking, so they are the cheapest thing the firewall can do and they run first. A stateless rule can drop traffic to a CIDR, or pass traffic that you have already decided is safe, and by doing so it removes that traffic from the stateful engine's workload. Stateful rule groups maintain a flow table and can match on application-layer attributes — domain, SNI, HTTP host — but they cost more per connection and they are where the interesting policy lives. The practical pattern is to use stateless rules as a coarse filter and stateful rules for the decisions that actually require context.</p>
+        <p>The second knob is rule group type within the stateful category. Suricata-compatible rule groups give you the full expressive syntax and are the right choice when you have existing rules or need domain and signature matching. Domain list rule groups are a simplified form that takes a list of domains and an allow-or-deny action, which covers the most common egress-control requirement without writing Suricata at all. Both can coexist in one policy, and the exam does not usually care which you pick as long as you understand that domain-based control requires stateful evaluation — a stateless rule cannot see a domain name.</p>
+        <p>The third knob is the default action for each direction, and this is where most real-world incidents originate. A firewall policy has a default action for stateless and stateful evaluation, and the safe posture is to default to drop and explicitly allow. The dangerous posture is to default to pass and add deny rules, because a missed rule becomes an open door rather than a blocked flow. The exam frames this as a security requirement — "only approved destinations may be reached" — and the answer is always the allowlist posture.</p>
+        <p>The fourth knob is logging configuration, which is a genuine cost decision. Enabling flow logs on a busy inspection VPC can produce very large volumes, and the exam occasionally tests whether you would enable all log types by default. The defensible answer is to enable alert logs always, enable flow logs where you need connection-level forensics, and treat TLS logs as a targeted tool for specific investigations rather than a permanent setting.</p>
+      </section>
+
+      <section class="doc-section" id="sizing-limits">
+        <h2 class="section-heading">5. Sizing, Limits and Quotas</h2>
+        <p>Network Firewall scales automatically with traffic, but the quotas that matter are about how many policies, rule groups, and endpoints you can have, and how large a rule group can be. Each VPC can have one firewall, and each firewall has one firewall policy. A firewall policy can reference multiple stateless and stateful rule groups, and rule groups can be shared across accounts using AWS Resource Access Manager — which is the mechanism that lets a central security account author policy once and have every spoke account's firewall consume it. That RAM integration is the detail that makes the centralized pattern operationally sane at scale, and it connects directly to Day 6's shared-resource model.</p>
+        <p>Endpoint placement determines availability. A firewall deployed into N subnets has N endpoints, and traffic only survives an AZ failure if the routing in the source VPC can reach an endpoint in a surviving AZ. The standard design is one firewall subnet per AZ in the inspection VPC, with the spoke's route table pointing at the Transit Gateway and the TGW route table pointing at the inspection VPC attachment, which itself resolves to endpoints in all AZs. The exam-relevant consequence is that a single-AZ inspection VPC is a single point of failure for every spoke's internet access.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Resource</th><th>Practical constraint to design around</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Firewalls per VPC</td><td>One — the inspection VPC owns the only firewall in the pattern</td></tr>
+              <tr><td>Firewall policy per firewall</td><td>One — all rule groups compose into it</td></tr>
+              <tr><td>Firewall endpoints</td><td>One per subnet you associate; deploy in every AZ for availability</td></tr>
+              <tr><td>Rule group sharing</td><td>Via AWS RAM from a central security account</td></tr>
+              <tr><td>Log destinations</td><td>CloudWatch Logs, S3, or Kinesis Data Firehose</td></tr>
+              <tr><td>MTU</td><td>Inspection adds encapsulation; keep inter-region paths within the 1500-byte ceiling from Day 9</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>Because AWS publishes exact quota values and revises them periodically, the exam-safe approach is to know the shape of the limits — one firewall per VPC, one policy per firewall, endpoints per AZ, rule groups shared via RAM — rather than to memorize a number that may have changed. Where a question gives you a specific number, it is almost always testing whether you recognize that the number is a quota you can request an increase for, not a hard architectural wall.</p>
+      </section>
+
+      <section class="doc-section" id="failure-modes">
+        <h2 class="section-heading">6. Failure Modes and What They Look Like in Production</h2>
+        <p>The signature failure of this pattern is total egress loss from every spoke, and it almost always traces to a route table. The chain has four links: the spoke subnet route table must send 0.0.0.0/0 to the Transit Gateway; the TGW route table must have a route to the inspection VPC attachment; the inspection VPC's subnet route table must send traffic to the firewall endpoint; and the firewall policy must allow the flow. Break any one and the symptom is identical — connections time out — which is why the first diagnostic move is to walk the chain in order rather than to start reading firewall logs. If the firewall logs show nothing at all, the traffic never arrived, and the problem is upstream in routing.</p>
+        <p>The second failure mode is asymmetric routing, which produces connections that establish and then hang. This happens when the return path from the internet or from a peered VPC does not traverse the same firewall endpoint that the outbound path used. Network Firewall is stateful, so a flow whose return traffic bypasses the firewall is dropped as out-of-state. The symptom is a connection that completes a TCP handshake and then stalls, and the fix is to ensure the inspection VPC is on both the outbound and return path — typically by making the inspection VPC the only route to the internet for the spokes, so there is no alternate return path.</p>
+        <p>The third failure mode is a rule that is syntactically valid but semantically wrong, most commonly a Suricata rule with an action that does not match its intent, or a domain rule that matches a subdomain when the intent was the apex. These show up as alert logs full of entries for traffic you believed you were allowing, or as a specific application failing while everything else works. The diagnostic move is to enable alert logging temporarily and read what the firewall thinks it matched, rather than to reason about the rule in the abstract.</p>
+        <p>The fourth is endpoint capacity in a single AZ. If the inspection VPC has endpoints in only one AZ and that AZ has an issue, every spoke loses egress even though the firewall itself is healthy. This is not a firewall failure at all; it is a routing and placement failure that the firewall's health metrics will not reveal.</p>
+      </section>
+
+      <section class="doc-section" id="sre-angle">
+        <h2 class="section-heading">7. The Operational and SRE Angle</h2>
+        <p>Because the inspection VPC sits on the critical path for every spoke's internet access, it deserves the same SLO treatment as a production database. The availability target for the inspection layer is effectively the availability target for every workload that needs egress, and that framing changes what you monitor. CloudWatch metrics for the firewall expose received and dropped packet counts, and a sudden drop to zero received packets is the clearest possible signal that routing has broken upstream — it is a better alarm than any error-rate metric on the applications themselves, because it fires before the applications start failing.</p>
+        <p>The alarm set that matters is small. An alarm on firewall endpoint availability per AZ catches the placement failure. An alarm on received packets dropping to zero catches the routing failure. An alarm on the volume of alert-log entries catches a rule that is suddenly matching far more traffic than expected, which is often the first sign of a compromised workload attempting to reach blocked destinations. And an alarm on the Transit Gateway attachment state catches the case where the inspection VPC has become unreachable from the hub. Together these four cover the failure modes from the previous section without generating noise.</p>
+        <p>The runbook shape follows the routing chain. Step one is to confirm whether traffic is arriving at the firewall at all, using the received-packets metric. If it is not, the runbook walks the four route-table links in order. If it is arriving and being dropped, the runbook moves to the policy and reads the alert logs. If it is arriving and passing but the application still fails, the runbook checks for asymmetric routing on the return path. Writing this down matters more than usual here, because the failure is total and the pressure to guess is high.</p>
+        <p>Change management is the other SRE concern. A firewall policy change is a change to every spoke's connectivity, so it should go through the same pipeline as application code — versioned, reviewed, and deployed with a rollback path. The exam does not usually ask about this directly, but it does ask about operational excellence, and "policy changes are deployed through a pipeline with automated rollback" is the answer that fits the Well-Architected framing from Day 41.</p>
+      </section>
+
+      <section class="doc-section" id="gotchas">
+        <h2 class="section-heading">8. Edge Cases and Exam Gotchas</h2>
+        <p>The most common trap is assuming Network Firewall inspects traffic automatically once it exists. It does not. The firewall is a routable endpoint, and traffic only reaches it if route tables send it there. A question that describes a firewall deployed correctly but with unchanged spoke route tables is describing a firewall that is doing nothing, and the answer is to fix the routing.</p>
+        <p>The second trap is confusing Network Firewall with security groups and NACLs. Security groups are stateful and instance-level; NACLs are stateless and subnet-level; neither can inspect domain names or payload signatures. A question that requires blocking a specific domain or detecting a signature cannot be answered with security groups, no matter how the options are phrased.</p>
+        <p>The third trap is the direction of inspection. Network Firewall inspects traffic in both directions, but the routing must be symmetric for stateful inspection to work. A design that routes outbound traffic through the inspection VPC but lets return traffic come back directly will fail, and the exam will describe exactly that symptom — connections that establish and then hang.</p>
+        <p>The fourth trap is the relationship to Gateway Load Balancer. Both can insert inspection into a path, but Network Firewall is a managed service with its own policy model, while Gateway Load Balancer is a mechanism for distributing traffic to third-party appliance fleets. A question that specifies a third-party firewall vendor is pointing at Gateway Load Balancer; a question that specifies AWS-native inspection with Suricata rules is pointing at Network Firewall.</p>
+        <p>The fifth trap is log volume and cost. Enabling every log type on a high-traffic inspection VPC is expensive, and a question that mentions cost sensitivity alongside logging requirements is testing whether you would enable alert logs and targeted flow logs rather than everything.</p>
+      </section>
+
+      <section class="doc-section" id="vs-comparison">
+        <h2 class="section-heading">9. Network Firewall vs. the Alternatives</h2>
+        <p>The alternatives fall into three groups: native AWS controls that cannot inspect, third-party appliances that can inspect but require you to run them, and the managed service that does both. Placing a scenario into the right group is most of the work.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Option</th><th>What it can do</th><th>Pick it when…</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Security groups</td><td>Stateful allow rules on ENIs; no payload or domain inspection</td><td>You need instance-level access control only</td></tr>
+              <tr><td>Network ACLs</td><td>Stateless subnet-level allow/deny on CIDR and port</td><td>You need a coarse subnet boundary, not inspection</td></tr>
+              <tr><td>AWS Network Firewall</td><td>Stateful and stateless inspection, Suricata rules, domain filtering, managed threat rules</td><td>You need AWS-native inspection with centralized policy</td></tr>
+              <tr><td>Gateway Load Balancer</td><td>Transparent insertion of third-party appliance fleets</td><td>You must run a specific vendor's firewall</td></tr>
+              <tr><td>NAT Gateway</td><td>Egress connectivity with no inspection or policy</td><td>You only need outbound connectivity</td></tr>
+              <tr><td>VPC endpoints / PrivateLink</td><td>Private access to AWS services, bypassing the internet</td><td>You can avoid egress entirely for a given service</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The rule of thumb: if the requirement is "control what can be reached," Network Firewall is the answer. If the requirement is "reach AWS services without touching the internet," a VPC endpoint is cheaper and faster and removes the traffic from the inspection path entirely — which is itself an exam-relevant optimization, because the best way to reduce inspection cost is to not send traffic through the inspector. If the requirement names a third-party vendor, Gateway Load Balancer is the insertion mechanism and Network Firewall is the wrong answer.</p>
+      </section>
+
+      <section class="doc-section" id="lab">
+        <h2 class="section-heading">Hands-on Lab: Centralized Egress Through an Inspection VPC</h2>
+        <div class="card card-green">
+          <p>This lab builds the full pattern end to end: a spoke VPC with no internet gateway of its own, an inspection VPC holding the firewall, and a Transit Gateway connecting them so that all spoke egress is forced through inspection. Budget roughly 45 minutes. Work in a sandbox account, and clean up the Transit Gateway and firewall at the end — both bill hourly.</p>
+          <p><strong>1. Build the inspection VPC.</strong> Create a VPC with a CIDR that does not overlap your spokes, and carve out three subnets, one per Availability Zone, dedicated to firewall endpoints. Add a fourth subnet per AZ for the Transit Gateway attachment. Do not attach an internet gateway to the spoke VPCs at any point; the whole point is that they have no direct path out.</p>
+          <p><strong>2. Create the firewall.</strong> In the inspection VPC, create a Network Firewall and associate it with the three firewall subnets. Create a firewall policy with a default action of drop for both stateless and stateful evaluation, then add a stateful rule group that allows the destinations you actually need — for example, a domain list rule group permitting your package repositories and AWS service endpoints. Attach the AWS managed threat-signature rule group as well so you can see alert logs generated by something you did not write.</p>
+          <p><strong>3. Wire the Transit Gateway.</strong> Create a Transit Gateway with a dedicated route table for the inspection VPC and one for the spokes. Attach the inspection VPC and each spoke VPC. In the spoke route table, add a default route pointing at the inspection VPC attachment. In the inspection VPC's route table, add a default route pointing at the NAT Gateway you place in the inspection VPC's public subnet. This is the step that makes the pattern work, and it is the step most people get wrong.</p>
+          <p><strong>4. Fix the spoke route tables.</strong> In each spoke VPC, add a route in the subnet route table sending 0.0.0.0/0 to the Transit Gateway. Confirm there is no competing route to an internet gateway. At this point a curl from an instance in the spoke should succeed for an allowed domain and fail for a blocked one.</p>
+          <p><strong>5. Prove the failure modes.</strong> Delete the default route from the spoke route table and observe that egress stops entirely while the firewall reports zero received packets — this is the routing failure from section 6. Restore it, then change the firewall policy default action to pass and observe that the previously blocked domain now resolves, which demonstrates why the allowlist posture matters.</p>
+          <p><strong>6. Enable logging and read it.</strong> Turn on alert logging to CloudWatch Logs, then attempt to reach a domain that is not on your allowlist. Find the corresponding alert log entry and identify which rule matched. This is the diagnostic move you would make in production, and doing it once makes the runbook concrete.</p>
+          <p><strong>7. Clean up.</strong> Delete the firewall, the firewall policy, the Transit Gateway attachments, the Transit Gateway, and the NAT Gateway. Confirm in the billing console that no hourly charges remain.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="quiz">
+        <h2 class="section-heading">Scenario Question Drills</h2>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q1.</strong> A security team wants a single place to enforce egress allowlists across 40 workload accounts and produce one audit trail. What is the standard architecture?</p>
+          <div class="scenario-options" id="opts-d10q1">
+            <div class="scenario-option">A. Deploy a Network Firewall in every workload VPC with identical policies</div>
+            <div class="scenario-option">B. A centralized inspection VPC in a network account, with spoke route tables directing 0.0.0.0/0 to a Transit Gateway that routes to the inspection VPC</div>
+            <div class="scenario-option">C. Security groups on every instance restricting outbound ports</div>
+            <div class="scenario-option">D. NACLs on every subnet denying outbound traffic</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d10q1', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d10q1"><strong>Correct answer: B.</strong> The centralized inspection VPC pattern gives one policy and one log destination, avoiding the drift and scattered audit trail of per-VPC firewalls.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q2.</strong> A Network Firewall has been deployed in an inspection VPC with a correct policy, but no traffic is being inspected. What is the most likely cause?</p>
+          <div class="scenario-options" id="opts-d10q2">
+            <div class="scenario-option">A. The firewall needs to be restarted</div>
+            <div class="scenario-option">B. The spoke route tables still point at a NAT Gateway or internet gateway instead of the Transit Gateway, so traffic never reaches the firewall</div>
+            <div class="scenario-option">C. Suricata rules are not supported in this region</div>
+            <div class="scenario-option">D. The firewall policy default action is set to drop</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d10q2', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d10q2"><strong>Correct answer: B.</strong> Network Firewall is a routable endpoint, not a transparent one. If route tables do not send traffic to it, it inspects nothing regardless of policy correctness.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q3.</strong> Which requirement can Network Firewall satisfy that security groups and NACLs cannot?</p>
+          <div class="scenario-options" id="opts-d10q3">
+            <div class="scenario-option">A. Allowing traffic only from a specific source CIDR</div>
+            <div class="scenario-option">B. Blocking outbound traffic on a specific port</div>
+            <div class="scenario-option">C. Blocking outbound traffic to a specific domain name</div>
+            <div class="scenario-option">D. Restricting traffic to a specific subnet</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d10q3', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d10q3"><strong>Correct answer: C.</strong> Domain-based control requires stateful, application-layer inspection. Security groups and NACLs operate on CIDR and port only and cannot see a domain name.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q4.</strong> Applications in a spoke VPC establish TCP connections that then hang without transferring data. Outbound traffic is routed through the inspection VPC. What is the likely cause?</p>
+          <div class="scenario-options" id="opts-d10q4">
+            <div class="scenario-option">A. The firewall policy is dropping the SYN packets</div>
+            <div class="scenario-option">B. Asymmetric routing — return traffic bypasses the firewall endpoint, so stateful inspection drops it as out-of-state</div>
+            <div class="scenario-option">C. The Transit Gateway MTU is too small</div>
+            <div class="scenario-option">D. The NAT Gateway is out of ports</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d10q4', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d10q4"><strong>Correct answer: B.</strong> A completed handshake followed by a stall is the signature of asymmetric routing. Stateful inspection requires both directions of the flow to traverse the same firewall endpoint.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q5.</strong> A central security account wants to author firewall rule groups once and have every account's firewall consume them. What enables this?</p>
+          <div class="scenario-options" id="opts-d10q5">
+            <div class="scenario-option">A. Copying the rule group JSON into each account manually</div>
+            <div class="scenario-option">B. Sharing the rule groups with AWS Resource Access Manager</div>
+            <div class="scenario-option">C. An SCP that enforces rule group contents</div>
+            <div class="scenario-option">D. CloudFormation StackSets only</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d10q5', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d10q5"><strong>Correct answer: B.</strong> AWS RAM is the mechanism for sharing Network Firewall rule groups across accounts, letting a central team author policy once and have it consumed everywhere.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q6.</strong> Which firewall policy default action posture is correct for an organization that must only reach approved destinations?</p>
+          <div class="scenario-options" id="opts-d10q6">
+            <div class="scenario-option">A. Default pass, with deny rules for known-bad destinations</div>
+            <div class="scenario-option">B. Default drop, with explicit allow rules for approved destinations</div>
+            <div class="scenario-option">C. Default pass in both directions, relying on security groups</div>
+            <div class="scenario-option">D. Default drop only for inbound, pass for outbound</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d10q6', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d10q6"><strong>Correct answer: B.</strong> An allowlist posture means a missed rule blocks traffic rather than opening a hole. Default-pass turns every oversight into an open door.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q7.</strong> An inspection VPC has firewall endpoints in only one Availability Zone. What is the availability consequence?</p>
+          <div class="scenario-options" id="opts-d10q7">
+            <div class="scenario-option">A. None — Network Firewall is inherently multi-AZ</div>
+            <div class="scenario-option">B. Every spoke loses internet access if that AZ fails, because there is no surviving endpoint to route to</div>
+            <div class="scenario-option">C. Only the inspection VPC loses connectivity</div>
+            <div class="scenario-option">D. Traffic automatically fails over to a NAT Gateway</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d10q7', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d10q7"><strong>Correct answer: B.</strong> Endpoints are per-subnet. A single-AZ inspection VPC makes that AZ a single point of failure for every spoke's egress.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q8.</strong> Which CloudWatch signal most directly indicates that routing to the inspection VPC has broken?</p>
+          <div class="scenario-options" id="opts-d10q8">
+            <div class="scenario-option">A. A rise in application 5xx errors</div>
+            <div class="scenario-option">B. Firewall received packets dropping to zero</div>
+            <div class="scenario-option">C. An increase in NAT Gateway connection count</div>
+            <div class="scenario-option">D. A rise in Transit Gateway bytes transferred</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d10q8', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d10q8"><strong>Correct answer: B.</strong> Zero received packets means traffic never arrived, which isolates the problem to routing rather than policy — and it fires before applications start failing.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q9.</strong> A workload needs to reach Amazon S3. What is the most cost-effective way to remove that traffic from the inspection path?</p>
+          <div class="scenario-options" id="opts-d10q9">
+            <div class="scenario-option">A. Add an allow rule for S3 in the firewall policy</div>
+            <div class="scenario-option">B. Use a Gateway VPC endpoint for S3 so the traffic never leaves the VPC</div>
+            <div class="scenario-option">C. Route S3 traffic through a second NAT Gateway</div>
+            <div class="scenario-option">D. Increase the firewall endpoint count</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d10q9', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d10q9"><strong>Correct answer: B.</strong> A Gateway endpoint keeps S3 traffic inside the VPC entirely, so it never traverses the inspection VPC — reducing both inspection cost and latency.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q10.</strong> A company must run a specific third-party firewall vendor's appliance fleet in AWS. Which service inserts that fleet into the traffic path?</p>
+          <div class="scenario-options" id="opts-d10q10">
+            <div class="scenario-option">A. AWS Network Firewall</div>
+            <div class="scenario-option">B. Gateway Load Balancer</div>
+            <div class="scenario-option">C. Network Load Balancer</div>
+            <div class="scenario-option">D. Application Load Balancer</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d10q10', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d10q10"><strong>Correct answer: B.</strong> Gateway Load Balancer is purpose-built for transparently inserting third-party appliance fleets. Network Firewall is the AWS-native managed alternative.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q11.</strong> Which statement about stateless versus stateful rule groups is correct?</p>
+          <div class="scenario-options" id="opts-d10q11">
+            <div class="scenario-option">A. Stateless rules can match on domain names; stateful rules cannot</div>
+            <div class="scenario-option">B. Stateless rules are evaluated per packet with no flow tracking and run first; stateful rules use a flow table and can match application-layer attributes</div>
+            <div class="scenario-option">C. Only stateful rules can drop traffic</div>
+            <div class="scenario-option">D. Stateless and stateful rules are evaluated in the order they were created</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d10q11', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d10q11"><strong>Correct answer: B.</strong> Stateless evaluation is per-packet and cheapest, so it runs first as a coarse filter. Domain and signature matching requires the stateful engine's flow tracking.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q12.</strong> On-premises traffic arriving over Direct Connect must be inspected before reaching workload VPCs. Where should the inspection happen?</p>
+          <div class="scenario-options" id="opts-d10q12">
+            <div class="scenario-option">A. In each workload VPC independently</div>
+            <div class="scenario-option">B. In the centralized inspection VPC, with the Transit Gateway routing on-prem traffic through it before it reaches spokes</div>
+            <div class="scenario-option">C. On the customer gateway appliance on-premises</div>
+            <div class="scenario-option">D. Inspection is not possible for Direct Connect traffic</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d10q12', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d10q12"><strong>Correct answer: B.</strong> The same centralized inspection VPC handles north-south and east-west traffic, provided the Transit Gateway route tables force on-prem traffic through it.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q13.</strong> A firewall policy change is being deployed to an inspection VPC serving 40 accounts. What is the operational best practice?</p>
+          <div class="scenario-options" id="opts-d10q13">
+            <div class="scenario-option">A. Apply the change directly in the console during business hours</div>
+            <div class="scenario-option">B. Deploy the policy change through a versioned pipeline with review and an automated rollback path</div>
+            <div class="scenario-option">C. Disable logging during the change to reduce noise</div>
+            <div class="scenario-option">D. Apply the change to one account at a time manually</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d10q13', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d10q13"><strong>Correct answer: B.</strong> A policy change is a change to every spoke's connectivity. Treating it as code with review and rollback is the operational-excellence answer.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q14.</strong> Which log type should be enabled by default to detect traffic matching a blocking rule?</p>
+          <div class="scenario-options" id="opts-d10q14">
+            <div class="scenario-option">A. Flow logs only</div>
+            <div class="scenario-option">B. Alert logs</div>
+            <div class="scenario-option">C. TLS logs only</div>
+            <div class="scenario-option">D. No logs — rely on CloudTrail</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d10q14', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d10q14"><strong>Correct answer: B.</strong> Alert logs record traffic that matched a rule with an alert action, which is exactly the signal you need for blocked-destination detection. Flow and TLS logs are targeted tools.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q15.</strong> A spoke VPC has both a route to an internet gateway and a route to the Transit Gateway for 0.0.0.0/0. What is the consequence?</p>
+          <div class="scenario-options" id="opts-d10q15">
+            <div class="scenario-option">A. Traffic is load-balanced between the two paths</div>
+            <div class="scenario-option">B. The more specific route wins, and if the internet gateway route is more specific, traffic bypasses inspection entirely</div>
+            <div class="scenario-option">C. AWS rejects the configuration</div>
+            <div class="scenario-option">D. The firewall inspects traffic on both paths</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d10q15', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d10q15"><strong>Correct answer: B.</strong> Route selection is longest-prefix-match. Any path that does not traverse the inspection VPC is an uninspected path, which is why spokes must have no direct internet route.</div>
+        </div>
+      </section>
+
+      <section class="doc-section" id="preview">
+        <h2 class="section-heading">Peek into Tomorrow</h2>
+        <div class="card card-purple">
+          <p>Everything in today's pattern assumes the traffic arrives over the AWS network. The inspection VPC inspects what the Transit Gateway hands it, and the Transit Gateway is reachable because the spokes are attached to it. That assumption holds for cloud-native traffic, but it quietly excludes the case that most large enterprises actually care about: traffic that originates on-premises and must reach AWS without traversing the public internet at all. Today's design has no answer for how that traffic gets in, and the answer is not a VPN — a VPN rides the internet, which is precisely what a regulated workload may forbid.</p>
+          <p>Tomorrow's topic is the dedicated private link into AWS, and the open question it resolves is which attachment type you need for which destination. A connection can terminate on a single VPC, on a Transit Gateway, or on public AWS service endpoints, and those are three different virtual interfaces with three different routing consequences. The second unresolved question is resilience: a single connection is a single point of failure regardless of how well it is configured, and the exam consistently rewards designs that diversify across locations and devices with BGP failover rather than simply provisioning a bigger circuit.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="sources">
+        <h2 class="section-heading">Sources</h2>
+        <div class="card">
+          <ul class="source-list">
+            <li><a href="https://docs.aws.amazon.com/network-firewall/latest/developerguide/what-is-aws-network-firewall.html" target="_blank" rel="noopener">AWS Network Firewall — What Is AWS Network Firewall?</a></li>
+            <li><a href="https://docs.aws.amazon.com/network-firewall/latest/developerguide/architecture.html" target="_blank" rel="noopener">AWS Network Firewall — Architecture and Deployment Models</a></li>
+            <li><a href="https://docs.aws.amazon.com/network-firewall/latest/developerguide/stateful-rule-groups-suricata.html" target="_blank" rel="noopener">AWS Network Firewall — Stateful Rule Groups and Suricata Compatibility</a></li>
+            <li><a href="https://docs.aws.amazon.com/network-firewall/latest/developerguide/logging.html" target="_blank" rel="noopener">AWS Network Firewall — Logging and Monitoring</a></li>
+            <li><a href="https://docs.aws.amazon.com/network-firewall/latest/developerguide/sharing-rule-groups.html" target="_blank" rel="noopener">AWS Network Firewall — Sharing Rule Groups with AWS RAM</a></li>
+            <li><a href="https://docs.aws.amazon.com/vpc/latest/tgw/what-is-transit-gateway.html" target="_blank" rel="noopener">AWS Transit Gateway — How Transit Gateway Works</a></li>
+            <li><a href="https://docs.aws.amazon.com/whitepapers/latest/building-scalable-secure-multi-vpc-network-infrastructure/centralized-inspection-architecture.html" target="_blank" rel="noopener">AWS Whitepaper — Centralized Inspection Architecture</a></li>
+            <li><a href="https://docs.aws.amazon.com/wellarchitected/latest/security-pillar/welcome.html" target="_blank" rel="noopener">AWS Well-Architected Framework — Security Pillar</a></li>
+          </ul>
+        </div>
       </section>
       <div class="day-nav">
         <a href="day-009.html">&larr; Day 9: Transit Gateway Peering &amp; Multi-Region</a>

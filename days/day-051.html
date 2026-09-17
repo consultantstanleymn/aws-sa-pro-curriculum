@@ -104,36 +104,343 @@
         <span class="pill pill-green">Phase 4: Migration, Hybrid &amp; Cost Optimization</span>
       </div>
       <h1 class="hero-title">VMware Cloud on AWS — Relocate Strategy</h1>
-      <div class="reading-meta">&#128337; ~3 min read &middot; 2 services covered</div>
+      <div class="reading-meta">&#128337; ~58 min read &middot; 2 services covered</div>
       <div class="services-grid">
         <span class="service-tag">VMware Cloud on AWS</span>
         <span class="service-tag">HCX</span>
       </div>
       <div id="tracker"></div>
-      <section class="doc-section">
-        <h2 class="section-heading">Today's Concept</h2>
+
+      <section class="doc-section" id="recap">
+        <h2 class="section-heading">Recap: Where We Left Off</h2>
         <div class="card card-accent">
-          <p>The Relocate strategy migrates VMware-virtualized workloads to VMware Cloud on AWS without converting them to native EC2/AMI format, preserving the existing hypervisor layer and VMware tooling — used when organizations want cloud infrastructure benefits without an application-level re-platform, often as an interim step before eventual native refactor.</p>
-        </div>
-        <h3 class="sub-heading">Hands-on Lab / Practical Action (45 min)</h3>
-        <div class="card">
-          <p>Compare a Relocate (VMware Cloud on AWS via HCX) approach against a Rehost (MGN to native EC2) approach for a VM the team doesn't want to convert.</p>
+          <p>Day 50 pushed AWS infrastructure closer to the workload rather than moving the workload to AWS: Outposts extends AWS APIs into your data center, Local Zones place compute in specific metro areas, and Wavelength sits at the telco 5G edge. All three answer the same question — how do you get AWS-managed capacity physically near something that cannot move, whether that constraint is a data residency requirement, a metro-latency budget, or a mobile radio access network. The common thread is that the workload stays where it is and AWS comes to it.</p>
+          <p>Today's strategy inverts that. Relocate does not bring AWS to the workload; it moves the workload to AWS while deliberately preserving the thing that made it non-native — the VMware hypervisor layer and the vSphere tooling around it. Where Outposts and Local Zones extend the AWS control plane outward, VMware Cloud on AWS extends a customer's existing VMware operational model inward, into an AWS-operated software-defined data center. That contrast matters on the exam because both families of answers sound like "hybrid," but they solve opposite problems: one is about physical proximity, the other about avoiding application-level conversion. Keep that distinction in mind as we work through when Relocate is the right call and when it is a costly detour.</p>
         </div>
       </section>
-      <section class="doc-section">
-        <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
-        
-      <div class="scenario-card">
-        <p class="scenario-question"><strong>Q1.</strong> A team wants to move VMware VMs to AWS infrastructure fastest, keeping the exact same hypervisor-level configuration and VMware management tools, with no P2V/V2V conversion.</p>
-        <div class="scenario-options" id="opts-d51q0">
+
+      <section class="doc-section" id="why-on-exam">
+        <h2 class="section-heading">1. Why This Is on the Exam</h2>
+        <p>The SAP-C02 exam tests migration strategy as a decision problem, not as a product catalog. The 7 Rs framework gives you seven labels for how a workload moves, and Relocate is the one that most candidates misclassify because it sounds like Rehost. Both move a server to AWS without rewriting the application, so the instinct is to treat them as synonyms and pick whichever name appears in the answer choices. They are not synonyms, and the exam knows it. Rehost lands the workload on native EC2 as an AMI, which means the guest operating system and application are preserved but the hypervisor is not — the VM becomes an EC2 instance and the surrounding VMware management plane is gone. Relocate moves the VM to VMware Cloud on AWS, where it continues to run on a VMware hypervisor, continues to be managed by vCenter, and continues to be visible to the same operational tooling the team already uses.</p>
+        <p>That distinction maps to Domain 3 of the exam, which covers migration and modernization, and it shows up in scenarios that give you a hard constraint rather than a preference. The constraint is usually one of three things: a team with deep VMware operational investment and no appetite to retrain on native AWS tooling, a workload with a vendor support contract that is only valid on VMware, or a migration deadline short enough that any application-level change is off the table. When you see those constraints, Relocate is the answer. When you see a scenario that wants to reduce operational overhead, eliminate licensing cost, or modernize toward managed services, Relocate is a trap — it preserves exactly the overhead the scenario is trying to remove.</p>
+        <p>The exam also tests Relocate as an interim state rather than a destination. A common pattern is a two-phase migration where phase one relocates a large VMware estate quickly to meet a data center exit deadline, and phase two gradually refactors individual workloads onto native services. Recognizing that Relocate can be a deliberate waypoint rather than a final architecture is often what separates the correct answer from a plausible one.</p>
+      </section>
+
+      <section class="doc-section" id="mechanism">
+        <h2 class="section-heading">2. How VMware Cloud on AWS Actually Works</h2>
+        <p>VMware Cloud on AWS is a jointly engineered service: VMware supplies the software-defined data center stack (vSphere, vSAN, NSX), and AWS supplies the underlying bare-metal infrastructure and operates the physical facilities. The result is a VMware software-defined data center running on dedicated AWS bare-metal hosts inside an AWS Availability Zone, delivered as a single-tenant SDDC that you connect to your VPC. From the customer's perspective it looks like a vSphere cluster with a vCenter Server, a vSAN datastore, and NSX-based networking — because it is one. From AWS's perspective it is a managed service with an Elastic Network Interface into your account, which is the seam where the two worlds meet.</p>
+        <p>The networking seam is the part worth understanding deeply, because most exam questions about VMware Cloud on AWS are really questions about connectivity. The SDDC is deployed into a VPC that AWS owns and manages, and it is attached to your VPC through a high-bandwidth, low-latency Elastic Network Interface called the ENI. That attachment is what lets your native AWS resources — EC2 instances, RDS databases, load balancers — talk to VMs running in the SDDC without traversing the public internet. You can also connect the SDDC to your on-premises network over a VPN or Direct Connect, which is what makes the migration path work: the source VMs on-prem and the target SDDC are on the same logical network, so the migration is a live vMotion rather than a copy-and-rebuild.</p>
+        <p>HCX is the piece that makes the migration itself practical. HCX is a VMware technology that establishes an encrypted, optimized tunnel between the source vSphere environment and the target SDDC, then performs the actual workload movement. It supports several migration modes, and the important one for Relocate is vMotion-based live migration, which moves a running VM with no reboot and no application downtime. HCX also handles the less glamorous work: it extends Layer 2 networks from on-prem into the SDDC so that a VM keeps its IP address across the move, and it can stretch or translate network segments so that the source and target can coexist during a phased cutover. Without network extension, a relocated VM would land with an IP address that nothing on-prem can route to, and the migration would require a re-addressing exercise that defeats the purpose.</p>
+        <p>The practical consequence is that Relocate is not a data copy operation in the way MGN is. MGN replicates blocks continuously to a staging area and then launches a cutover instance, which is fundamentally a copy. HCX vMotion moves the running VM's execution state — memory, CPU registers, device state — across the tunnel while the VM keeps running, which is why the downtime is measured in seconds rather than minutes. That is a meaningful difference when the workload has a stateful in-memory component or a long application startup sequence.</p>
+      </section>
+
+      <section class="doc-section" id="decision-boundary">
+        <h2 class="section-heading">3. The Core Decision Boundary: Relocate vs. Rehost</h2>
+        <p>Every Relocate scenario question reduces to a single fork: does the workload need to keep running on a VMware hypervisor, or is it acceptable for it to become a native EC2 instance? Everything else — cost, timeline, tooling, licensing — flows from that answer. If the answer is yes, Relocate is the only strategy that satisfies it, because Rehost by definition converts the VM to an AMI and the hypervisor layer disappears. If the answer is no, Relocate is almost always the more expensive and more operationally complex choice, because you are paying for a VMware software stack and a dedicated SDDC footprint to run workloads that could run on ordinary EC2 instances.</p>
+        <p>The subtlety is that the constraint is rarely stated as "we need VMware." It is stated as a consequence. A vendor support contract that specifies VMware as the supported platform is a hypervisor constraint. A team whose entire operational runbook, monitoring integration, and backup tooling is built on vSphere is a hypervisor constraint, even though nothing technically prevents the workload from running on EC2. A regulatory requirement that the workload remain on a platform the organization has certified is a hypervisor constraint. The exam expects you to translate these into the underlying requirement and then pick the strategy that satisfies it.</p>
+        <p>The table below lays out the fork in the terms the exam uses. Read it as a decision procedure: start at the left column, and the first row that matches your scenario determines the strategy.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Scenario signal</th><th>Correct strategy</th><th>Why</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Vendor support contract valid only on VMware</td><td>Relocate</td><td>Rehost to EC2 voids the supported platform</td></tr>
+              <tr><td>Team's runbooks, backup, and monitoring are all vSphere-native</td><td>Relocate</td><td>Preserves the operational model; no retraining</td></tr>
+              <tr><td>Deadline is tight and the app cannot be touched</td><td>Relocate or Rehost</td><td>Both avoid app changes; choose on the hypervisor constraint</td></tr>
+              <tr><td>Goal is to reduce operational overhead and licensing cost</td><td>Rehost (or Replatform)</td><td>Relocate preserves both the overhead and the license</td></tr>
+              <tr><td>Workload will be refactored to managed services later</td><td>Relocate as interim, then Refactor</td><td>Fast exit now, modernization in phase two</td></tr>
+              <tr><td>No VMware dependency at all, just a legacy OS</td><td>Rehost via MGN</td><td>Relocate adds cost with no constraint to satisfy</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>One more boundary worth naming: Relocate is not the same as running VMware on EC2. You can install a hypervisor on an EC2 instance, but that is a self-managed, unsupported configuration and it is not what the exam means by Relocate. The exam's Relocate answer is specifically VMware Cloud on AWS, a managed service with AWS-operated infrastructure and a VMware-operated control plane.</p>
+      </section>
+
+      <section class="doc-section" id="config-tradeoffs">
+        <h2 class="section-heading">4. Configuration Modes and Their Tradeoffs</h2>
+        <p>Once you have decided to relocate, the next set of choices determines how the migration actually behaves and what it costs. The first is the SDDC deployment size and host type. VMware Cloud on AWS is sold in units of hosts, and the SDDC scales by adding hosts to the cluster. The host type determines the CPU, memory, and storage capacity per host, and the initial host count determines the baseline cost. This is the single largest cost lever in the whole architecture, because you are paying for dedicated bare-metal capacity whether or not the VMs on it are busy. A common mistake is to size the SDDC for peak migration throughput and then leave it at that size after the migration completes, which is why the exam likes scenarios that ask you to right-size after cutover.</p>
+        <p>The second choice is the HCX migration mode, and this is where the downtime characteristics come from. HCX offers several modes, and they trade off downtime against complexity and network requirements. vMotion-based migration moves a running VM with near-zero downtime but requires the source and target to be on a stretched Layer 2 network and requires the source vSphere version to be compatible. Cold migration powers the VM off, moves it, and powers it back on, which is simpler and works across more version combinations but costs a maintenance window. Bulk migration is a scheduled, parallelized cold migration designed for moving many VMs at once, and it is the mode you reach for when you have hundreds of VMs and a weekend window rather than a handful of VMs and a zero-downtime requirement. Replication-assisted migration keeps a replica in sync and then does a short cutover, which is useful when the source cannot be stretched but you still want a small window.</p>
+        <p>The third choice is the network extension model. HCX Network Extension stretches a Layer 2 segment from on-prem into the SDDC, which preserves IP addresses and lets source and target coexist. That is what enables phased cutover, but it also means traffic between the two sites traverses the HCX tunnel, which has bandwidth and latency implications. The alternative is to re-address the workload during migration, which avoids the stretched segment but requires application configuration changes and DNS updates. For a workload the team does not want to touch, network extension is usually the right answer, and the exam will often signal this by mentioning that the application has hard-coded IP addresses or that the cutover must be gradual.</p>
+        <p>Finally, there is the question of what happens to the SDDC after the migration. You can keep it as the permanent runtime for the relocated workloads, which is the pure Relocate outcome. You can keep it as a staging environment while you refactor workloads off it, which is the interim pattern. Or you can decommission it once the workloads have been rehosted or refactored, which is the cheapest long-term outcome but requires a second migration. The exam tends to reward answers that acknowledge this lifecycle rather than treating the SDDC as permanent by default.</p>
+      </section>
+
+      <section class="doc-section" id="sizing-limits">
+        <h2 class="section-heading">5. Sizing, Limits, and Quotas</h2>
+        <p>Sizing a Relocate migration starts with the source estate, not with the target. You need to know how many VMs you are moving, their aggregate CPU and memory demand, their storage footprint, and their network throughput requirements. Application Discovery Service and Migration Evaluator are the tools that produce this inventory, and they are the same tools you would use for a Rehost migration — the discovery phase does not change based on the strategy. What changes is how you translate the inventory into target capacity. For Rehost, you map each VM to an EC2 instance type. For Relocate, you map the aggregate demand to a number of SDDC hosts, and the mapping is coarser because you are buying whole hosts rather than individual instances.</p>
+        <p>The SDDC itself has a minimum host count for a cluster, and it scales in host increments. Storage is provided by vSAN, which pools the local storage across the hosts in the cluster, so adding a host adds both compute and storage capacity. That coupling is worth noting: you cannot independently scale compute and storage within a single cluster the way you can with EC2 and EBS. If your workload is storage-heavy but compute-light, you may end up buying more compute than you need in order to get the storage capacity, which is a real cost consideration the exam may probe.</p>
+        <p>Networking limits matter as much as compute limits. The connection between the SDDC and your VPC is a high-bandwidth ENI, and the connection to on-premises runs over VPN or Direct Connect. During a live migration, all the VM's memory state and any in-flight storage writes traverse the HCX tunnel, so the tunnel bandwidth directly determines how fast you can migrate and how many VMs you can migrate in parallel. A common failure in real migrations is under-provisioning the network path and then discovering that vMotion of a large-memory VM takes hours because the tunnel is saturated. The exam will sometimes give you a bandwidth figure and a data volume and expect you to reason about whether the migration fits in the window.</p>
+        <p>Licensing is the other sizing dimension that is easy to overlook. VMware Cloud on AWS pricing bundles the VMware software licensing into the host cost, which means you are not separately paying for vSphere or vSAN licenses on the target. But the source-side licensing may not transfer cleanly, and any third-party software licensed per-socket or per-host may need to be re-licensed for the new environment. For a workload with expensive per-socket licensing, this can dominate the cost model, and the exam may present a scenario where the licensing cost is the reason Relocate is the wrong answer.</p>
+      </section>
+
+      <section class="doc-section" id="failure-modes">
+        <h2 class="section-heading">6. Failure Modes and What They Look Like in Production</h2>
+        <p>The most common failure in a Relocate migration is a network extension that works in testing and breaks under production load. HCX Network Extension stretches a Layer 2 segment across the tunnel, and stretched Layer 2 has well-known pathologies: broadcast storms that were previously contained to one site now propagate to both, and any application that relies on low-latency Layer 2 adjacency will see its assumptions violated. The symptom is usually intermittent and hard to attribute — a database that was fine on-prem starts timing out after the stretch, or a cluster heartbeat that was reliable starts flapping. The first diagnostic move is to check whether the affected traffic is crossing the stretched segment and to measure the round-trip latency across the tunnel, because the fix is often to move the workload fully to one side rather than leave it straddling the stretch.</p>
+        <p>The second failure mode is a migration that completes but leaves the workload with a dependency on the source environment. This happens when the migration moves the VM but not everything the VM talks to — a license server, a DNS forwarder, a backup target, or a monitoring collector that still lives on-prem. The VM runs, but it is silently degraded, and the degradation only surfaces when the on-prem dependency is decommissioned. The symptom is a workload that passes its post-migration smoke test and then fails weeks later during the data center exit. The diagnostic move is a dependency audit before cutover, which is exactly what Application Discovery Service's agent-based mode is for.</p>
+        <p>The third failure mode is cost drift. The SDDC is sized for the migration, the migration completes, and nobody shrinks the cluster. Because VMware Cloud on AWS bills per host per hour, an oversized SDDC is a continuous, compounding cost that does not show up as an incident and therefore does not get fixed. The symptom is a migration that was declared successful but whose run rate never drops to the expected post-migration level. The diagnostic move is a scheduled right-sizing review after the migration window closes, comparing actual vSAN utilization and CPU demand against provisioned host capacity.</p>
+        <p>A fourth, less common failure is version incompatibility discovered mid-migration. HCX vMotion requires the source vSphere version to be within a supported range of the target SDDC version, and if the source is too old, the live migration mode is unavailable and you fall back to cold or bulk migration. Discovering this after you have committed to a zero-downtime cutover plan is expensive, which is why version compatibility is a pre-migration checklist item rather than a mid-migration discovery.</p>
+      </section>
+
+      <section class="doc-section" id="sre-angle">
+        <h2 class="section-heading">7. The Operational and SRE Angle</h2>
+        <p>Relocate changes what you monitor, because the failure surface moves. In a native AWS architecture you monitor CloudWatch metrics, ALB target health, and Auto Scaling group state. In a relocated architecture you still have those for the AWS-side resources, but the workloads themselves are inside an SDDC that reports through vCenter and vSAN rather than through CloudWatch. That means your observability has two planes, and the operational risk is that the two planes are not correlated. An incident that starts as a vSAN datastore latency spike may surface as an application timeout in CloudWatch, and if nobody has wired the two together, the on-call engineer sees only the downstream symptom.</p>
+        <p>The practical SRE response is to treat the SDDC as a monitored dependency with its own SLOs, and to make sure the vSphere-side signals are exported into the same alerting pipeline as the AWS-side signals. VMware Cloud on AWS exposes SDDC health through the VMware Cloud console and through vCenter, and the useful signals are host CPU and memory pressure, vSAN capacity and latency, and HCX tunnel health during migration windows. During a migration, the HCX tunnel is the single most important thing to watch, because a degraded tunnel slows every in-flight migration and can cause a vMotion to stall. A runbook for a migration window should include a tunnel health check as a gate before starting each batch of VMs.</p>
+        <p>Backup and recovery need explicit attention because the tooling changes. If the organization's backup strategy was vSphere-based, it may continue to work against the SDDC, but the recovery target is now inside AWS and the recovery procedure may need to account for the SDDC's own availability characteristics. The exam-relevant point is that Relocate does not automatically give you a better DR posture — it gives you a different one, and the RTO and RPO have to be re-derived for the new environment rather than assumed to carry over from on-prem.</p>
+        <p>Finally, there is a change-management angle. A Relocate migration moves workloads without changing them, which means the application teams may not be involved at all. That is efficient, but it also means the teams that understand the workload's failure modes are not in the loop when it moves. A mature runbook includes a post-migration review with the application owners, even when the migration itself required no application changes.</p>
+      </section>
+
+      <section class="doc-section" id="gotchas">
+        <h2 class="section-heading">8. Edge Cases and Exam Gotchas</h2>
+        <p>The first gotcha is treating Relocate and Rehost as interchangeable because both avoid application changes. They are not interchangeable, and the exam will offer both as answer choices in a scenario where only one satisfies the stated constraint. The discriminator is always the hypervisor requirement: if the scenario mentions VMware support, vSphere tooling, or a platform certification, Relocate is correct; if it mentions reducing overhead or moving to managed services, Rehost or Replatform is correct.</p>
+        <p>The second gotcha is assuming Relocate is a permanent architecture. It can be, but the exam frequently frames it as an interim step, and an answer that treats it as the final state when the scenario describes a longer modernization roadmap may be wrong. Read the scenario for language about future phases, and if it is there, the correct answer may be Relocate now and Refactor later rather than Relocate as the destination.</p>
+        <p>The third gotcha is confusing VMware Cloud on AWS with running VMware on EC2. The former is a managed service with AWS-operated infrastructure; the latter is a self-managed configuration that the exam does not consider a valid Relocate answer. If an answer choice says "install vSphere on EC2 instances," it is a distractor.</p>
+        <p>The fourth gotcha is forgetting that HCX requires network extension to preserve IP addresses. A scenario that says the application has hard-coded IP addresses and cannot be re-addressed is pointing at network extension, and an answer that omits it is incomplete even if it correctly identifies Relocate as the strategy.</p>
+        <p>The fifth gotcha is cost. Relocate is almost always the most expensive of the 7 Rs on a per-workload basis, because you are paying for dedicated hosts and a VMware software stack. A scenario that emphasizes cost optimization as the primary driver is usually not a Relocate scenario, even if the workload is currently on VMware. The exam expects you to weigh the constraint against the cost rather than defaulting to the strategy that requires the least change.</p>
+        <p>The sixth gotcha is the licensing trap. A workload with per-socket third-party licensing may become dramatically more expensive after relocation, and a scenario that mentions expensive licensing is often testing whether you notice that Relocate does not solve the licensing problem — it may worsen it.</p>
+      </section>
+
+      <section class="doc-section" id="vs-comparison">
+        <h2 class="section-heading">9. Relocate vs. the Strategies It Gets Confused With</h2>
+        <p>Relocate sits in a cluster of strategies that all avoid application changes, and the exam relies on that similarity to build distractors. The table below separates them by what they actually preserve and what they cost. The rule of thumb is that the more you preserve, the more you pay, and the exam is usually testing whether you preserved the right thing rather than the most things.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Strategy</th><th>What it preserves</th><th>Target platform</th><th>Pick it when…</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Relocate</td><td>Hypervisor, VMware tooling, IP addresses</td><td>VMware Cloud on AWS</td><td>A VMware constraint exists and cannot be removed</td></tr>
+              <tr><td>Rehost</td><td>Guest OS and application only</td><td>Native EC2 (AMI)</td><td>No hypervisor constraint; fastest path to AWS</td></tr>
+              <tr><td>Replatform</td><td>Application, with targeted managed-service swaps</td><td>EC2 plus managed services</td><td>You can change a few things to cut operational load</td></tr>
+              <tr><td>Refactor</td><td>Business logic only</td><td>Cloud-native services</td><td>You have time and budget to modernize properly</td></tr>
+              <tr><td>Retain</td><td>Everything, in place</td><td>On-premises</td><td>A blocker makes migration impossible right now</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The comparison that matters most is Relocate versus Rehost, because they are the two answers that both avoid touching the application. The discriminator is the hypervisor. If the scenario's constraint is about the platform the workload runs on, Relocate is correct. If the constraint is only about the application not changing, Rehost is correct and cheaper. The exam will often include both, and the scenario will contain exactly one phrase that decides it.</p>
+        <p>The second comparison worth internalizing is Relocate versus Replatform. Replatform is the "lift, tinker, and shift" strategy — you move the workload but swap a component for a managed service, such as replacing a self-managed database with RDS. A scenario that says the team wants to reduce operational burden while keeping the application largely intact is a Replatform scenario, not a Relocate scenario, because Relocate reduces nothing. If the scenario says the team cannot change anything at all, Relocate is back in play.</p>
+        <p>Finally, Relocate versus Retain. Retain is the answer when a blocker makes migration impossible in the current window, and the exam sometimes pairs it with Relocate in a portfolio scenario: relocate the workloads that can move, retain the ones that cannot. Recognizing that a portfolio can use multiple strategies simultaneously is often the difference between a correct answer and an answer that forces a single strategy onto every workload.</p>
+      </section>
+
+      <section class="doc-section" id="lab">
+        <h2 class="section-heading">Hands-On Lab: Comparing Relocate and Rehost for a Single VM</h2>
+        <div class="card card-green">
+          <p><strong>Objective.</strong> Take one representative VM from a VMware estate and work through both a Relocate path (VMware Cloud on AWS via HCX) and a Rehost path (MGN to native EC2), then justify which one the team should actually use. The point is not to run both migrations but to build the decision explicitly, so that the constraint driving the choice is written down rather than assumed.</p>
+          <p><strong>Step 1 — Characterize the VM.</strong> Pick a VM that is representative of the estate, ideally one with a real constraint attached. Record its guest OS and version, its vSphere hardware version, its CPU and memory allocation, its storage footprint, and its network configuration. Note specifically whether it has a static IP address that other systems reference, and whether any of those references are hard-coded in configuration files rather than resolved through DNS. This last detail is what determines whether network extension is mandatory or merely convenient.</p>
+          <p><strong>Step 2 — Identify the constraint.</strong> Write down, in one sentence, why this VM cannot simply be rehosted to EC2. If you cannot write that sentence, the VM has no hypervisor constraint and Rehost is the correct answer. If you can, classify the constraint: vendor support contract, operational tooling dependency, platform certification, or application-level assumption about the hypervisor. The classification matters because some constraints are removable with effort and some are not.</p>
+          <p><strong>Step 3 — Walk the Relocate path.</strong> Assume the constraint is real and design the Relocate migration. Determine the HCX migration mode you would use and justify it against the downtime budget. If the VM has a hard-coded IP address, specify that HCX Network Extension is required and describe what the stretched segment looks like during cutover. Estimate the SDDC host count needed to absorb this VM alongside the rest of the estate, and note that the host count is driven by aggregate demand rather than by this VM alone.</p>
+          <p><strong>Step 4 — Walk the Rehost path.</strong> Now design the same migration with MGN. Describe the replication agent installation, the staging area, the test instance launch, and the cutover. Identify what breaks: the IP address changes, the vSphere-level tooling no longer sees the workload, and any vendor support contract tied to VMware is void. Estimate the EC2 instance type you would map this VM to, and note that the mapping is per-VM rather than per-host, which makes right-sizing more precise.</p>
+          <p><strong>Step 5 — Compare the cost models.</strong> Build a rough monthly cost for each path. For Relocate, the cost is the SDDC host count times the hourly host rate, plus any network egress over the HCX tunnel during migration. For Rehost, the cost is the EC2 instance plus EBS storage plus any licensing that transfers. Note explicitly which costs are fixed (SDDC hosts, whether busy or not) and which are variable (EC2 instances, which can be stopped).</p>
+          <p><strong>Step 6 — Decide and document.</strong> Write a two-paragraph recommendation. The first paragraph states the decision and the constraint that drove it. The second paragraph states what would have to change for the decision to flip — for example, "if the vendor certifies the application on EC2, Rehost becomes cheaper and should be preferred." That second paragraph is the part that mirrors how the exam frames these questions, because it forces you to name the discriminator rather than just the answer.</p>
+          <p><strong>Step 7 — Extend to the portfolio.</strong> Repeat the constraint identification for five more VMs from the estate, but only write the one-sentence constraint and the resulting strategy. The goal is to see how quickly a portfolio splits across strategies, and to notice that a real migration is rarely a single-strategy exercise.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="quiz">
+        <h2 class="section-heading">Scenario Question Drills</h2>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q1.</strong> A team wants to move VMware VMs to AWS infrastructure fastest, keeping the exact same hypervisor-level configuration and VMware management tools, with no P2V/V2V conversion.</p>
+          <div class="scenario-options" id="opts-d51q1">
             <div class="scenario-option">A. AWS MGN (Rehost to native EC2)</div>
             <div class="scenario-option">B. VMware Cloud on AWS (Relocate)</div>
             <div class="scenario-option">C. AWS Schema Conversion Tool</div>
             <div class="scenario-option">D. AWS DataSync</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d51q1', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d51q1"><strong>Correct answer: B.</strong> Relocate via VMware Cloud on AWS is the only 7 Rs strategy that moves the VM without converting it out of the VMware format, unlike Rehost which lands on native EC2/AMIs.</div>
         </div>
-        <button class="scenario-reveal-btn" onclick="revealAnswer('d51q0', 1)">Reveal Answer</button>
-        <div class="scenario-explanation" id="exp-d51q0"><strong>Correct answer: B.</strong> Relocate via VMware Cloud on AWS is the only 7 Rs strategy that moves the VM without converting it out of the VMware format, unlike Rehost which lands on native EC2/AMIs.</div>
-      </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q2.</strong> A company's ERP application is supported by its vendor only when running on VMware. The company wants to exit its data center within six months. Which strategy satisfies both constraints?</p>
+          <div class="scenario-options" id="opts-d51q2">
+            <div class="scenario-option">A. Refactor the ERP onto containers on EKS</div>
+            <div class="scenario-option">B. Rehost the ERP to EC2 with MGN</div>
+            <div class="scenario-option">C. Relocate the ERP to VMware Cloud on AWS</div>
+            <div class="scenario-option">D. Retain the ERP on-premises indefinitely</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d51q2', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d51q2"><strong>Correct answer: C.</strong> The vendor support contract is a hypervisor constraint, so the workload must stay on VMware. Relocate satisfies it while still meeting the data center exit deadline; Rehost would void the support contract.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q3.</strong> During an HCX migration, a VM with a hard-coded IP address must keep that address after moving to the SDDC. What must be configured?</p>
+          <div class="scenario-options" id="opts-d51q3">
+            <div class="scenario-option">A. A NAT gateway in the SDDC</div>
+            <div class="scenario-option">B. HCX Network Extension to stretch the Layer 2 segment</div>
+            <div class="scenario-option">C. A Route 53 private hosted zone</div>
+            <div class="scenario-option">D. An Elastic IP attached to the VM</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d51q3', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d51q3"><strong>Correct answer: B.</strong> HCX Network Extension stretches the Layer 2 segment from on-prem into the SDDC, preserving IP addresses so the VM keeps its address across the move.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q4.</strong> A migration team needs to move 400 VMs over a single weekend with a maintenance window, and zero-downtime per VM is not required. Which HCX migration mode is most appropriate?</p>
+          <div class="scenario-options" id="opts-d51q4">
+            <div class="scenario-option">A. vMotion-based live migration</div>
+            <div class="scenario-option">B. Bulk migration</div>
+            <div class="scenario-option">C. Replication-assisted migration</div>
+            <div class="scenario-option">D. Cold migration, one VM at a time</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d51q4', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d51q4"><strong>Correct answer: B.</strong> Bulk migration is a scheduled, parallelized cold migration designed for moving many VMs at once within a window, which matches the 400-VM weekend requirement.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q5.</strong> A company has no VMware dependency at all — its workloads run on a legacy Linux distribution that is still supported on EC2. The primary goal is to reduce operational overhead. Which strategy fits best?</p>
+          <div class="scenario-options" id="opts-d51q5">
+            <div class="scenario-option">A. Relocate to VMware Cloud on AWS</div>
+            <div class="scenario-option">B. Rehost to EC2 with MGN</div>
+            <div class="scenario-option">C. Retain on-premises</div>
+            <div class="scenario-option">D. Repurchase as SaaS</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d51q5', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d51q5"><strong>Correct answer: B.</strong> With no hypervisor constraint, Relocate adds cost and preserves overhead the scenario wants to remove. Rehost is the cheaper, simpler path.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q6.</strong> An answer choice proposes installing vSphere on EC2 instances to run a VMware workload. How should this be evaluated?</p>
+          <div class="scenario-options" id="opts-d51q6">
+            <div class="scenario-option">A. It is the correct Relocate implementation</div>
+            <div class="scenario-option">B. It is a self-managed configuration and not the exam's Relocate answer</div>
+            <div class="scenario-option">C. It is equivalent to VMware Cloud on AWS</div>
+            <div class="scenario-option">D. It is the only way to preserve IP addresses</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d51q6', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d51q6"><strong>Correct answer: B.</strong> Relocate on the exam means VMware Cloud on AWS, a managed service. Running a hypervisor on EC2 is self-managed and unsupported as a Relocate answer.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q7.</strong> After a successful Relocate migration, the SDDC remains sized for peak migration throughput. What is the operational consequence?</p>
+          <div class="scenario-options" id="opts-d51q7">
+            <div class="scenario-option">A. No consequence; SDDC sizing is fixed at deployment</div>
+            <div class="scenario-option">B. Continuous cost drift, because hosts are billed whether busy or not</div>
+            <div class="scenario-option">C. The SDDC automatically scales down</div>
+            <div class="scenario-option">D. vSAN capacity is reduced automatically</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d51q7', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d51q7"><strong>Correct answer: B.</strong> VMware Cloud on AWS bills per host per hour, so an oversized SDDC is a compounding cost that does not surface as an incident. A post-migration right-sizing review is the fix.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q8.</strong> A relocated workload passes its post-migration smoke test but fails weeks later when the on-premises data center is decommissioned. What is the most likely cause?</p>
+          <div class="scenario-options" id="opts-d51q8">
+            <div class="scenario-option">A. The SDDC host type was wrong</div>
+            <div class="scenario-option">B. A dependency on an on-premises service was not migrated with the VM</div>
+            <div class="scenario-option">C. HCX Network Extension was not used</div>
+            <div class="scenario-option">D. The VM's vSphere hardware version was too old</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d51q8', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d51q8"><strong>Correct answer: B.</strong> A license server, DNS forwarder, or monitoring collector left on-prem creates a silent dependency that only surfaces when the source environment is removed. A pre-cutover dependency audit prevents this.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q9.</strong> A team's entire operational model — runbooks, backup, monitoring — is built on vSphere, and retraining is not funded. Which strategy preserves that model?</p>
+          <div class="scenario-options" id="opts-d51q9">
+            <div class="scenario-option">A. Rehost to EC2</div>
+            <div class="scenario-option">B. Replatform onto managed services</div>
+            <div class="scenario-option">C. Relocate to VMware Cloud on AWS</div>
+            <div class="scenario-option">D. Refactor to serverless</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d51q9', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d51q9"><strong>Correct answer: C.</strong> Relocate preserves the VMware operational model, so the existing runbooks, backup tooling, and monitoring integrations continue to work without retraining.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q10.</strong> A workload has expensive third-party software licensed per physical socket. How does Relocate affect this cost?</p>
+          <div class="scenario-options" id="opts-d51q10">
+            <div class="scenario-option">A. Relocate eliminates per-socket licensing</div>
+            <div class="scenario-option">B. Relocate may increase licensing cost, because the SDDC hosts are physical sockets</div>
+            <div class="scenario-option">C. Licensing is bundled into the SDDC host price</div>
+            <div class="scenario-option">D. Licensing is unaffected by the migration strategy</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d51q10', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d51q10"><strong>Correct answer: B.</strong> VMware Cloud on AWS bundles VMware licensing into the host price, but third-party per-socket licensing is separate and may become more expensive on dedicated hosts. This can make Relocate the wrong answer.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q11.</strong> A migration plan calls for relocating 200 VMs now and refactoring them onto managed services over the next two years. How should this be characterized?</p>
+          <div class="scenario-options" id="opts-d51q11">
+            <div class="scenario-option">A. Relocate as a permanent architecture</div>
+            <div class="scenario-option">B. Relocate as an interim step before Refactor</div>
+            <div class="scenario-option">C. Rehost followed by Retain</div>
+            <div class="scenario-option">D. Repurchase followed by Replatform</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d51q11', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d51q11"><strong>Correct answer: B.</strong> Relocate is frequently a deliberate waypoint: fast exit now, modernization in phase two. Treating it as the permanent destination when a roadmap exists is a common exam trap.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q12.</strong> During a live vMotion migration, a large-memory VM takes far longer than expected to move. What is the most likely cause?</p>
+          <div class="scenario-options" id="opts-d51q12">
+            <div class="scenario-option">A. The SDDC host type is too small</div>
+            <div class="scenario-option">B. The HCX tunnel bandwidth is saturated</div>
+            <div class="scenario-option">C. vSAN capacity is exhausted</div>
+            <div class="scenario-option">D. The VM's guest OS is unsupported</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d51q12', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d51q12"><strong>Correct answer: B.</strong> Live migration transfers the VM's memory state across the HCX tunnel, so tunnel bandwidth directly determines migration speed. Under-provisioning the network path is a common real-world failure.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q13.</strong> A stretched Layer 2 segment is in place during a phased cutover, and a database cluster that was stable on-premises begins flapping heartbeats. What is the first diagnostic move?</p>
+          <div class="scenario-options" id="opts-d51q13">
+            <div class="scenario-option">A. Increase the SDDC host count</div>
+            <div class="scenario-option">B. Measure round-trip latency across the stretched segment and check whether the affected traffic crosses it</div>
+            <div class="scenario-option">C. Reboot the vCenter Server</div>
+            <div class="scenario-option">D. Disable vSAN deduplication</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d51q13', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d51q13"><strong>Correct answer: B.</strong> Stretched Layer 2 violates low-latency adjacency assumptions. The first move is to confirm the affected traffic crosses the stretch and measure the latency, then move the workload fully to one side.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q14.</strong> A scenario says the team wants to reduce operational burden while keeping the application largely intact, and it can change a few components. Which strategy is being described?</p>
+          <div class="scenario-options" id="opts-d51q14">
+            <div class="scenario-option">A. Relocate</div>
+            <div class="scenario-option">B. Replatform</div>
+            <div class="scenario-option">C. Retain</div>
+            <div class="scenario-option">D. Retire</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d51q14', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d51q14"><strong>Correct answer: B.</strong> Replatform is lift-tinker-and-shift: move the workload but swap components for managed services. Relocate reduces nothing, so it does not match a scenario whose goal is lower operational burden.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q15.</strong> A portfolio migration has 300 workloads. Forty of them have unresolved vendor licensing blockers, and the rest can move immediately. What is the correct plan?</p>
+          <div class="scenario-options" id="opts-d51q15">
+            <div class="scenario-option">A. Delay the entire migration until all 300 are unblocked</div>
+            <div class="scenario-option">B. Relocate or Rehost the 260 unblocked workloads now and Retain the 40 blocked ones</div>
+            <div class="scenario-option">C. Refactor all 300 to serverless</div>
+            <div class="scenario-option">D. Retain all 300 until the blockers are resolved</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d51q15', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d51q15"><strong>Correct answer: B.</strong> A portfolio can use multiple strategies simultaneously. Move what can move, and explicitly Retain the workloads with real blockers rather than forcing a rushed migration.</div>
+        </div>
+      </section>
+
+      <section class="doc-section" id="preview">
+        <h2 class="section-heading">Peek into Tomorrow</h2>
+        <div class="card card-purple">
+          <p>Everything in today's Relocate path assumed the network between on-premises and AWS could carry the migration. HCX vMotion moves a running VM's memory state across a tunnel, and the SDDC connects back to the source environment over VPN or Direct Connect — but we never asked how much bandwidth that actually requires, or what happens when the answer is "more than the link can provide." That question is not academic. A migration window is a fixed amount of time, a dataset is a fixed number of bytes, and a link has a fixed throughput, and those three numbers either fit together or they do not.</p>
+          <p>The unresolved problem is what to do when they do not fit. Provisioning more Direct Connect capacity takes lead time, and Link Aggregation Groups bundle connections to raise aggregate throughput, but neither is instantaneous. The alternative is to stop treating the network as the only transport: move the bulk historical dataset physically and use the network only for the ongoing delta. Tomorrow's topic is exactly that trade-off — how to size the link, when to bundle it, and when to reach for a Snowball instead.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="sources">
+        <h2 class="section-heading">Sources</h2>
+        <div class="card">
+          <ul class="source-list">
+            <li><a href="https://docs.aws.amazon.com/vmware/latest/userguide/what-is-vmware-cloud-on-aws.html" target="_blank">AWS Documentation — What Is VMware Cloud on AWS?</a></li>
+            <li><a href="https://docs.aws.amazon.com/vmware/latest/userguide/vmcloud-networking.html" target="_blank">AWS Documentation — VMware Cloud on AWS Networking</a></li>
+            <li><a href="https://docs.vmware.com/en/VMware-HCX/index.html" target="_blank">VMware Documentation — VMware HCX</a></li>
+            <li><a href="https://docs.aws.amazon.com/prescriptive-guidance/latest/migration-vmware-cloud-on-aws/welcome.html" target="_blank">AWS Prescriptive Guidance — Migrating to VMware Cloud on AWS</a></li>
+            <li><a href="https://docs.aws.amazon.com/application-migration-service/latest/userguide/what-is-service.html" target="_blank">AWS Documentation — What Is AWS Application Migration Service?</a></li>
+            <li><a href="https://docs.aws.amazon.com/prescriptive-guidance/latest/large-migration-guide/migration-strategies.html" target="_blank">AWS Prescriptive Guidance — Migration Strategies (the 7 Rs)</a></li>
+            <li><a href="https://docs.aws.amazon.com/whitepapers/latest/aws-overview/migration-services.html" target="_blank">AWS Whitepaper — Migration Services Overview</a></li>
+            <li><a href="https://aws.amazon.com/vmware/" target="_blank">AWS — VMware Cloud on AWS Product Page</a></li>
+          </ul>
+        </div>
       </section>
       <div class="day-nav">
         <a href="day-050.html">&larr; Day 50: Hybrid Cloud Compute — Outposts, Local Zones &amp; Wavelength</a>

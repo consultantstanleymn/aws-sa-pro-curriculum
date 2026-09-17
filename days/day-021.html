@@ -104,7 +104,7 @@
         <span class="pill pill-green">Phase 2: Compute, Containers &amp; Global Databases</span>
       </div>
       <h1 class="hero-title">Week Synthesis — Compute Decision Matrix &amp; Scenario Drills</h1>
-      <div class="reading-meta">&#128337; ~3 min read &middot; 4 services covered</div>
+      <div class="reading-meta">&#128337; ~32 min read &middot; 4 services covered</div>
       <div class="services-grid">
         <span class="service-tag">ECS</span>
         <span class="service-tag">EKS</span>
@@ -112,31 +112,418 @@
         <span class="service-tag">EC2 Auto Scaling</span>
       </div>
       <div id="tracker"></div>
-      <section class="doc-section">
-        <h2 class="section-heading">Today's Concept</h2>
+
+      <section class="doc-section" id="recap">
+        <h2 class="section-heading">Week 3 Recap</h2>
         <div class="card card-accent">
-          <p>Consolidate compute choice criteria: container orchestration (ECS vs EKS), serverless vs server-based, Fargate vs managed nodes, and scaling mechanics. Expect scenario questions that hinge on operational overhead, cost, and control trade-offs.</p>
-        </div>
-        <h3 class="sub-heading">Hands-on Lab / Practical Action (45 min)</h3>
-        <div class="card">
-          <p>Complete 15 scenario questions requiring you to choose the right compute platform given constraints (team Kubernetes experience, cost sensitivity, cold-start tolerance).</p>
+          <p>Week 3 opened with Fargate's task definition and its awsvpc network mode, where every task gets its own ENI and security group instead of sharing a host's port space, and then moved to EKS, where the same serverless idea reappears as Fargate profiles that lose DaemonSets and cost more per pod than managed node groups. From there the week turned to capacity mechanics: lifecycle hooks that pause an instance in Pending:Wait or Terminating:Wait so bootstrap and drain scripts can run, and warm pools that keep pre-initialized stopped instances ready to promote instead of booting cold. Day 18 added ALB weighted target groups for blue/green and canary shifting, Day 19 added reserved and provisioned concurrency as the two independent levers on Lambda scaling, and Day 20 closed with Step Functions' Standard versus Express split and API Gateway integrations that bypass Lambda entirely.</p>
+          <p>What ties these together is that none of them is a compute platform decision in isolation. Each one is a trade of operational overhead against cost against control, and the exam almost never asks which service is "best" — it asks which service satisfies a stated constraint. This synthesis day is about holding all four services in one frame at once.</p>
         </div>
       </section>
-      <section class="doc-section">
-        <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
-        
-      <div class="scenario-card">
-        <p class="scenario-question"><strong>Q1.</strong> A team has deep existing Kubernetes tooling and multi-cloud portability requirements. Which AWS compute platform best fits?</p>
-        <div class="scenario-options" id="opts-d21q0">
-            <div class="scenario-option">A. ECS with EC2 launch type</div>
+
+      <section class="doc-section" id="decision-frame">
+        <h2 class="section-heading">The Frame: Three Constraints, Not Four Services</h2>
+        <p>Every compute question on SAP-C02 resolves to a ranking of three constraints: how much operational overhead the team is willing to absorb, how much the workload's cost profile matters relative to its traffic shape, and how much control over the runtime the workload actually requires. The four services in this week are not four answers to one question — they are four positions on those three axes, and the exam's job is to give you a scenario where exactly one position is defensible.</p>
+        <p>The reason this framing matters is that candidates tend to memorize service features and then pattern-match on keywords. A scenario mentions Kubernetes and the answer becomes EKS; a scenario mentions unpredictable traffic and the answer becomes Lambda. That works until the scenario mentions Kubernetes and a hard cold-start budget, or unpredictable traffic and a 15-minute execution ceiling, at which point the keyword match produces the wrong answer. The reliable approach is to extract the constraints first, then eliminate services that violate one of them, then choose among the survivors on cost.</p>
+        <p>Operational overhead is usually the first eliminator because it is stated most explicitly. A scenario that says the team has no container or Kubernetes experience, or that the company wants to minimize the number of services it operates, is telling you to eliminate EKS and probably ECS-on-EC2 as well. Cost is the second eliminator, and it is almost always stated as a shape rather than a number: steady and predictable favors commitments, spiky and unpredictable favors per-request billing, and fault-tolerant batch favors Spot. Control is the last eliminator and the one candidates most often miss, because it is usually implied by a requirement rather than named — a need for a specific kernel module, a custom AMI, a GPU driver version, or a persistent local scratch disk all eliminate the serverless options without ever using the word "control."</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Constraint stated in the scenario</th><th>Eliminates</th><th>Survivors</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>No container or Kubernetes operational experience</td><td>EKS, self-managed ECS on EC2</td><td>Lambda, Fargate, managed node groups with a platform team</td></tr>
+              <tr><td>Steady, predictable, 24/7 baseline load</td><td>Pure on-demand pricing</td><td>Savings Plans, RIs, provisioned capacity</td></tr>
+              <tr><td>Fault-tolerant, interruptible batch work</td><td>On-Demand-only fleets</td><td>Spot, Spot Fleet, mixed-instance ASGs</td></tr>
+              <tr><td>Custom kernel module, GPU driver, or persistent local disk</td><td>Lambda, Fargate</td><td>EC2, ECS on EC2, EKS managed node groups</td></tr>
+              <tr><td>Sub-second cold-start requirement on spiky traffic</td><td>Lambda without provisioned concurrency</td><td>Lambda with provisioned concurrency, always-on containers</td></tr>
+              <tr><td>Run longer than 15 minutes per invocation</td><td>Lambda</td><td>ECS, EKS, EC2, Step Functions orchestrating shorter steps</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="doc-section" id="orchestration-matrix">
+        <h2 class="section-heading">Orchestration: ECS, EKS, and When Neither Fits</h2>
+        <p>The ECS-versus-EKS question is the one candidates most often get wrong for the wrong reason. Both run containers, both can run on Fargate or on EC2 capacity, and both integrate with the same load balancers, IAM roles, and CloudWatch surfaces. The difference that actually decides exam scenarios is not capability — it is what the organization already knows and what it needs to be portable to. EKS runs upstream Kubernetes, which means existing manifests, Helm charts, operators, and admission controllers transfer unchanged, and a workload built for EKS can move to another conformant Kubernetes distribution with limited rework. ECS is AWS's own orchestrator: simpler to operate, fewer moving parts, no control-plane upgrade cycle to manage, but the task definitions and service definitions are AWS-specific and do not port anywhere.</p>
+        <p>The second deciding factor is who owns the control plane. EKS charges a per-cluster hourly fee for the managed control plane regardless of how much work the cluster does, which makes many small clusters expensive and pushes teams toward fewer, larger clusters with namespace-based tenancy. ECS has no equivalent control-plane charge, so a fleet of small, isolated services costs nothing extra to orchestrate. A scenario describing dozens of small independent services with no Kubernetes requirement is usually pointing at ECS, while a scenario describing a platform team standardizing on Kubernetes across clouds is pointing at EKS even if ECS would be cheaper.</p>
+        <p>There is also a third position that candidates forget: sometimes the right answer is neither orchestrator. A single long-running process that needs a specific AMI, a fixed IP, or a persistent local disk is an EC2 instance with an Auto Scaling Group, not a container platform. The exam will occasionally present a scenario with all the trappings of a container question — a Dockerfile, a registry, a service that needs to scale — where the actual constraint (a licensed kernel module, a 500 GB local scratch volume) makes plain EC2 the only correct answer.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Dimension</th><th>ECS</th><th>EKS</th><th>Plain EC2 + ASG</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Orchestration model</td><td>AWS-proprietary task/service definitions</td><td>Upstream Kubernetes API</td><td>None — you manage processes</td></tr>
+              <tr><td>Control-plane cost</td><td>None</td><td>Per-cluster hourly charge</td><td>None</td></tr>
+              <tr><td>Portability</td><td>AWS-only</td><td>Any conformant Kubernetes</td><td>Anywhere, but no orchestration</td></tr>
+              <tr><td>Operational burden</td><td>Low</td><td>Moderate to high (upgrades, add-ons, RBAC)</td><td>Highest (patching, AMIs, scaling logic)</td></tr>
+              <tr><td>Best fit</td><td>AWS-native microservices, small teams</td><td>Existing Kubernetes investment, multi-cloud</td><td>Custom runtime, licensed software, local disk</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="doc-section" id="capacity-matrix">
+        <h2 class="section-heading">Capacity: Fargate, Managed Nodes, and the Scaling Levers</h2>
+        <p>Once the orchestrator is chosen, the next fork is where the compute comes from. Fargate removes the node layer entirely: there is no AMI to patch, no cluster autoscaler to tune, no bin-packing to reason about, and each task or pod gets its own isolated compute allocation. That isolation is also the limitation. Because there is no shared node, DaemonSets cannot run, host-level agents cannot be installed, and per-pod pricing is higher than the equivalent share of an EC2 instance. Managed node groups sit in the middle: AWS owns the Auto Scaling Group and the node lifecycle, you still choose instance types and can run DaemonSets, and you pay EC2 rates. Self-managed nodes give the most control and the most work.</p>
+        <p>The scaling levers differ by service in ways the exam tests directly. EC2 Auto Scaling scales on metrics, schedules, or predictive policies, and its two most-tested features are lifecycle hooks and warm pools. A lifecycle hook pauses an instance in Pending:Wait before it enters service or Terminating:Wait before it is destroyed, which is where bootstrap scripts, configuration management runs, and load-balancer deregistration belong. A warm pool keeps pre-initialized instances — usually stopped — ready to be promoted into the group, which converts a multi-minute cold boot into a seconds-long promotion. Lambda scales differently: reserved concurrency caps and guarantees a function's maximum simultaneous executions, while provisioned concurrency pre-warms execution environments so that the first request after a scale-out does not pay the initialization cost. These are independent settings, and a scenario that needs both a hard ceiling on downstream connections and no cold starts requires both.</p>
+        <p>Container services add a third layer on top of the compute layer: task or pod count. An ECS service with a target-tracking policy on CPU or ALB request count adjusts desired count, and the underlying capacity provider decides whether that means launching more Fargate tasks or adding EC2 instances to a node group. The exam's favorite trap here is a scenario where the service-level scaling policy is correct but the capacity provider has no headroom, so tasks sit in a pending state — the fix is capacity provider managed scaling or a larger maximum size on the node group, not a change to the service policy.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Scaling lever</th><th>Applies to</th><th>What it actually controls</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Target-tracking / step scaling policy</td><td>EC2 ASG, ECS service, EKS HPA</td><td>Desired instance, task, or pod count</td></tr>
+              <tr><td>Lifecycle hook</td><td>EC2 ASG</td><td>Pauses launch or termination for scripts to run</td></tr>
+              <tr><td>Warm pool</td><td>EC2 ASG</td><td>Pre-initialized instances promoted instead of booted</td></tr>
+              <tr><td>Reserved concurrency</td><td>Lambda</td><td>Hard cap and guarantee on simultaneous executions</td></tr>
+              <tr><td>Provisioned concurrency</td><td>Lambda</td><td>Pre-warmed environments, removes cold starts</td></tr>
+              <tr><td>Capacity provider managed scaling</td><td>ECS on EC2</td><td>Node count behind the task count</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="doc-section" id="serverless-boundary">
+        <h2 class="section-heading">Serverless Boundaries: Where Lambda Stops Being the Answer</h2>
+        <p>Lambda is the default answer for event-driven, short-lived, spiky work, and the exam rewards recognizing when that default breaks. The hard boundaries are execution duration, payload size, and runtime control. A function cannot run indefinitely, so any workload with a long-running process — a video transcode that takes an hour, a long-lived WebSocket connection, a stateful stream processor — has to move to containers or EC2. A function also cannot host a persistent local filesystem or install arbitrary system packages at the kernel level, which eliminates anything needing a custom driver or a licensed daemon.</p>
+        <p>The softer boundary is cost shape. Lambda's per-request and per-GB-second billing is excellent for spiky traffic and poor for a steady, high-volume baseline, where a continuously running container or a committed EC2 instance is cheaper per unit of work. A scenario that describes a constant, predictable request rate with no idle periods is often pointing away from Lambda even though Lambda would technically work. The reverse is also tested: a scenario with long idle periods punctuated by bursts is almost always Lambda, because paying for idle capacity is the thing being avoided.</p>
+        <p>The third boundary is orchestration. Lambda functions are individually simple, and complexity moves into whatever coordinates them. Step Functions handles that with explicit state, retries, and catch blocks, and its Standard versus Express split matters here: Standard workflows are exactly-once, long-running, and auditable, while Express workflows are at-least-once, high-throughput, and cheaper per execution. A scenario describing millions of short executions per day that can tolerate at-least-once semantics is an Express scenario; a scenario describing a multi-step order process with a human approval step and an audit requirement is a Standard scenario. API Gateway sits in front of both and can integrate directly with AWS services, bypassing Lambda entirely for simple request transformations — a detail the exam uses to test whether you reach for a function when none is needed.</p>
+      </section>
+
+      <section class="doc-section" id="cost-matrix">
+        <h2 class="section-heading">Cost Shape: Matching the Pricing Model to the Traffic</h2>
+        <p>Cost questions in this week are almost never arithmetic. They are about matching a pricing model to a traffic shape, and the four shapes the exam uses are steady baseline, predictable peak, spiky and unpredictable, and interruptible batch. A steady baseline wants a commitment — a Compute Savings Plan for maximum flexibility across families and regions, or an EC2 Instance Savings Plan for a deeper discount locked to one family and region. A predictable peak wants a committed baseline plus on-demand or Spot burst capacity above it. Spiky and unpredictable traffic wants per-request billing, which means Lambda or Fargate rather than a fleet sized for the peak. Interruptible batch wants Spot, with a mixed-instance Auto Scaling Group or Spot Fleet to diversify capacity pools and a two-minute interruption notice handler to checkpoint work.</p>
+        <p>The trap is that these shapes are often described indirectly. "The workload runs continuously but utilization varies between 20% and 90% across the day" is a steady baseline with a peak, not a spiky workload — the instance is running either way, so a commitment on the baseline is correct and the peak is handled by scaling. "The workload runs for ten minutes every hour" is spiky, and paying for a full hour of instance time to serve ten minutes of work is the waste the scenario is describing. Reading the shape correctly is most of the answer.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Traffic shape</th><th>Pricing model</th><th>Typical service pairing</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Steady 24/7 baseline</td><td>Compute or EC2 Instance Savings Plan, RIs</td><td>EC2 ASG, ECS on EC2, EKS managed nodes</td></tr>
+              <tr><td>Predictable peak above a baseline</td><td>Commitment on baseline + on-demand burst</td><td>ASG with mixed instance policy</td></tr>
+              <tr><td>Spiky, unpredictable, idle between bursts</td><td>Per-request / per-GB-second</td><td>Lambda, Fargate, API Gateway</td></tr>
+              <tr><td>Interruptible batch</td><td>Spot with diversification</td><td>Spot Fleet, mixed-instance ASG, AWS Batch</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="doc-section" id="lab">
+        <h2 class="section-heading">Hands-on Lab: Build the Decision Matrix Against Real Constraints</h2>
+        <div class="card card-green">
+          <p>This lab is a paper exercise with a verification step, and it is designed to be done in about 45 minutes. The goal is to stop pattern-matching on service names and start eliminating on constraints, so the output is a written decision record rather than a deployed stack.</p>
+          <p>Start by writing out eight short scenarios of your own, each two or three sentences, drawn from systems you have actually operated. Give each one a stated constraint that eliminates at least one of the four services in this week. Good constraint types to use: a team with no Kubernetes experience, a workload that must run for 40 minutes per invocation, a service that needs a 200 GB local scratch volume, a request rate that is flat at 3,000 requests per second around the clock, a batch job that can be restarted from a checkpoint, a workload with a hard 200 ms p99 including cold start, a service that must run a licensed host-level agent, and a workload with long idle periods between bursts.</p>
+          <p>For each scenario, write three lines: the constraint you extracted, the services it eliminates and why, and the service you would choose with the pricing model that matches its traffic shape. Do not write more than three lines per scenario — the discipline of compression is the point, because the exam gives you roughly two and a half minutes per question and the elimination has to happen fast.</p>
+          <p>Then verify the mechanics you are reasoning about rather than trusting memory. In a sandbox account, create a Lambda function with reserved concurrency set to a low value and confirm that concurrent invocations beyond that value are throttled rather than queued indefinitely. Create an EC2 Auto Scaling Group with a lifecycle hook on termination and confirm the instance sits in Terminating:Wait until you complete the hook. If you have an ECS cluster, set a service's desired count above what the capacity provider can place and observe tasks sitting in a pending state — that is the failure mode the exam describes when it says scaling is configured but capacity is not.</p>
+          <p>Finish by writing a one-page cheat sheet with four columns: service, the constraint that eliminates it, the constraint that selects it, and the pricing model that pairs with it. Keep it to one page. If it does not fit on one page, you are still memorizing features instead of constraints, and the sheet will not be usable under exam time pressure.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="quiz">
+        <h2 class="section-heading">Mixed Scenario Quiz — 25 Questions Across the Week</h2>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q1.</strong> A platform team already runs Kubernetes on-premises and in another cloud, and wants to move a set of services to AWS with minimal manifest changes. Which compute platform fits best?</p>
+          <div class="scenario-options" id="opts-d21q1">
+            <div class="scenario-option">A. Amazon ECS with the EC2 launch type</div>
             <div class="scenario-option">B. Amazon EKS</div>
-            <div class="scenario-option">C. AWS Lambda</div>
-            <div class="scenario-option">D. AWS Batch on Fargate</div>
+            <div class="scenario-option">C. AWS Lambda behind API Gateway</div>
+            <div class="scenario-option">D. EC2 instances in an Auto Scaling Group</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d21q1', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d21q1"><strong>Correct answer: B.</strong> EKS runs upstream Kubernetes, so existing manifests, Helm charts, and operators transfer with minimal rework, and the workload stays portable to other conformant distributions.</div>
         </div>
-        <button class="scenario-reveal-btn" onclick="revealAnswer('d21q0', 1)">Reveal Answer</button>
-        <div class="scenario-explanation" id="exp-d21q0"><strong>Correct answer: B.</strong> EKS runs standard Kubernetes, preserving existing tooling/manifests and easing multi-cloud portability, unlike ECS's AWS-proprietary orchestration model.</div>
-      </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q2.</strong> A workload requires a DaemonSet that runs a host-level log shipper on every node. Which EKS compute option cannot satisfy this?</p>
+          <div class="scenario-options" id="opts-d21q2">
+            <div class="scenario-option">A. Managed node groups</div>
+            <div class="scenario-option">B. Self-managed EC2 node groups</div>
+            <div class="scenario-option">C. EKS Fargate profiles</div>
+            <div class="scenario-option">D. A mixed node group with Spot capacity</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d21q2', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d21q2"><strong>Correct answer: C.</strong> Fargate pods run in isolated micro-VMs with no shared node, so DaemonSets — which require a persistent per-node agent — are not supported.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q3.</strong> An application takes four minutes to bootstrap before it can serve traffic, and scale-out currently lags demand spikes badly. What reduces the scale-out latency?</p>
+          <div class="scenario-options" id="opts-d21q3">
+            <div class="scenario-option">A. Increase the Auto Scaling Group cooldown period</div>
+            <div class="scenario-option">B. Use a warm pool of pre-initialized stopped instances</div>
+            <div class="scenario-option">C. Switch the fleet to Spot Instances</div>
+            <div class="scenario-option">D. Add a lifecycle hook on instance launch</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d21q3', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d21q3"><strong>Correct answer: B.</strong> A warm pool keeps instances pre-initialized so the group promotes them in seconds instead of re-running the full bootstrap sequence.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q4.</strong> During scale-in, an application must finish in-flight requests and upload final logs before the instance is destroyed. What implements this?</p>
+          <div class="scenario-options" id="opts-d21q4">
+            <div class="scenario-option">A. A lifecycle hook on Terminating:Wait</div>
+            <div class="scenario-option">B. A longer health check grace period</div>
+            <div class="scenario-option">C. A larger instance type</div>
+            <div class="scenario-option">D. Enabling connection draining on the target group only</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d21q4', 0)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d21q4"><strong>Correct answer: A.</strong> A termination lifecycle hook pauses the instance in Terminating:Wait, giving drain and log-flush scripts time to complete before the instance is removed.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q5.</strong> A canary release needs 5% of production traffic sent to a new task set before full cutover. Which ALB feature does this?</p>
+          <div class="scenario-options" id="opts-d21q5">
+            <div class="scenario-option">A. Sticky sessions</div>
+            <div class="scenario-option">B. Weighted target groups on a single listener rule</div>
+            <div class="scenario-option">C. Cross-zone load balancing</div>
+            <div class="scenario-option">D. A second listener on a different port</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d21q5', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d21q5"><strong>Correct answer: B.</strong> Weighted target groups let one routing rule split traffic by percentage across two target groups, which is the ALB-native canary and blue/green mechanism.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q6.</strong> A Lambda function reading from Kinesis is exhausting connections on a downstream RDS instance during traffic spikes. What bounds this without changing the database?</p>
+          <div class="scenario-options" id="opts-d21q6">
+            <div class="scenario-option">A. Increase the function timeout</div>
+            <div class="scenario-option">B. Set reserved concurrency on the function</div>
+            <div class="scenario-option">C. Increase the Kinesis shard count</div>
+            <div class="scenario-option">D. Move RDS to Multi-AZ</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d21q6', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d21q6"><strong>Correct answer: B.</strong> Reserved concurrency caps how many instances of the function run simultaneously, which directly bounds the number of concurrent downstream connections.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q7.</strong> A latency-sensitive function must never pay a cold-start penalty, and the team also needs a hard ceiling on its concurrency. What configuration satisfies both?</p>
+          <div class="scenario-options" id="opts-d21q7">
+            <div class="scenario-option">A. Provisioned concurrency only</div>
+            <div class="scenario-option">B. Reserved concurrency only</div>
+            <div class="scenario-option">C. Both provisioned concurrency and reserved concurrency</div>
+            <div class="scenario-option">D. A larger memory allocation</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d21q7', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d21q7"><strong>Correct answer: C.</strong> Provisioned concurrency pre-warms environments to remove cold starts, while reserved concurrency caps and guarantees maximum simultaneous executions — they are independent settings.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q8.</strong> An IoT pipeline runs millions of short workflow executions per day and can tolerate at-least-once semantics. Which Step Functions type fits?</p>
+          <div class="scenario-options" id="opts-d21q8">
+            <div class="scenario-option">A. Standard Workflows</div>
+            <div class="scenario-option">B. Express Workflows</div>
+            <div class="scenario-option">C. Both cost the same at this volume</div>
+            <div class="scenario-option">D. Neither — use SQS with Lambda only</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d21q8', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d21q8"><strong>Correct answer: B.</strong> Express Workflows are priced per execution and duration for high-volume, short-duration workloads and provide at-least-once semantics, unlike Standard's exactly-once but costlier per-transition pricing.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q9.</strong> An order process requires a human approval step, must run for up to three days, and must be auditable with exactly-once execution. Which Step Functions type fits?</p>
+          <div class="scenario-options" id="opts-d21q9">
+            <div class="scenario-option">A. Express Workflows</div>
+            <div class="scenario-option">B. Standard Workflows</div>
+            <div class="scenario-option">C. A single long-running Lambda function</div>
+            <div class="scenario-option">D. SQS with a visibility timeout</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d21q9', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d21q9"><strong>Correct answer: B.</strong> Standard Workflows support long-running executions, human approval wait states, and exactly-once semantics with a full execution history for audit.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q10.</strong> A simple API endpoint only needs to write a request body directly into a DynamoDB table with no transformation logic. What avoids an unnecessary function?</p>
+          <div class="scenario-options" id="opts-d21q10">
+            <div class="scenario-option">A. A Lambda function with a minimal handler</div>
+            <div class="scenario-option">B. An API Gateway native service integration to DynamoDB</div>
+            <div class="scenario-option">C. An Application Load Balancer with a Lambda target</div>
+            <div class="scenario-option">D. A Step Functions Express workflow</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d21q10', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d21q10"><strong>Correct answer: B.</strong> API Gateway can integrate directly with AWS services, bypassing Lambda entirely for simple pass-through, which removes a function's cost and cold-start surface.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q11.</strong> A workload runs a licensed host-level security agent that cannot be containerized. Which compute option is viable?</p>
+          <div class="scenario-options" id="opts-d21q11">
+            <div class="scenario-option">A. Lambda</div>
+            <div class="scenario-option">B. Fargate tasks</div>
+            <div class="scenario-option">C. EC2 instances in an Auto Scaling Group</div>
+            <div class="scenario-option">D. EKS Fargate profiles</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d21q11', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d21q11"><strong>Correct answer: C.</strong> A host-level agent needs access to the instance itself, which the serverless options do not expose — plain EC2 (or EC2-backed container capacity) is required.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q12.</strong> A batch job runs for 40 minutes per invocation and can restart from a checkpoint. Which platform and pricing model fit?</p>
+          <div class="scenario-options" id="opts-d21q12">
+            <div class="scenario-option">A. Lambda with a 15-minute timeout increase</div>
+            <div class="scenario-option">B. ECS or EC2 with Spot capacity</div>
+            <div class="scenario-option">C. Lambda with provisioned concurrency</div>
+            <div class="scenario-option">D. API Gateway with a Lambda integration</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d21q12', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d21q12"><strong>Correct answer: B.</strong> Lambda has a hard execution-duration ceiling, so a 40-minute job must run on containers or EC2; checkpointing makes it interruptible, which makes Spot the right pricing model.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q13.</strong> A service runs continuously at a flat 3,000 requests per second around the clock with no idle periods. Which pricing approach is most cost-effective?</p>
+          <div class="scenario-options" id="opts-d21q13">
+            <div class="scenario-option">A. Lambda with on-demand billing</div>
+            <div class="scenario-option">B. A committed baseline with Savings Plans or RIs</div>
+            <div class="scenario-option">C. Spot Instances only</div>
+            <div class="scenario-option">D. Fargate with per-second billing</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d21q13', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d21q13"><strong>Correct answer: B.</strong> A steady, predictable baseline with no idle time is exactly what commitments are for; per-request billing is excellent for spiky traffic and poor for a constant high-volume load.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q14.</strong> A workload runs for ten minutes every hour and is idle the rest of the time. What is the cost-optimal model?</p>
+          <div class="scenario-options" id="opts-d21q14">
+            <div class="scenario-option">A. A continuously running EC2 fleet sized for the peak</div>
+            <div class="scenario-option">B. Per-request billing with Lambda or Fargate</div>
+            <div class="scenario-option">C. Reserved Instances for the full hour</div>
+            <div class="scenario-option">D. A dedicated host</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d21q14', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d21q14"><strong>Correct answer: B.</strong> Paying for a full hour of instance time to serve ten minutes of work is the waste the scenario describes; per-request billing charges only for the work performed.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q15.</strong> An ECS service's target-tracking policy is raising desired count, but new tasks sit in a pending state and never start. What is the most likely cause?</p>
+          <div class="scenario-options" id="opts-d21q15">
+            <div class="scenario-option">A. The service scaling policy is misconfigured</div>
+            <div class="scenario-option">B. The capacity provider has no headroom to place the tasks</div>
+            <div class="scenario-option">C. The task definition has the wrong IAM role</div>
+            <div class="scenario-option">D. The ALB health check is failing</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d21q15', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d21q15"><strong>Correct answer: B.</strong> Pending tasks mean the service wants more tasks than the underlying capacity can place; the fix is capacity provider managed scaling or a larger node group maximum, not a change to the service policy.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q16.</strong> A team wants each container task to have its own security group and IP address rather than sharing a host's port space. Which network mode provides this?</p>
+          <div class="scenario-options" id="opts-d21q16">
+            <div class="scenario-option">A. bridge</div>
+            <div class="scenario-option">B. host</div>
+            <div class="scenario-option">C. awsvpc</div>
+            <div class="scenario-option">D. none</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d21q16', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d21q16"><strong>Correct answer: C.</strong> awsvpc mode gives every task its own ENI, private IP, and security group, enabling per-task security instead of shared host-level rules.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q17.</strong> A company runs dozens of small independent containerized services and has no Kubernetes requirement or existing Kubernetes tooling. Which orchestrator minimizes operational overhead?</p>
+          <div class="scenario-options" id="opts-d21q17">
+            <div class="scenario-option">A. Amazon EKS</div>
+            <div class="scenario-option">B. Amazon ECS</div>
+            <div class="scenario-option">C. Self-managed Kubernetes on EC2</div>
+            <div class="scenario-option">D. AWS Batch</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d21q17', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d21q17"><strong>Correct answer: B.</strong> ECS has no per-cluster control-plane charge and no Kubernetes upgrade cycle to manage, which makes it the lower-overhead choice when portability is not a requirement.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q18.</strong> A workload needs a 500 GB local scratch volume for temporary processing files and runs for several hours at a time. Which platform fits?</p>
+          <div class="scenario-options" id="opts-d21q18">
+            <div class="scenario-option">A. Lambda with an EFS mount</div>
+            <div class="scenario-option">B. Fargate tasks with ephemeral storage</div>
+            <div class="scenario-option">C. EC2 instances with instance store or attached EBS</div>
+            <div class="scenario-option">D. API Gateway with a Lambda integration</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d21q18', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d21q18"><strong>Correct answer: C.</strong> A large persistent local scratch volume plus multi-hour execution eliminates the serverless options; EC2 with instance store or attached EBS is the fit.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q19.</strong> A team wants to shift 10% of traffic to a new container version, watch error rates for an hour, then shift the rest. Which combination supports this?</p>
+          <div class="scenario-options" id="opts-d21q19">
+            <div class="scenario-option">A. Route 53 weighted routing only</div>
+            <div class="scenario-option">B. ALB weighted target groups with CloudWatch alarms on the new target group</div>
+            <div class="scenario-option">C. A second ALB in a different region</div>
+            <div class="scenario-option">D. An Auto Scaling Group with a warm pool</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d21q19', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d21q19"><strong>Correct answer: B.</strong> Weighted target groups perform the traffic split at the load balancer, and per-target-group metrics let you evaluate the canary before completing the shift.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q20.</strong> A function processes SQS messages in batches, and one bad message in a batch causes the entire batch to be retried repeatedly. What addresses this?</p>
+          <div class="scenario-options" id="opts-d21q20">
+            <div class="scenario-option">A. Increase the function timeout</div>
+            <div class="scenario-option">B. Enable partial batch failure reporting and configure a dead-letter queue</div>
+            <div class="scenario-option">C. Reduce the batch size to one</div>
+            <div class="scenario-option">D. Increase reserved concurrency</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d21q20', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d21q20"><strong>Correct answer: B.</strong> Partial batch failure reporting lets the function return only the failed message identifiers so the rest of the batch is not retried, and a DLQ isolates the poison message.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q21.</strong> A team needs a hard guarantee that a function can always run at least 50 concurrent executions even when other functions in the account are consuming the regional limit. What provides this?</p>
+          <div class="scenario-options" id="opts-d21q21">
+            <div class="scenario-option">A. Provisioned concurrency of 50</div>
+            <div class="scenario-option">B. Reserved concurrency of 50</div>
+            <div class="scenario-option">C. A larger memory setting</div>
+            <div class="scenario-option">D. A longer timeout</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d21q21', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d21q21"><strong>Correct answer: B.</strong> Reserved concurrency both caps and guarantees a function's share of the account's concurrency pool, reserving it away from other functions.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q22.</strong> A workload's traffic is unpredictable, bursts to thousands of requests per second, and drops to zero for hours. The team wants no idle cost. Which pairing fits?</p>
+          <div class="scenario-options" id="opts-d21q22">
+            <div class="scenario-option">A. EC2 Auto Scaling with Reserved Instances</div>
+            <div class="scenario-option">B. Lambda behind API Gateway with per-request billing</div>
+            <div class="scenario-option">C. A dedicated host</div>
+            <div class="scenario-option">D. EKS with a fixed node group</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d21q22', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d21q22"><strong>Correct answer: B.</strong> Per-request billing charges only for work performed, which is exactly what a workload with long idle periods and unpredictable bursts needs.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q23.</strong> A team wants to run a containerized web service without managing any EC2 instances, but the service needs a sidecar container that must run on every node. What is the constraint conflict?</p>
+          <div class="scenario-options" id="opts-d21q23">
+            <div class="scenario-option">A. None — Fargate supports sidecars on every node</div>
+            <div class="scenario-option">B. Fargate has no shared nodes, so a per-node sidecar is impossible; managed node groups are required</div>
+            <div class="scenario-option">C. Sidecars require Lambda layers</div>
+            <div class="scenario-option">D. Sidecars require a dedicated host</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d21q23', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d21q23"><strong>Correct answer: B.</strong> Fargate's per-task isolation means there is no node to attach a per-node sidecar to; a node-based launch type is required for that pattern.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q24.</strong> A company wants maximum flexibility to change instance families and regions over a one-year commitment while still receiving a discount on a steady baseline. What should they purchase?</p>
+          <div class="scenario-options" id="opts-d21q24">
+            <div class="scenario-option">A. EC2 Instance Savings Plans</div>
+            <div class="scenario-option">B. Compute Savings Plans</div>
+            <div class="scenario-option">C. Standard Reserved Instances</div>
+            <div class="scenario-option">D. Spot Instances</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d21q24', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d21q24"><strong>Correct answer: B.</strong> Compute Savings Plans apply across any instance family, region, and OS, and even to Fargate and Lambda usage, trading a slightly lower discount for maximum flexibility.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q25.</strong> A batch workload is fault-tolerant and can be restarted, and the team wants the lowest possible compute cost with protection against a single capacity pool being unavailable. What should they configure?</p>
+          <div class="scenario-options" id="opts-d21q25">
+            <div class="scenario-option">A. On-Demand instances in a single Availability Zone</div>
+            <div class="scenario-option">B. A mixed-instance Auto Scaling Group or Spot Fleet with multiple instance types and pools</div>
+            <div class="scenario-option">C. Reserved Instances for the batch fleet</div>
+            <div class="scenario-option">D. A dedicated host</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d21q25', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d21q25"><strong>Correct answer: B.</strong> Spot with diversification across instance types and capacity pools lowers cost and reduces the chance that a single pool's interruption affects the whole fleet; the workload's restartability makes the interruption notice tolerable.</div>
+        </div>
       </section>
+
+      <section class="doc-section" id="preview">
+        <h2 class="section-heading">Preview</h2>
+        <div class="card card-purple">
+          <p>Everything in this week assumed that the compute layer is the hard part — that once you have chosen a platform and a scaling model, the data layer is a solved problem you configure once. That assumption holds right up until the workload has to survive the loss of an Availability Zone, or serve reads from a second continent, or accept writes in two regions at the same time. The open question this week leaves unresolved is what happens to the database when the compute layer is already multi-AZ and the storage underneath it is not.</p>
+          <p>Day 22 answers that for the relational case with Aurora, whose storage layer is replicated six ways across three Availability Zones and self-heals without a failover event, and then extends it across regions with Aurora Global Database — replication that happens in the storage layer rather than through binlog shipping, which is why the cross-region lag is measured in sub-second terms and a secondary region can be promoted in under a minute. The interesting part is not the numbers but the mechanism: understanding why storage-layer replication behaves differently from a read replica is what separates the two answers on an exam question that mentions both.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="sources">
+        <h2 class="section-heading">Sources</h2>
+        <div class="card">
+          <ul class="source-list">
+            <li><a href="https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-networking.html" target="_blank">Amazon ECS task networking (awsvpc mode)</a></li>
+            <li><a href="https://docs.aws.amazon.com/eks/latest/userguide/fargate.html" target="_blank">Amazon EKS — AWS Fargate profiles and limitations</a></li>
+            <li><a href="https://docs.aws.amazon.com/autoscaling/ec2/userguide/lifecycle-hooks.html" target="_blank">Amazon EC2 Auto Scaling lifecycle hooks</a></li>
+            <li><a href="https://docs.aws.amazon.com/autoscaling/ec2/userguide/ec2-auto-scaling-warm-pools.html" target="_blank">Amazon EC2 Auto Scaling warm pools</a></li>
+            <li><a href="https://docs.aws.amazon.com/lambda/latest/dg/configuration-concurrency.html" target="_blank">AWS Lambda — configuring reserved and provisioned concurrency</a></li>
+            <li><a href="https://docs.aws.amazon.com/step-functions/latest/dg/concepts-standard-vs-express.html" target="_blank">AWS Step Functions — Standard vs. Express workflows</a></li>
+          </ul>
+        </div>
+      </section>
+
       <div class="day-nav">
         <a href="day-020.html">&larr; Day 20: Serverless Architectures — Step Functions &amp; API Gateway</a>
         <button class="btn btn-green" onclick="markComplete(21, 'day-022.html')">Mark Day 21 Complete &rarr;</button>

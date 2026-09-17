@@ -104,36 +104,346 @@
         <span class="pill pill-green">Phase 4: Migration, Hybrid &amp; Cost Optimization</span>
       </div>
       <h1 class="hero-title">Migration Strategy Framework — The 7 Rs &amp; Migration Hub</h1>
-      <div class="reading-meta">&#128337; ~3 min read &middot; 2 services covered</div>
+      <div class="reading-meta">&#128337; ~58 min read &middot; 2 services covered</div>
       <div class="services-grid">
         <span class="service-tag">Migration Hub</span>
         <span class="service-tag">7 Rs (Retire, Retain, Rehost, Relocate, Repurchase, Replatform, Refactor)</span>
       </div>
       <div id="tracker"></div>
-      <section class="doc-section">
-        <h2 class="section-heading">Today's Concept</h2>
+
+      <section class="doc-section" id="recap">
+        <h2 class="section-heading">Recap — Where Phase 3 Left Us</h2>
         <div class="card card-accent">
-          <p>The 7 Rs classify how to move each workload: Retire (decommission), Retain (keep as-is for now), Rehost (lift-and-shift, e.g. via MGN), Relocate (move VMware workloads to VMware Cloud on AWS unchanged), Repurchase (move to SaaS), Replatform (lift-tinker-and-shift, e.g. self-managed MySQL to RDS), and Refactor (re-architect to cloud-native). Migration Hub centrally tracks progress across tools.</p>
-        </div>
-        <h3 class="sub-heading">Hands-on Lab / Practical Action (45 min)</h3>
-        <div class="card">
-          <p>Classify a portfolio of 10 sample applications into the correct 'R' strategy based on stated business constraints (deadline, licensing, technical debt).</p>
+          <p>Phase 3 closed on a synthesis day that pulled together three threads that had been running in parallel for six weeks: observability, chaos engineering, and disaster-recovery pattern selection. The observability thread ended with X-Ray's service map as the tool that isolates a slow hop inside a distributed call chain, and with the recognition that internal metrics alone cannot tell you whether a user flow actually works. The chaos thread ended with FIS experiment templates and their mandatory stop conditions, and with the Game Day as the mechanism that converts a documented runbook into a tested fact. The recovery thread ended with the backup/restore through active-active spectrum, and with Route 53 ARC as the control plane that makes failover deterministic rather than ad hoc.</p>
+          <p>Today extends that material rather than replacing it. Everything Phase 3 built assumed the workload was already running on AWS and needed to survive failure there. Phase 4 opens the question that comes before all of it: how does a workload get onto AWS in the first place, and who decides which of the seven migration strategies applies to it? The same discipline that produced tested recovery procedures now has to produce a defensible per-application migration decision — and a system of record for tracking it.</p>
         </div>
       </section>
-      <section class="doc-section">
-        <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
-        
-      <div class="scenario-card">
-        <p class="scenario-question"><strong>Q1.</strong> A data center lease expires in 6 months, forcing a fast migration, but two legacy apps have unresolved software licensing blockers. What's the correct 7 Rs plan?</p>
-        <div class="scenario-options" id="opts-d43q0">
+
+      <section class="doc-section" id="why-on-exam">
+        <h2 class="section-heading">1. Why This Is on the Exam</h2>
+        <p>The 7 Rs are not a taxonomy exercise. They are the vocabulary SAP-C02 uses to describe the single most common class of scenario in Domain 3 (Migration and Modernization): a company with a portfolio of applications, a hard constraint, and a set of plausible-sounding migration options that differ mainly in how much work they require and how much of the existing application they preserve. The exam does not usually ask you to name the seven strategies. It gives you a business constraint — a data center lease expiring, a licensing dispute, a compliance requirement, a team with no Kubernetes experience — and asks which strategy is appropriate for a specific application under that constraint.</p>
+        <p>That framing matters because the strategies are not ranked. There is no "best" R. Rehost is the right answer when the deadline is the binding constraint and the application is not worth touching. Refactor is the right answer when the application is strategically important and the business is willing to fund a rewrite. Retain is the right answer when neither is true yet. The exam rewards candidates who can read a constraint and select the strategy that satisfies it at the lowest cost and risk, and it penalizes candidates who reflexively pick the most modern-sounding option.</p>
+        <p>Migration Hub sits alongside the 7 Rs because the exam also tests the operational question: once you have decided on a strategy per application, how do you track hundreds of applications across multiple migration tools and multiple waves? Migration Hub is the answer, and it appears in scenarios where the requirement is a single view of migration status across a portfolio rather than a single application's cutover mechanics. The two topics belong together because the 7 Rs produce the plan and Migration Hub is where the plan's execution is observed.</p>
+      </section>
+
+      <section class="doc-section" id="mechanism">
+        <h2 class="section-heading">2. How the Framework Actually Works</h2>
+        <p>The 7 Rs are best understood as a decision procedure applied per application, not per data center. Each application in the portfolio gets classified independently, and the classification is driven by two questions asked in order. First: does this application need to exist at all in the target state? If the answer is no, the strategy is Retire and the work is decommissioning rather than migrating. If the answer is yes but the timing is wrong — a licensing negotiation is open, a vendor contract runs for another eighteen months, a replacement system is mid-build — the strategy is Retain, which is an explicit decision to do nothing yet rather than an oversight. Retain is the strategy most often forgotten in practice and most often tested on the exam, because candidates tend to assume every application must move.</p>
+        <p>Second, for applications that do need to exist and do need to move: how much of the application is allowed to change? The answer to that question splits the remaining five strategies along a spectrum of change. Rehost changes nothing about the application — the same binaries, the same OS, the same configuration, moved to EC2. Relocate also changes nothing about the application, but moves it without converting it out of its existing virtualization format, which in AWS terms means VMware workloads landing on VMware Cloud on AWS. Repurchase changes the application entirely by replacing it with a SaaS product, so the "migration" is really a data migration plus a decommissioning. Replatform changes the application's runtime substrate without changing its code — self-managed MySQL becomes RDS, a self-managed Tomcat cluster becomes Elastic Beanstalk. Refactor changes the application's architecture, typically decomposing a monolith into services or moving to serverless.</p>
+        <p>The ordering of that spectrum is the useful part. Rehost and Relocate are the cheapest per application and the fastest to execute, and they preserve technical debt along with the application. Refactor is the most expensive and slowest, and it is the only strategy that removes technical debt. Replatform sits in the middle and is the strategy most often misapplied, because "lift-tinker-and-shift" sounds like a small change and frequently is not — moving a database engine is a schema conversion project, not a configuration change. The exam's scenario language usually signals the intended strategy through the constraint it names: a deadline signals Rehost, a licensing blocker signals Retain or Repurchase, a desire to reduce operational overhead without a rewrite signals Replatform, and a strategic modernization mandate signals Refactor.</p>
+      </section>
+
+      <section class="doc-section" id="decision-boundary">
+        <h2 class="section-heading">3. The Core Decision Boundary</h2>
+        <p>Every 7 Rs scenario reduces to one fork: is the binding constraint time, or is it the value of the application's future state? When time binds, the strategies that preserve the application win, because they require the least engineering work per application and can be executed in parallel across a large portfolio. When future-state value binds, the strategies that change the application win, because preserving a poorly-architected application into the cloud simply relocates the problem. The exam rarely presents a scenario where both constraints are equally weighted; one of them is always the stated driver, and the correct answer follows from identifying which.</p>
+        <p>The second-order fork is whether the application is worth the change. A legacy internal reporting tool that runs once a month and is used by four people is not a Refactor candidate regardless of how much technical debt it carries, because the business value of modernizing it does not cover the cost. The same application under a data center exit deadline is a Rehost candidate, and under a vendor end-of-life notice is a Repurchase candidate. The strategy follows the application's role in the business, not its technical quality.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Strategy</th><th>What changes</th><th>Typical driver</th><th>Relative effort</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Retire</td><td>Nothing — the app is decommissioned</td><td>Redundant or unused application</td><td>Lowest</td></tr>
+              <tr><td>Retain</td><td>Nothing — the app stays where it is</td><td>Licensing, contract, or timing blocker</td><td>None yet</td></tr>
+              <tr><td>Rehost</td><td>Hosting location only</td><td>Deadline, data center exit</td><td>Low</td></tr>
+              <tr><td>Relocate</td><td>Hosting platform, not the VM format</td><td>VMware estate, no conversion appetite</td><td>Low</td></tr>
+              <tr><td>Repurchase</td><td>The application itself (replaced by SaaS)</td><td>Vendor EOL, commodity function</td><td>Medium</td></tr>
+              <tr><td>Replatform</td><td>Runtime substrate, not the code</td><td>Reduce ops overhead without a rewrite</td><td>Medium</td></tr>
+              <tr><td>Refactor</td><td>Architecture and code</td><td>Strategic modernization mandate</td><td>Highest</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="doc-section" id="config-tradeoffs">
+        <h2 class="section-heading">4. What Each Strategy Costs You</h2>
+        <p>The cost of a migration strategy is not only the engineering hours it consumes. Each strategy carries a distinct set of downstream consequences that outlive the migration itself, and those consequences are what the exam is usually probing when it presents two strategies that both technically satisfy the stated constraint. Rehost is cheap to execute and expensive to operate, because the application arrives on AWS with all of its original operational characteristics intact — the same manual patching, the same single-instance database, the same lack of autoscaling. The migration cost is low and the run cost is high, and the exam expects you to recognize that tradeoff rather than treat Rehost as free.</p>
+        <p>Relocate carries the same operational profile as Rehost but adds a licensing dimension: VMware Cloud on AWS is a paid service with its own commercial terms, and the strategy only makes sense when the organization already has a VMware investment it wants to preserve. Repurchase inverts the tradeoff — the migration cost is high because data must be extracted, transformed, and loaded into a SaaS product, and the operational cost is low because the vendor runs everything. Replatform is the strategy with the widest variance: moving a stateless application tier to containers is genuinely low-effort, while moving a database engine is a project with its own schema conversion and validation phases.</p>
+        <p>Refactor is the only strategy whose cost is front-loaded and whose benefit is structural. It is also the only strategy that can fail in a way that leaves the organization worse off than before, because a half-completed refactor produces an application that is neither the old monolith nor the new architecture. The exam's Refactor scenarios usually include a signal that the organization has the appetite and the runway for it — a multi-year mandate, a dedicated platform team, a product owner who owns the outcome. Absent those signals, the correct answer is usually Replatform or Rehost.</p>
+      </section>
+
+      <section class="doc-section" id="sizing-limits">
+        <h2 class="section-heading">5. Sizing, Sequencing and Portfolio Scale</h2>
+        <p>The 7 Rs operate at the application level, but migrations are executed at the wave level, and the gap between those two scales is where most real migration programs get into trouble. A portfolio of three hundred applications classified individually produces three hundred strategy decisions, but those decisions have to be grouped into waves that respect dependencies, shared infrastructure, and the organization's capacity to absorb change. Migration Hub exists precisely because that grouping is not obvious from the individual classifications and because the status of each application across each tool needs a single home.</p>
+        <p>The sequencing constraint that matters most is dependency. An application that depends on a shared database cannot be cut over before that database is migrated, and a database migration is usually a Replatform or Refactor decision with its own timeline. This is why migration programs typically front-load the shared infrastructure — identity, networking, logging, the database tier — and back-load the applications that depend on it. The 7 Rs classification for an individual application is therefore necessary but not sufficient; the wave plan is what turns a set of classifications into an executable schedule.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Portfolio scale</th><th>Practical implication</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Under ~20 applications</td><td>Classifications can be tracked in a spreadsheet; Migration Hub is optional</td></tr>
+              <tr><td>20-100 applications</td><td>Wave planning becomes necessary; Migration Hub's single view starts paying for itself</td></tr>
+              <tr><td>100-500 applications</td><td>Automated discovery and dependency mapping are prerequisites, not nice-to-haves</td></tr>
+              <tr><td>500+ applications</td><td>Portfolio-level tooling and a dedicated migration factory pattern are the norm</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>Migration Hub's role in this picture is deliberately narrow. It does not perform migrations; it aggregates status from the tools that do — MGN for rehost, DMS for database migration, and the discovery tools that feed the plan. Its value is the single pane of glass, and the exam tests it in scenarios where the requirement is visibility across a portfolio rather than the mechanics of any single application's move.</p>
+      </section>
+
+      <section class="doc-section" id="failure-modes">
+        <h2 class="section-heading">6. Failure Modes and What They Look Like</h2>
+        <p>The characteristic failure of a 7 Rs program is not a technical failure at all; it is a classification failure that surfaces months later. The most common form is the accidental Refactor — an application classified as Replatform that turns out to require code changes, which pushes it into a rewrite the organization did not budget for. The symptom appears during the migration wave as an application that keeps slipping its cutover date while the team reports "just a few more changes." The first diagnostic move is to re-examine the classification against the actual work being done: if the team is modifying application code, the strategy is Refactor regardless of what the plan says, and the schedule needs to be re-baselined.</p>
+        <p>The second common failure is the Retain that nobody owns. An application classified as Retain is, by definition, not being worked on, which means it is also not being tracked, which means it can be forgotten entirely until the data center lease expires and it is discovered still running. The symptom is a late-breaking discovery during the final wave. The mitigation is procedural: Retain decisions need an owner and a review date, and they need to appear in Migration Hub alongside the applications that are actively moving.</p>
+        <p>The third failure is the Rehost that was supposed to be temporary. Rehost is frequently justified as a first step before a later Refactor, and that later Refactor frequently never happens because the application is now running and no longer urgent. The symptom is a cloud estate that carries the same operational burden as the data center it replaced. This is not a migration failure in the narrow sense, but it is the failure mode the exam is most likely to describe when it asks why a Rehost-first strategy can be a mistake.</p>
+      </section>
+
+      <section class="doc-section" id="sre-angle">
+        <h2 class="section-heading">7. The Operational and SRE Angle</h2>
+        <p>From an SRE perspective, the 7 Rs are a decision about which operational model the application will have after the migration, and that decision has direct consequences for on-call load. A Rehosted application arrives with its existing runbooks, its existing failure modes, and its existing alerting, none of which improve because the application is now on EC2. A Replatformed application typically arrives with a reduced operational surface — a managed database removes patching and backup work — but also with new failure modes that the team has not seen before, such as a managed service's own maintenance windows and failover behavior. A Refactored application arrives with a different operational model entirely, usually one that requires the team to learn distributed tracing and per-service SLOs.</p>
+        <p>The practical implication is that migration planning and operational readiness planning are the same activity viewed from two angles. Every application's classification implies a target operational model, and that model implies a set of runbooks, alarms, and SLOs that must exist before cutover. The exam tests this indirectly through scenarios that ask what must be in place before a migration wave proceeds, and the answer is usually that the target environment's monitoring and recovery procedures must be validated first — the same discipline Phase 3 established for steady-state workloads, applied to the moment of transition.</p>
+        <p>Migration Hub's contribution to this angle is measurement. Because it aggregates status across tools, it can answer the question that matters during a wave: how many applications are actually cut over, how many are in progress, and how many have slipped. That is a program-level SLO, and it is the one that determines whether the data center exit date is met.</p>
+      </section>
+
+      <section class="doc-section" id="gotchas">
+        <h2 class="section-heading">8. Edge Cases and Exam Gotchas</h2>
+        <p>The most frequently missed distinction is between Rehost and Relocate. Both preserve the application unchanged, and both are low-effort, but Relocate specifically means moving a VMware workload to VMware Cloud on AWS without converting it to a native EC2 instance or AMI. If a scenario mentions preserving the hypervisor, keeping VMware tooling, or avoiding any conversion step, the answer is Relocate. If it mentions moving servers to EC2 with minimal change, the answer is Rehost, and the tool is MGN.</p>
+        <p>The second gotcha is treating Retain as a failure to decide. Retain is a legitimate strategy with a legitimate trigger — an open licensing negotiation, a contract that has not expired, a replacement system that is mid-build — and the exam will present scenarios where Retain is the correct answer precisely because the other options would waste money or create risk. Candidates who assume every application must move will pick Rehost or Repurchase and be wrong.</p>
+        <p>The third gotcha is conflating Repurchase with Replatform. Repurchase replaces the application with a SaaS product, which means the application ceases to exist in its current form and its data must be migrated to the vendor. Replatform keeps the application and changes its runtime substrate. A scenario about moving an on-premises CRM to a SaaS CRM is Repurchase; a scenario about moving a self-managed MySQL database to RDS is Replatform.</p>
+        <p>The fourth gotcha is assuming Migration Hub performs migrations. It does not. It aggregates status from the tools that do, and its value is visibility. A scenario that asks how to track migration progress across a portfolio of applications and multiple tools is a Migration Hub scenario; a scenario that asks how to move a specific server is not.</p>
+      </section>
+
+      <section class="doc-section" id="vs-comparison">
+        <h2 class="section-heading">9. This vs. the Services It Gets Confused With</h2>
+        <p>The 7 Rs framework is frequently confused with the tools that implement individual strategies, and the exam exploits that confusion by offering a tool as an answer to a strategy question or vice versa. The framework answers "what should we do with this application"; the tools answer "how do we execute that decision." Keeping those two layers separate is the single most useful habit for these scenarios.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Confusion</th><th>Distinguishing question</th><th>Pick which</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Rehost vs Relocate</td><td>Is the VM converted to a native EC2 instance/AMI?</td><td>Converted = Rehost (MGN); not converted = Relocate (VMware Cloud on AWS)</td></tr>
+              <tr><td>Repurchase vs Replatform</td><td>Does the application still exist in its current form?</td><td>Replaced by SaaS = Repurchase; same app, new substrate = Replatform</td></tr>
+              <tr><td>Retain vs Retire</td><td>Will the application exist in the target state at all?</td><td>Yes, later = Retain; no = Retire</td></tr>
+              <tr><td>7 Rs vs Migration Hub</td><td>Is the question about deciding or about tracking?</td><td>Deciding = 7 Rs; tracking across tools = Migration Hub</td></tr>
+              <tr><td>Replatform vs Refactor</td><td>Is application code being modified?</td><td>No = Replatform; yes = Refactor</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The rule that resolves most of these quickly: if the scenario describes a change to the application's code or architecture, the strategy is Refactor. If it describes a change to where or on what the application runs, the strategy is Rehost, Relocate, or Replatform depending on whether the runtime substrate changes. If it describes the application being replaced or removed, the strategy is Repurchase or Retire. And if it describes the application staying put, the strategy is Retain.</p>
+      </section>
+
+      <section class="doc-section" id="lab">
+        <h2 class="section-heading">Hands-On Lab — Classifying a Ten-Application Portfolio</h2>
+        <div class="card card-green">
+          <p>This lab takes the classification exercise from the original brief and turns it into a full portfolio exercise with a wave plan. The goal is not to produce a correct answer key — there is no single correct answer — but to produce a defensible classification for each application and to discover where the classifications conflict with each other. Work through it on paper or in a spreadsheet; no AWS account is required.</p>
+          <p><strong>Step 1 — Build the portfolio.</strong> Write down ten applications with the following characteristics, one per row: name, business function, current hosting (physical, VM, container), database engine, monthly active users, and whether the application is on a vendor support contract. Keep the descriptions short; the point is to have enough detail to classify against, not to document the estate.</p>
+          <p><strong>Step 2 — Add the constraints.</strong> Add three columns that represent the business constraints the classification depends on: a hard deadline (if any), a licensing or contract blocker (if any), and a strategic value rating from one to five. These three columns are what turn a technical inventory into a migration plan, and they are the columns the exam's scenarios always imply even when they do not state them explicitly.</p>
+          <p><strong>Step 3 — Classify each application.</strong> For each row, apply the decision procedure from section 2 in order. First ask whether the application needs to exist in the target state; if not, mark it Retire. If it does exist but has a blocker, mark it Retain and record the blocker and a review date. For the remainder, ask how much of the application is allowed to change and assign Rehost, Relocate, Repurchase, Replatform, or Refactor. Write one sentence of justification per application — the justification is the deliverable, not the label.</p>
+          <p><strong>Step 4 — Find the conflicts.</strong> Review the classifications for internal contradictions. A Retain decision on an application that shares a database with a Rehosted application is a conflict, because the database is moving and the Retained application depends on it. A Refactor decision on an application with a one-to-five strategic value of one is a conflict, because the business case does not support it. List every conflict you find and resolve it by changing one of the two classifications.</p>
+          <p><strong>Step 5 — Build the wave plan.</strong> Group the applications into three waves. Wave one should contain shared infrastructure and any application that others depend on. Wave two should contain the applications with the fewest dependencies and the clearest classifications. Wave three should contain the applications with the most dependencies, the Retain decisions that have resolved, and anything classified as Refactor. The wave plan is the artifact that a real migration program would actually execute against.</p>
+          <p><strong>Step 6 — Define the tracking view.</strong> Decide what you would record in Migration Hub for each application: its classification, its target wave, its owning team, and its current status. Then decide which of those fields would change during execution and which are fixed at classification time. The fixed fields are the plan; the changing fields are what Migration Hub is for.</p>
+          <p><strong>Step 7 — Write the one-page summary.</strong> Produce a single page that states the portfolio's classification counts, the wave plan, the top three risks, and the applications whose classification you are least confident about. That last item is the most valuable output of the exercise, because it is the list you would take into a discovery engagement.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="quiz">
+        <h2 class="section-heading">Scenario Question Drills</h2>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q1.</strong> A data center lease expires in six months, forcing a fast migration, but two legacy applications have unresolved software licensing blockers. What is the correct 7 Rs plan?</p>
+          <div class="scenario-options" id="opts-d43q1">
             <div class="scenario-option">A. Refactor everything to serverless</div>
-            <div class="scenario-option">B. Rehost the majority via MGN to meet the deadline; Retain the two blocked apps until licensing is resolved</div>
+            <div class="scenario-option">B. Rehost the majority via MGN to meet the deadline; Retain the two blocked applications until licensing is resolved</div>
             <div class="scenario-option">C. Repurchase all applications as SaaS</div>
             <div class="scenario-option">D. Retire every application</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d43q1', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d43q1"><strong>Correct answer: B.</strong> Under a tight deadline, Rehost is the fastest path for most applications; applications with real blockers should be explicitly Retained rather than forced into a rushed migration.</div>
         </div>
-        <button class="scenario-reveal-btn" onclick="revealAnswer('d43q0', 1)">Reveal Answer</button>
-        <div class="scenario-explanation" id="exp-d43q0"><strong>Correct answer: B.</strong> Under a tight deadline, Rehost (lift-and-shift) is the fastest path for most apps; apps with real blockers should be explicitly Retained rather than forced into a rushed migration.</div>
-      </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q2.</strong> A company wants to move its VMware estate to AWS but has no appetite for converting VMs to native EC2 instances or AMIs, and wants to keep its existing VMware management tooling. Which strategy applies?</p>
+          <div class="scenario-options" id="opts-d43q2">
+            <div class="scenario-option">A. Rehost via AWS Application Migration Service</div>
+            <div class="scenario-option">B. Relocate to VMware Cloud on AWS</div>
+            <div class="scenario-option">C. Replatform onto containers</div>
+            <div class="scenario-option">D. Refactor into microservices</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d43q2', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d43q2"><strong>Correct answer: B.</strong> Relocate is the only strategy that moves a VMware workload without converting it out of its VMware format, preserving the hypervisor layer and VMware tooling.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q3.</strong> An internal reporting tool is used by four people once a month and carries significant technical debt. The company is not under a data center exit deadline. What is the most defensible strategy?</p>
+          <div class="scenario-options" id="opts-d43q3">
+            <div class="scenario-option">A. Refactor it to serverless to eliminate the technical debt</div>
+            <div class="scenario-option">B. Replatform it onto managed services</div>
+            <div class="scenario-option">C. Retain it, or Retire it if the function is genuinely unused</div>
+            <div class="scenario-option">D. Repurchase it as a SaaS product</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d43q3', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d43q3"><strong>Correct answer: C.</strong> The business value of modernizing a low-usage internal tool does not cover the cost of a Refactor, and with no deadline there is no forcing function. Retain (or Retire if truly unused) is the defensible choice.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q4.</strong> A team is migrating a self-managed MySQL database to Amazon RDS with no application code changes. Which strategy is this?</p>
+          <div class="scenario-options" id="opts-d43q4">
+            <div class="scenario-option">A. Rehost</div>
+            <div class="scenario-option">B. Replatform</div>
+            <div class="scenario-option">C. Refactor</div>
+            <div class="scenario-option">D. Repurchase</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d43q4', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d43q4"><strong>Correct answer: B.</strong> Replatform changes the runtime substrate without changing application code — the canonical example being self-managed MySQL to RDS.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q5.</strong> A company is replacing its on-premises CRM with a SaaS CRM and migrating the customer records to the vendor. Which strategy is this?</p>
+          <div class="scenario-options" id="opts-d43q5">
+            <div class="scenario-option">A. Replatform</div>
+            <div class="scenario-option">B. Rehost</div>
+            <div class="scenario-option">C. Repurchase</div>
+            <div class="scenario-option">D. Relocate</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d43q5', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d43q5"><strong>Correct answer: C.</strong> Repurchase replaces the application with a SaaS product, so the application ceases to exist in its current form and its data must be migrated to the vendor.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q6.</strong> A migration program has 240 applications across four migration tools and needs a single view of which applications are cut over, in progress, or slipped. What provides this?</p>
+          <div class="scenario-options" id="opts-d43q6">
+            <div class="scenario-option">A. AWS Application Migration Service</div>
+            <div class="scenario-option">B. AWS Migration Hub</div>
+            <div class="scenario-option">C. AWS Database Migration Service</div>
+            <div class="scenario-option">D. AWS Config</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d43q6', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d43q6"><strong>Correct answer: B.</strong> Migration Hub aggregates migration status across tools into a single view; it does not perform migrations itself.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q7.</strong> An application was classified as Replatform, but during the migration wave the team keeps modifying application code to make it work on the new substrate. What does this indicate?</p>
+          <div class="scenario-options" id="opts-d43q7">
+            <div class="scenario-option">A. The classification is correct and the code changes are incidental</div>
+            <div class="scenario-option">B. The application is effectively a Refactor, and the schedule should be re-baselined</div>
+            <div class="scenario-option">C. The application should be Retained instead</div>
+            <div class="scenario-option">D. The application should be Repurchased</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d43q7', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d43q7"><strong>Correct answer: B.</strong> If application code is being modified, the strategy is Refactor regardless of what the plan says — the accidental Refactor is the most common classification failure.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q8.</strong> A company Rehosts 80 applications to meet a data center exit deadline, intending to modernize them later. Two years later the applications are still running unchanged on EC2. What failure mode does this illustrate?</p>
+          <div class="scenario-options" id="opts-d43q8">
+            <div class="scenario-option">A. The Retain that nobody owns</div>
+            <div class="scenario-option">B. The Rehost that was supposed to be temporary</div>
+            <div class="scenario-option">C. The accidental Refactor</div>
+            <div class="scenario-option">D. A Migration Hub tracking failure</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d43q8', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d43q8"><strong>Correct answer: B.</strong> Rehost is often justified as a first step before a later Refactor, and that later Refactor frequently never happens because the application is no longer urgent.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q9.</strong> An application is classified as Retain because of an open licensing negotiation. What must accompany that decision for it to be operationally sound?</p>
+          <div class="scenario-options" id="opts-d43q9">
+            <div class="scenario-option">A. Nothing — Retain means the application is out of scope</div>
+            <div class="scenario-option">B. An owner, a review date, and visibility in the migration tracking view</div>
+            <div class="scenario-option">C. Immediate decommissioning of the application</div>
+            <div class="scenario-option">D. A Refactor plan to be executed in parallel</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d43q9', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d43q9"><strong>Correct answer: B.</strong> A Retain decision with no owner and no review date is how applications get forgotten until the lease expires and they are discovered still running.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q10.</strong> A Retained application shares a database with an application being Rehosted in wave one. What is the problem?</p>
+          <div class="scenario-options" id="opts-d43q10">
+            <div class="scenario-option">A. None — Retain and Rehost are independent decisions</div>
+            <div class="scenario-option">B. The shared database is moving, so the Retained application's dependency is being migrated out from under it</div>
+            <div class="scenario-option">C. Retained applications cannot share databases</div>
+            <div class="scenario-option">D. The Rehosted application must be Retained instead</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d43q10', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d43q10"><strong>Correct answer: B.</strong> Classifications are per-application but dependencies are shared; a Retain decision that depends on infrastructure being migrated is an internal contradiction that must be resolved.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q11.</strong> Which strategy is the only one that removes technical debt from an application?</p>
+          <div class="scenario-options" id="opts-d43q11">
+            <div class="scenario-option">A. Rehost</div>
+            <div class="scenario-option">B. Replatform</div>
+            <div class="scenario-option">C. Refactor</div>
+            <div class="scenario-option">D. Relocate</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d43q11', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d43q11"><strong>Correct answer: C.</strong> Rehost, Relocate, and Replatform all preserve the application's architecture and therefore its technical debt; only Refactor changes the architecture itself.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q12.</strong> A company has an application that is genuinely redundant — its function is fully covered by another system. Which strategy applies?</p>
+          <div class="scenario-options" id="opts-d43q12">
+            <div class="scenario-option">A. Retain</div>
+            <div class="scenario-option">B. Retire</div>
+            <div class="scenario-option">C. Rehost</div>
+            <div class="scenario-option">D. Repurchase</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d43q12', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d43q12"><strong>Correct answer: B.</strong> Retire is the strategy for applications that do not need to exist in the target state; the work is decommissioning rather than migrating.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q13.</strong> A migration program is planning waves. Which applications should generally be placed in the first wave?</p>
+          <div class="scenario-options" id="opts-d43q13">
+            <div class="scenario-option">A. The applications with the most dependencies</div>
+            <div class="scenario-option">B. Shared infrastructure and applications that others depend on</div>
+            <div class="scenario-option">C. The applications classified as Refactor</div>
+            <div class="scenario-option">D. The applications with unresolved licensing blockers</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d43q13', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d43q13"><strong>Correct answer: B.</strong> Migration programs front-load shared infrastructure — identity, networking, logging, the database tier — because dependent applications cannot cut over before it.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q14.</strong> A scenario asks how to move a specific on-premises server to EC2 with minimal change and minimal downtime. Which tool and strategy pairing is correct?</p>
+          <div class="scenario-options" id="opts-d43q14">
+            <div class="scenario-option">A. Migration Hub, Rehost</div>
+            <div class="scenario-option">B. AWS Application Migration Service, Rehost</div>
+            <div class="scenario-option">C. AWS Database Migration Service, Replatform</div>
+            <div class="scenario-option">D. VMware Cloud on AWS, Relocate</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d43q14', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d43q14"><strong>Correct answer: B.</strong> MGN is the standard rehost tool, using continuous block-level replication to allow test launches and a low-downtime cutover. Migration Hub tracks status; it does not move servers.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q15.</strong> Which statement best describes the relationship between the 7 Rs and Migration Hub?</p>
+          <div class="scenario-options" id="opts-d43q15">
+            <div class="scenario-option">A. Migration Hub selects the correct R for each application automatically</div>
+            <div class="scenario-option">B. The 7 Rs produce the per-application decision; Migration Hub tracks the execution of those decisions across tools</div>
+            <div class="scenario-option">C. They are alternative approaches to the same problem</div>
+            <div class="scenario-option">D. Migration Hub replaces the need for a migration strategy</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d43q15', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d43q15"><strong>Correct answer: B.</strong> The framework answers what to do with each application; Migration Hub answers where each application stands during execution. They operate at different layers.</div>
+        </div>
+      </section>
+
+      <section class="doc-section" id="preview">
+        <h2 class="section-heading">Peek into Tomorrow</h2>
+        <div class="card card-purple">
+          <p>Every classification in this lesson assumed you already knew what was in the portfolio. That assumption is doing a lot of work, and it is the assumption that most real migration programs get wrong first. A ten-application exercise can be classified from memory, but a two-hundred-application estate cannot, and the classifications are only as good as the inventory behind them. The open question is where that inventory comes from: which servers exist, what runs on them, which applications talk to which other applications, and how much CPU and memory each one actually consumes rather than how much it was provisioned with.</p>
+          <p>The dependency question is the sharper one. A classification that looks correct in isolation can be wrong the moment you discover the application shares a database with three others, or that it makes nightly calls to a system nobody remembered was still running. Utilization data matters for a different reason: right-sizing a target instance requires knowing the source's actual peak and average load, not its allocated capacity, and getting that wrong produces either an over-provisioned target or a cutover that fails under real traffic. Tomorrow's topic is the discovery layer that produces both the dependency map and the utilization data — and the question of whether to collect it with an agent on every server or without one.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="sources">
+        <h2 class="section-heading">Sources</h2>
+        <div class="card">
+          <ul class="source-list">
+            <li><a href="https://docs.aws.amazon.com/prescriptive-guidance/latest/migration-strategy-framework/welcome.html" target="_blank">AWS Prescriptive Guidance — Migration Strategy Framework</a></li>
+            <li><a href="https://docs.aws.amazon.com/prescriptive-guidance/latest/large-migration-guide/migration-strategies.html" target="_blank">AWS Prescriptive Guidance — Migration Strategies (the 7 Rs)</a></li>
+            <li><a href="https://docs.aws.amazon.com/application-migration-service/latest/userguide/what-is-service.html" target="_blank">AWS Application Migration Service — User Guide</a></li>
+            <li><a href="https://docs.aws.amazon.com/migrationhub/latest/ug/whatishub.html" target="_blank">AWS Migration Hub — User Guide</a></li>
+            <li><a href="https://docs.aws.amazon.com/vmware/latest/userguide/what-is-vmcloud.html" target="_blank">VMware Cloud on AWS — User Guide</a></li>
+            <li><a href="https://docs.aws.amazon.com/dms/latest/userguide/Welcome.html" target="_blank">AWS Database Migration Service — User Guide</a></li>
+            <li><a href="https://aws.amazon.com/cloud-migration/" target="_blank">AWS Cloud Migration — Product Overview</a></li>
+            <li><a href="https://docs.aws.amazon.com/wellarchitected/latest/framework/welcome.html" target="_blank">AWS Well-Architected Framework</a></li>
+          </ul>
+        </div>
       </section>
       <div class="day-nav">
         <a href="day-042.html">&larr; Day 42: Week Synthesis — SRE &amp; DR Scenario Drills</a>

@@ -23,6 +23,23 @@
   <aside class="sidebar" id="sidebar">
     <div class="search-box"><input type="text" id="navSearch" class="search-input" placeholder="Search days..." onkeyup="filterNav()"></div>
     <div class="nav-section">
+      <div class="nav-section-title">On This Page</div>
+      <a href="#recap" class="nav-link">Recap: What Aurora Changed</a>
+      <a href="#why-on-exam" class="nav-link">1. Why This Is on the Exam</a>
+      <a href="#mechanism" class="nav-link">2. How Each Mechanism Works</a>
+      <a href="#decision-boundary" class="nav-link">3. The Core Decision Boundary</a>
+      <a href="#config-tradeoffs" class="nav-link">4. Configuration Modes and Tradeoffs</a>
+      <a href="#sizing-limits" class="nav-link">5. Sizing, Limits and Quotas</a>
+      <a href="#failure-modes" class="nav-link">6. Failure Modes in Production</a>
+      <a href="#sre-angle" class="nav-link">7. The Operational and SRE Angle</a>
+      <a href="#gotchas" class="nav-link">8. Edge Cases and Exam Gotchas</a>
+      <a href="#vs-comparison" class="nav-link">9. vs. the Services It Gets Confused With</a>
+      <a href="#lab" class="nav-link">Hands-On Lab</a>
+      <a href="#quiz" class="nav-link">Scenario Question Drills</a>
+      <a href="#preview" class="nav-link">Peek into Tomorrow</a>
+      <a href="#sources" class="nav-link">Sources</a>
+    </div>
+    <div class="nav-section">
       <div class="nav-section-title">All Days</div>
       <a href="day-001.html" class="nav-link" data-day="1">Day 1: Multi-Account Architecture &amp; AWS Organizations</a>
       <a href="day-002.html" class="nav-link" data-day="2">Day 2: Service Control Policy (SCP) Mechanics</a>
@@ -104,37 +121,321 @@
         <span class="pill pill-green">Phase 2: Compute, Containers &amp; Global Databases</span>
       </div>
       <h1 class="hero-title">Amazon RDS Multi-AZ vs Read Replicas &amp; Blue/Green Deployments</h1>
-      <div class="reading-meta">&#128337; ~3 min read &middot; 3 services covered</div>
+      <div class="reading-meta">&#128337; ~58 min read &middot; 3 services covered</div>
       <div class="services-grid">
         <span class="service-tag">RDS Multi-AZ</span>
         <span class="service-tag">Read Replicas</span>
         <span class="service-tag">RDS Blue/Green Deployments</span>
       </div>
       <div id="tracker"></div>
-      <section class="doc-section">
-        <h2 class="section-heading">Today's Concept</h2>
+      <section class="doc-section" id="recap">
+        <h2 class="section-heading">Recap: What Aurora Changed About the Availability Conversation</h2>
         <div class="card card-accent">
-          <p>Multi-AZ is for HA (synchronous standby, automatic failover, same endpoint) — it does not scale reads. Read replicas (async) scale read throughput and can be promoted to standalone but cause data loss risk on promotion. RDS Blue/Green Deployments create a fully synchronized staging environment for safer major-version upgrades and schema changes, with fast switchover.</p>
-        </div>
-        <h3 class="sub-heading">Hands-on Lab / Practical Action (45 min)</h3>
-        <div class="card">
-          <p>Set up an RDS Blue/Green Deployment to test a major-version upgrade against production traffic shape before switchover.</p>
+          <p>Day 22 established that Aurora does not behave like a conventional relational database with a bolt-on replication feature. Its storage layer is the replication mechanism: six copies of every write spread across three Availability Zones, with the compute layer reading and writing through that shared volume rather than shipping redo logs between independent servers. Aurora Global Database then extends the same idea across regions, replicating at the storage layer rather than through binlog shipping, which is why the documented cross-region lag sits under a second and a secondary region can be promoted in under a minute.</p>
+          <p>That model is the exception, not the rule, and today's material is deliberately the contrast case. Standard RDS engines — MySQL, PostgreSQL, SQL Server, Oracle, MariaDB — still give you three separate, non-overlapping capabilities that people routinely collapse into one mental bucket: Multi-AZ for availability, read replicas for read scale, and Blue/Green Deployments for change safety. None of them substitutes for another, and the exam leans hard on scenarios where a candidate picks the wrong one because the words "replica" and "standby" sound interchangeable. Where Aurora's storage-layer replication blurred the line between durability and read scaling, classic RDS keeps those concerns strictly separate — and that separation is the whole point of this day.</p>
         </div>
       </section>
-      <section class="doc-section">
+      <section class="doc-section" id="why-on-exam">
+        <h2 class="section-heading">1. Why This Is on the Exam</h2>
+        <p>Almost every SAP-C02 scenario that involves a relational database eventually forces a choice between three things that sound similar and behave nothing alike. The exam is not testing whether you can recite the definition of Multi-AZ; it is testing whether you can read a requirement like "the database must survive an AZ failure with no data loss" or "reporting queries are saturating the primary" or "we need to move from MySQL 5.7 to 8.0 without a long outage" and map it to exactly one of these three features without over-building. That mapping problem is the reason this day exists, and it sits squarely in Domain 2 (Design Resilient Architectures) with a secondary pull into Domain 4 (Design Cost-Optimized Architectures), because the wrong answer is usually the more expensive one.</p>
+        <p>The trap is linguistic. Multi-AZ gives you a standby that is a full copy of your data, and read replicas give you copies of your data too, so candidates assume they are variations on the same theme. They are not. A Multi-AZ standby is invisible to your application, cannot serve reads, and exists solely so that a failure can be absorbed without a human being paged. A read replica is visible, addressable, serves reads, and exists to take load off the primary. A Blue/Green Deployment is not a runtime topology at all — it is a change-management mechanism that happens to create a second environment. Three different problems, three different tools, and the exam will hand you a scenario where the requirement sentence contains the deciding keyword if you know what to look for.</p>
+        <p>There is also a cost dimension that the exam likes to probe. Multi-AZ roughly doubles the instance cost of a database because you are paying for a second instance you never query. Read replicas also cost money but they earn their keep by absorbing read traffic, so the justification is different. Blue/Green Deployments are transient — you pay for the green environment only during the upgrade window — which makes them cheap relative to the risk they retire. A scenario that says "minimize cost while meeting a 15-minute RTO" is often testing whether you understand that Multi-AZ is not a disaster recovery strategy at all, since it protects against an AZ failure inside one region and does nothing for a regional outage.</p>
+      </section>
+      <section class="doc-section" id="mechanism">
+        <h2 class="section-heading">2. How Each Mechanism Actually Works</h2>
+        <p>Multi-AZ is synchronous block-level replication to a standby in a different Availability Zone. When your application commits a transaction, the primary writes to its storage and the write is acknowledged only after it has been durably recorded on the standby's storage as well. That synchronous acknowledgement is the entire point: it means the standby is never behind, so a failover cannot lose committed transactions. The standby runs the same engine version on the same instance class, sits in a different AZ, and is not reachable by your application — there is no endpoint for it, no connection string, no way to send it a query. When the primary fails a health check, RDS flips the DNS record behind your database's single endpoint to point at the standby, which is promoted to primary. Your application reconnects to the same hostname and, after a brief connection interruption, is talking to a different physical instance.</p>
+        <p>Read replicas work on a completely different principle. They are independent database instances that receive changes asynchronously from the primary, using the source engine's native replication mechanism — binlog-based for MySQL and MariaDB, write-ahead log streaming for PostgreSQL, and engine-specific log shipping for SQL Server and Oracle. Because the replication is asynchronous, a read replica is always some amount of time behind the primary, and that lag is a first-class operational metric rather than an implementation detail. Each replica has its own endpoint, so your application can route read-only queries to it explicitly. A replica can be promoted to a standalone primary, which is how you do a controlled cutover or recover from a primary that is unrecoverable — but promotion is a one-way door, and any transactions the replica had not yet received at the moment of promotion are simply gone.</p>
+        <p>Blue/Green Deployments are a different category of thing entirely. When you create one, RDS provisions a complete green environment — a primary and, if the source is Multi-AZ, a standby — running the target engine version, and sets up logical replication from the blue (current production) environment to the green one. The green environment is a real, queryable database that you can point a staging application at, run your migration scripts against, and load-test. Because replication is logical rather than physical, the two environments can run different engine versions, which is what makes major-version upgrades possible. When you are satisfied, you trigger a switchover: RDS briefly blocks writes on blue, waits for green to catch up, renames the environments so that green takes over the production endpoint, and then blue becomes the old environment you can delete. The switchover is measured in seconds to a couple of minutes, not hours.</p>
+      </section>
+      <section class="doc-section" id="decision-boundary">
+        <h2 class="section-heading">3. The Core Decision Boundary</h2>
+        <p>Every scenario question on this topic reduces to one question: what is the requirement actually asking for? If the requirement is about surviving failure without losing data, the answer is Multi-AZ. If it is about handling more read traffic than a single instance can serve, the answer is read replicas. If it is about changing the database — engine version, schema, parameters — with a rollback path, the answer is Blue/Green. The exam rarely states the requirement in those words, so the skill being tested is translation: "the application must remain available if an Availability Zone fails" is Multi-AZ, "the analytics team's queries are degrading checkout latency" is read replicas, and "we must upgrade the engine with less than five minutes of downtime and be able to revert" is Blue/Green.</p>
+        <p>The boundary gets interesting when a scenario asks for more than one of these at once, which is common in the harder questions. A production database that must survive an AZ failure, serve a reporting workload, and be upgradeable is a Multi-AZ primary with one or more read replicas hanging off it, and the Blue/Green Deployment is created from that Multi-AZ primary so the green environment inherits the same topology. These compose cleanly because they operate at different layers — Multi-AZ is a storage-level property of the primary, read replicas are separate instances consuming its replication stream, and Blue/Green is a temporary logical-replication overlay. What does not compose is trying to use one to do another's job, and that is where the distractors live.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Requirement in the scenario</th><th>Correct mechanism</th><th>Why the others fail</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Survive an AZ failure with zero data loss</td><td>Multi-AZ</td><td>Read replicas are async, so failover loses recent writes; Blue/Green is not a runtime topology</td></tr>
+              <tr><td>Offload reporting queries from the primary</td><td>Read replica</td><td>Multi-AZ standby accepts no reads; Blue/Green is temporary and not for production traffic</td></tr>
+              <tr><td>Upgrade engine version with fast rollback</td><td>Blue/Green Deployment</td><td>Multi-AZ failover does not change engine version; replica promotion is one-way and lossy</td></tr>
+              <tr><td>Recover from a regional outage</td><td>Cross-region read replica or snapshot copy</td><td>Multi-AZ is single-region by definition</td></tr>
+              <tr><td>Serve reads in another region with low latency</td><td>Cross-region read replica</td><td>Multi-AZ standby is in a different AZ, not a different region</td></tr>
+              <tr><td>Test a schema migration against production data</td><td>Blue/Green Deployment</td><td>Read replicas are read-only for the migration's purposes and share the schema</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+      <section class="doc-section" id="config-tradeoffs">
+        <h2 class="section-heading">4. Configuration Modes and Their Tradeoffs</h2>
+        <p>Multi-AZ has a small number of knobs and each one has a clear cost. The instance class of the standby mirrors the primary, so enabling Multi-AZ roughly doubles your compute bill for that database — there is no option to run a smaller standby. You choose the standby's Availability Zone or let RDS pick one, and the choice matters only for capacity planning and for avoiding a correlated failure with the primary's AZ. For engines that support it, there is a Multi-AZ cluster deployment option that adds two readable standbys behind a reader endpoint, which is the one configuration where Multi-AZ and read scaling overlap; it is worth knowing it exists because a scenario that asks for both high availability and read offload on a single managed cluster is pointing at it. Failover priority is configurable in the cluster form, letting you control which standby takes over first.</p>
+        <p>Read replicas are where the configuration space opens up, and the tradeoffs are mostly about lag and cost. You can create replicas in the same AZ, a different AZ, or a different region; cross-region replicas are the standard answer for regional read latency and for a coarse disaster recovery posture, at the cost of higher replication lag because the data crosses region boundaries. Replicas can be chained — a replica of a replica — which reduces load on the primary but compounds lag down the chain. You can promote a replica to a standalone instance, which breaks the replication link permanently and is the mechanism behind both planned cutovers and emergency recovery. The critical tradeoff to internalize is that asynchronous replication means a replica is a lagging copy, and any scenario that requires the replica to be exactly current is a scenario that is actually asking for Multi-AZ.</p>
+        <p>Blue/Green Deployments trade a temporary doubling of infrastructure for a dramatically reduced change window. The green environment runs the target engine version and, by default, the same instance class as blue, so you pay for a second full database for the duration of the upgrade — typically hours to a few days, not months. You control the switchover timing explicitly, which means you can schedule it for a low-traffic window and you can abandon the whole exercise by deleting green if validation fails. The main constraint is that logical replication does not cover every object type identically across engines, so you must validate that your schema, users, and stored procedures replicated correctly before switching. There is also a switchover timeout: if green cannot catch up within the configured window, the switchover aborts and blue continues serving, which is a safety property rather than a failure.</p>
+      </section>
+      <section class="doc-section" id="sizing-limits">
+        <h2 class="section-heading">5. Sizing, Limits and Quotas</h2>
+        <p>The numbers that matter here are mostly about how far each mechanism scales and what it costs you in latency. Multi-AZ failover is documented as typically completing in one to two minutes, driven by DNS propagation and instance promotion rather than by data volume, since the standby is already current. That is the number to quote when a scenario asks how long an AZ failure costs you. Read replica lag is not a fixed number — it depends on write volume, network path, and replica capacity — but the operational rule is that a replica running the same instance class as the primary under a comparable read load will generally keep up, while an undersized replica will fall progressively further behind. Cross-region replicas add the inter-region network round trip to every replication batch, so their lag is structurally higher than same-region replicas.</p>
+        <p>Blue/Green switchover is documented as typically under a minute of write downtime, which is the figure that makes it the answer to "minimize downtime during a major version upgrade" scenarios. The green environment must be able to keep up with the blue write rate during the replication phase, so an undersized green instance is a common cause of a switchover that never converges. There are also engine-version constraints: Blue/Green Deployments support specific source and target version pairs, and not every engine supports them at all, so a scenario involving an engine that lacks the feature has to fall back to snapshot-restore or replica-promotion strategies. Read replicas have a per-primary limit that varies by engine, and Multi-AZ cluster deployments have their own instance-count ceilings.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Property</th><th>Multi-AZ</th><th>Read replica</th><th>Blue/Green</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Replication type</td><td>Synchronous, block-level</td><td>Asynchronous, engine-native logs</td><td>Logical replication</td></tr>
+              <tr><td>Data loss on failover</td><td>None for committed transactions</td><td>Possible — whatever had not replicated</td><td>None if switchover completes cleanly</td></tr>
+              <tr><td>Typical failover/switchover time</td><td>1-2 minutes</td><td>Promotion takes minutes; no automatic failover</td><td>Under a minute of write downtime</td></tr>
+              <tr><td>Serves reads</td><td>No (except Multi-AZ cluster reader endpoint)</td><td>Yes, via its own endpoint</td><td>Yes, but only for validation, not production</td></tr>
+              <tr><td>Cross-region capable</td><td>No</td><td>Yes</td><td>No — single region</td></tr>
+              <tr><td>Cost profile</td><td>~2x instance cost, permanent</td><td>Per-replica cost, permanent</td><td>~2x cost, temporary</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+      <section class="doc-section" id="failure-modes">
+        <h2 class="section-heading">6. Failure Modes and What They Look Like in Production</h2>
+        <p>The most common production failure with read replicas is lag that nobody is watching until it becomes a correctness bug. The symptom is subtle: a user writes a record, the application immediately reads it back from a replica, and the record is not there. This is not a database bug; it is the application being written as though replication were synchronous. The first diagnostic move is to check the replica lag metric — <code>ReplicaLag</code> in CloudWatch for MySQL and MariaDB, and the equivalent for other engines — and correlate it with write volume. If lag spikes during batch jobs or bulk imports, the fix is usually to route those reads to the primary or to size the replica up. If lag grows monotonically and never recovers, the replica has fallen too far behind and may need to be recreated from a snapshot.</p>
+        <p>Multi-AZ failures are rarer but more disruptive when they happen, because the failover is automatic and the application experiences it as a connection drop. The symptom is a burst of connection errors lasting roughly the failover window, followed by recovery with no operator action. The diagnostic move is to check the RDS event log for the failover event and confirm the new AZ, then verify that the application's connection pool actually reconnected rather than holding dead connections. A surprising number of "the database is down" incidents after a Multi-AZ failover are actually connection-pool misconfiguration: the database recovered in ninety seconds but the application kept handing out stale connections for twenty minutes. Setting a short connection lifetime and enabling pool validation is the standard mitigation.</p>
+        <p>Blue/Green failures cluster around the switchover. If logical replication cannot keep up, the switchover times out and aborts, leaving blue in place — which is safe but means your maintenance window was wasted. If replication silently skipped objects that logical replication does not support, you discover it after switchover when the application hits a missing stored procedure or a user that did not carry over. The diagnostic move before switching is to compare object counts and definitions between blue and green, and to run the application's own test suite against green. After a switchover, the old blue environment still exists and can be used to investigate what differed, which is a genuine advantage over an in-place upgrade where the previous state is gone.</p>
+      </section>
+      <section class="doc-section" id="sre-angle">
+        <h2 class="section-heading">7. The Operational and SRE Angle</h2>
+        <p>From an SRE perspective these three features map onto three different reliability concerns, and each needs its own monitoring. Multi-AZ is about availability, so the metric that matters is whether failover actually works — and the only way to know is to test it, which is what the RDS reboot-with-failover operation is for. A database that has been running Multi-AZ for two years without a tested failover is an untested assumption, not a guarantee. The alarm shape is straightforward: alert on the RDS event category for failover events so that an automatic failover is visible to the team even though it required no action, because an unexplained failover is a signal that something upstream is wrong.</p>
+        <p>Read replicas are about capacity and correctness, so the alarms are lag-based and the SLO implication is about read freshness. A reasonable pattern is to alarm when replica lag exceeds a threshold that your application can tolerate — if the application can accept five seconds of staleness, alarm at ten — and to treat sustained lag as a capacity signal rather than a transient. The runbook for a lagging replica is short: identify whether the cause is write volume, replica size, or a long-running query on the replica blocking replication, then either scale the replica, move the offending reads, or kill the blocking query. The subtle SRE point is that read replicas introduce a consistency boundary into your architecture, and that boundary should be documented as an explicit SLO rather than discovered by a user.</p>
+        <p>Blue/Green Deployments are a change-management control, so they belong in the deployment pipeline rather than in the on-call rotation. The operational discipline is to treat the switchover as a deployable event with a rollback plan, to validate green with production-shaped traffic before switching, and to keep blue around long enough to investigate if something goes wrong. The metric worth tracking is switchover duration over time, because a switchover that used to take thirty seconds and now takes four minutes is telling you that green is struggling to keep up with blue's write rate — a leading indicator that the next upgrade will be harder.</p>
+      </section>
+      <section class="doc-section" id="gotchas">
+        <h2 class="section-heading">8. Edge Cases and Exam Gotchas</h2>
+        <p>The single most-tested gotcha is that Multi-AZ does not scale reads. Candidates see a standby that holds a full copy of the data and assume it can serve queries; it cannot, and any scenario that pairs "high availability" with "offload reporting" is testing whether you know that. The exception is the Multi-AZ cluster deployment, which does expose a reader endpoint — but that is a distinct configuration, not the default, and the exam will usually signal it explicitly if it is in play. The second most-tested gotcha is that Multi-AZ is not disaster recovery. It protects against an AZ failure within one region; a regional outage takes both the primary and the standby with it, and the answer for that is a cross-region read replica, a cross-region snapshot copy, or an Aurora Global Database if the engine allows it.</p>
+        <p>On the replica side, the gotcha is promotion. Promoting a read replica is irreversible in the sense that the replica becomes an independent primary and stops following the original; there is no "demote back" operation. It is also lossy, because the replica was behind at the moment of promotion. A scenario that says "we need to fail over to the replica with no data loss" is internally contradictory for standard RDS and the correct answer is usually to point out that Multi-AZ is the mechanism that provides that property. Cross-region replicas add a second gotcha: they cannot be promoted into a Multi-AZ configuration in one step, and the promotion process for a cross-region replica is a multi-step operation rather than a single API call.</p>
+        <p>For Blue/Green, the gotchas are about scope and support. Not every engine supports Blue/Green Deployments, and among those that do, not every version pair is supported, so a scenario that specifies an unusual engine or version may be steering you toward a different strategy. Logical replication does not carry every object type, so a database with heavy use of engine-specific features may need manual remediation before switchover. And the switchover is not instantaneous — it involves a brief write block — so a scenario demanding literally zero downtime is not satisfiable by Blue/Green either; the honest answer is "under a minute," and the exam expects you to know the difference between near-zero and zero.</p>
+      </section>
+      <section class="doc-section" id="vs-comparison">
+        <h2 class="section-heading">9. This vs. the Services It Gets Confused With</h2>
+        <p>The confusion set here is small but the exam exploits it relentlessly. Multi-AZ gets confused with read replicas because both create a second copy of the data. Read replicas get confused with Multi-AZ for the same reason, in the opposite direction. Blue/Green Deployments get confused with both because they also create a second environment, and with snapshot-restore because both are upgrade strategies. The distinguishing question is always what the second copy is for: absorbing failure, absorbing read load, or absorbing change risk. Once you can answer that in one word, the scenario resolves.</p>
+        <p>There is also a cross-service confusion worth naming. Aurora has its own versions of all three ideas — Aurora Replicas, Aurora Global Database, and Aurora Blue/Green Deployments — and they behave differently from their standard-RDS counterparts in ways that matter. Aurora Replicas share the same storage volume as the writer, so they have far lower lag than a binlog-based read replica and can be promoted in seconds. Aurora Global Database replicates at the storage layer, as Day 22 covered, which is why its cross-region lag is measured in milliseconds rather than seconds. If a scenario names Aurora, the standard-RDS intuitions about lag and promotion time are the wrong ones to apply.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Pick this…</th><th>When the requirement is…</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Multi-AZ</td><td>Survive an AZ failure with no committed-transaction loss and no operator action</td></tr>
+              <tr><td>Multi-AZ cluster</td><td>Same as above, plus readable standbys behind a reader endpoint</td></tr>
+              <tr><td>Same-region read replica</td><td>Offload read traffic without cross-region latency or cost</td></tr>
+              <tr><td>Cross-region read replica</td><td>Serve reads near users in another region, or provide a coarse regional DR target</td></tr>
+              <tr><td>Blue/Green Deployment</td><td>Change engine version, schema, or parameters with a validated rollback path</td></tr>
+              <tr><td>Snapshot restore</td><td>Recover to a point in time, or move data across regions when no replica exists</td></tr>
+              <tr><td>Aurora equivalents</td><td>The engine is Aurora — lag and promotion characteristics differ substantially</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+      <section class="doc-section" id="lab">
+        <h2 class="section-heading">Hands-On Lab: Validate a Major-Version Upgrade with Blue/Green</h2>
+        <div class="card card-green">
+          <p>The goal of this lab is to run a full Blue/Green Deployment cycle against a database that is already Multi-AZ, so you experience how the three mechanisms from this day compose in a realistic topology. Budget about 45 minutes, most of which is waiting for the green environment to provision and catch up. You will need an AWS account where you can create an RDS instance, and you should work in a non-production account or at minimum a non-production VPC.</p>
+          <p><strong>1. Build the baseline.</strong> Create an RDS for MySQL instance on a version that supports Blue/Green Deployments, with Multi-AZ enabled and a small instance class. Note the endpoint and the Availability Zone of the primary. While it provisions, create a database, a table with a few thousand rows, and at least one stored procedure or view so that you have a non-trivial schema to validate later.</p>
+          <p><strong>2. Add a read replica.</strong> Create a read replica of the instance and wait for it to reach the available state. Connect to the replica's endpoint and confirm you can read the data you inserted. Then insert a new row on the primary and immediately query the replica for it — you will likely see it missing for a moment, which is the asynchronous replication lag from section 2 made concrete. Record how long it takes to appear.</p>
+          <p><strong>3. Generate write load.</strong> Run a simple loop that inserts rows into your table continuously, or use a load-testing tool if you have one. The purpose is to give the green environment something to keep up with during the replication phase, which is what makes the switchover timing meaningful rather than trivial.</p>
+          <p><strong>4. Create the Blue/Green Deployment.</strong> From the RDS console, create a Blue/Green Deployment targeting a newer engine version. Watch the green environment provision. Note that it inherits the Multi-AZ topology from blue, so you are now paying for four instances: blue primary, blue standby, green primary, green standby.</p>
+          <p><strong>5. Validate green.</strong> Connect to the green endpoint and compare object counts and definitions against blue. Run your stored procedure. Confirm that the rows your write loop is generating are appearing in green, and check the replication lag between blue and green. This is the step that catches logical-replication gaps before they become production incidents.</p>
+          <p><strong>6. Switch over.</strong> Trigger the switchover and time it. Observe that writes are briefly blocked, that the production endpoint now resolves to what was the green environment, and that your application (or a test client) reconnects without a configuration change because the endpoint name did not move.</p>
+          <p><strong>7. Inspect the aftermath.</strong> The old blue environment still exists. Connect to it and confirm it is now stale — it is no longer receiving writes. This is your rollback path and your investigation surface. Delete it when you are satisfied, and delete the read replica, to stop the meter.</p>
+          <p><strong>8. Write down what you observed.</strong> Record the switchover duration, the maximum replication lag you saw, and whether any schema object failed to carry over. Those three numbers are the ones you would report after a real upgrade, and having seen them once makes the exam's Blue/Green scenarios much easier to reason about.</p>
+        </div>
+      </section>
+      <section class="doc-section" id="quiz">
         <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
         
       <div class="scenario-card">
         <p class="scenario-question"><strong>Q1.</strong> A team needs to upgrade RDS MySQL from 5.7 to 8.0 with minimal risk and a fast rollback path. What should they use?</p>
-        <div class="scenario-options" id="opts-d23q0">
+        <div class="scenario-options" id="opts-d23q1">
             <div class="scenario-option">A. In-place major version upgrade during a maintenance window</div>
             <div class="scenario-option">B. RDS Blue/Green Deployments to validate on a synced green environment before switchover</div>
             <div class="scenario-option">C. Read replica promotion</div>
             <div class="scenario-option">D. Multi-AZ failover</div>
         </div>
-        <button class="scenario-reveal-btn" onclick="revealAnswer('d23q0', 1)">Reveal Answer</button>
-        <div class="scenario-explanation" id="exp-d23q0"><strong>Correct answer: B.</strong> Blue/Green Deployments create a fully replicated green environment on the new version, validated before a fast, low-risk switchover — reducing the blast radius of major upgrades.</div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d23q1', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d23q1"><strong>Correct answer: B.</strong> Blue/Green Deployments create a fully replicated green environment on the new version, validated before a fast, low-risk switchover — reducing the blast radius of major upgrades.</div>
       </div>
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q2.</strong> A production RDS instance must survive the loss of an Availability Zone with no loss of committed transactions and no operator intervention. What should be enabled?</p>
+        <div class="scenario-options" id="opts-d23q2">
+            <div class="scenario-option">A. A read replica in a second AZ</div>
+            <div class="scenario-option">B. Multi-AZ deployment</div>
+            <div class="scenario-option">C. A Blue/Green Deployment</div>
+            <div class="scenario-option">D. Automated snapshots with a short retention window</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d23q2', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d23q2"><strong>Correct answer: B.</strong> Multi-AZ replicates synchronously to a standby in another AZ and fails over automatically, so no committed transaction is lost. Read replicas are asynchronous and require manual promotion.</div>
+      </div>
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q3.</strong> A reporting workload is saturating the primary database and degrading checkout latency. The reports can tolerate a few seconds of staleness. What is the correct fix?</p>
+        <div class="scenario-options" id="opts-d23q3">
+            <div class="scenario-option">A. Enable Multi-AZ so the standby can serve the reports</div>
+            <div class="scenario-option">B. Create a read replica and point the reporting queries at its endpoint</div>
+            <div class="scenario-option">C. Create a Blue/Green Deployment and run reports against green</div>
+            <div class="scenario-option">D. Increase the primary instance class</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d23q3', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d23q3"><strong>Correct answer: B.</strong> Read replicas exist to absorb read traffic and have their own endpoints. A Multi-AZ standby accepts no reads, and a Blue/Green environment is a temporary change-management construct, not a reporting target.</div>
+      </div>
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q4.</strong> An application writes a record and immediately reads it back, but the read is routed to a read replica and intermittently returns nothing. What is the most likely cause?</p>
+        <div class="scenario-options" id="opts-d23q4">
+            <div class="scenario-option">A. The replica is in a different Availability Zone</div>
+            <div class="scenario-option">B. Asynchronous replication lag — the write had not yet reached the replica</div>
+            <div class="scenario-option">C. The replica's security group is blocking the read</div>
+            <div class="scenario-option">D. Multi-AZ is not enabled on the primary</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d23q4', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d23q4"><strong>Correct answer: B.</strong> Read replicas replicate asynchronously, so a read immediately after a write can miss it. The fix is to route read-after-write queries to the primary or accept a documented staleness window.</div>
+      </div>
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q5.</strong> A company's primary region suffers a full regional outage. They have Multi-AZ enabled on their RDS instance. What is their recovery position?</p>
+        <div class="scenario-options" id="opts-d23q5">
+            <div class="scenario-option">A. Multi-AZ fails over to the standby in the other region automatically</div>
+            <div class="scenario-option">B. Multi-AZ provides no protection — both primary and standby are in the failed region</div>
+            <div class="scenario-option">C. The standby is promoted in a surviving region after a manual step</div>
+            <div class="scenario-option">D. Automated snapshots are restored to the other region with zero data loss</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d23q5', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d23q5"><strong>Correct answer: B.</strong> Multi-AZ is a single-region construct; the standby lives in a different Availability Zone, not a different region. Regional DR requires a cross-region read replica, cross-region snapshot copy, or an Aurora Global Database.</div>
+      </div>
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q6.</strong> A team wants to test a schema migration against a full copy of production data, with the ability to abandon the change and keep serving from the original database. What should they use?</p>
+        <div class="scenario-options" id="opts-d23q6">
+            <div class="scenario-option">A. A read replica, migrated in place</div>
+            <div class="scenario-option">B. A Blue/Green Deployment, validating green before switchover</div>
+            <div class="scenario-option">C. A Multi-AZ failover to the standby</div>
+            <div class="scenario-option">D. A manual snapshot restore into a new instance</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d23q6', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d23q6"><strong>Correct answer: B.</strong> Blue/Green gives you a synchronized, queryable copy that you can validate against and then either switch to or discard, which is exactly the abandon-the-change requirement.</div>
+      </div>
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q7.</strong> Which statement about promoting a read replica is correct?</p>
+        <div class="scenario-options" id="opts-d23q7">
+            <div class="scenario-option">A. Promotion is reversible — the replica can be demoted back to following the original</div>
+            <div class="scenario-option">B. Promotion is one-way and can lose transactions that had not yet replicated</div>
+            <div class="scenario-option">C. Promotion preserves all data because replication is synchronous</div>
+            <div class="scenario-option">D. Promotion requires Multi-AZ to be enabled first</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d23q7', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d23q7"><strong>Correct answer: B.</strong> A promoted replica becomes an independent primary and stops following the source; there is no demote operation, and any writes not yet replicated at the moment of promotion are lost.</div>
+      </div>
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q8.</strong> After an automatic Multi-AZ failover, the database is healthy but the application keeps throwing connection errors for twenty minutes. What is the most likely explanation?</p>
+        <div class="scenario-options" id="opts-d23q8">
+            <div class="scenario-option">A. The failover did not actually complete</div>
+            <div class="scenario-option">B. The application's connection pool is holding stale connections to the old primary</div>
+            <div class="scenario-option">C. The standby is in a different region</div>
+            <div class="scenario-option">D. Read replicas are lagging behind the new primary</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d23q8', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d23q8"><strong>Correct answer: B.</strong> Failover completes in roughly one to two minutes, but pools that do not validate connections keep handing out dead ones. Short connection lifetimes and pool validation are the standard mitigation.</div>
+      </div>
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q9.</strong> A Blue/Green Deployment switchover aborts because the green environment cannot catch up with the blue write rate. What is the state of the system?</p>
+        <div class="scenario-options" id="opts-d23q9">
+            <div class="scenario-option">A. Blue has been taken offline and the application is down</div>
+            <div class="scenario-option">B. Blue continues serving production; the switchover simply did not happen</div>
+            <div class="scenario-option">C. Green has been promoted with partial data</div>
+            <div class="scenario-option">D. Both environments are now read-only</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d23q9', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d23q9"><strong>Correct answer: B.</strong> The switchover timeout is a safety property: if green cannot converge, the switchover aborts and blue keeps serving. The usual cause is an undersized green instance.</div>
+      </div>
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q10.</strong> Which configuration provides both high availability and readable standbys behind a single reader endpoint?</p>
+        <div class="scenario-options" id="opts-d23q10">
+            <div class="scenario-option">A. Standard Multi-AZ with a single standby</div>
+            <div class="scenario-option">B. Multi-AZ cluster deployment</div>
+            <div class="scenario-option">C. A read replica in the same AZ as the primary</div>
+            <div class="scenario-option">D. A Blue/Green Deployment left running permanently</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d23q10', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d23q10"><strong>Correct answer: B.</strong> Multi-AZ cluster deployment adds readable standbys exposed through a reader endpoint, which is the one Multi-AZ form that also serves reads. Standard Multi-AZ standbys accept no queries.</div>
+      </div>
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q11.</strong> A team needs low-latency reads for users in a second region and a coarse disaster recovery target, and can accept higher replication lag. What should they create?</p>
+        <div class="scenario-options" id="opts-d23q11">
+            <div class="scenario-option">A. A second Multi-AZ standby in the other region</div>
+            <div class="scenario-option">B. A cross-region read replica</div>
+            <div class="scenario-option">C. A Blue/Green Deployment in the other region</div>
+            <div class="scenario-option">D. An additional Availability Zone in the primary region</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d23q11', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d23q11"><strong>Correct answer: B.</strong> Cross-region read replicas serve regional reads and can be promoted for regional recovery, at the cost of structurally higher lag because replication crosses region boundaries.</div>
+      </div>
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q12.</strong> Which of these is NOT a valid reason to choose a read replica over Multi-AZ?</p>
+        <div class="scenario-options" id="opts-d23q12">
+            <div class="scenario-option">A. Offloading analytics queries from the primary</div>
+            <div class="scenario-option">B. Serving reads with low latency in another region</div>
+            <div class="scenario-option">C. Guaranteeing zero data loss on an Availability Zone failure</div>
+            <div class="scenario-option">D. Providing a promotion target for a planned cutover</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d23q12', 2)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d23q12"><strong>Correct answer: C.</strong> Zero data loss on an AZ failure is precisely what asynchronous replication cannot promise. That requirement belongs to Multi-AZ, whose replication is synchronous.</div>
+      </div>
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q13.</strong> A scenario specifies an RDS engine that does not support Blue/Green Deployments, but the team still needs a low-risk major-version upgrade. What is the most reasonable approach?</p>
+        <div class="scenario-options" id="opts-d23q13">
+            <div class="scenario-option">A. Enable Multi-AZ and rely on failover to perform the upgrade</div>
+            <div class="scenario-option">B. Restore a snapshot into a new instance on the target version, validate it, then cut over</div>
+            <div class="scenario-option">C. Promote a read replica and upgrade it in place</div>
+            <div class="scenario-option">D. Blue/Green Deployments work on every RDS engine, so the premise is wrong</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d23q13', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d23q13"><strong>Correct answer: B.</strong> When Blue/Green is unavailable, the snapshot-restore-and-validate pattern is the fallback: build the target version separately, test it, then cut over. Multi-AZ failover does not change engine versions.</div>
+      </div>
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q14.</strong> During a Blue/Green Deployment, which objects are most likely to require manual remediation before switchover?</p>
+        <div class="scenario-options" id="opts-d23q14">
+            <div class="scenario-option">A. Tables and their primary keys</div>
+            <div class="scenario-option">B. Engine-specific objects that logical replication does not carry, such as certain stored procedures or users</div>
+            <div class="scenario-option">C. Indexes on the primary key</div>
+            <div class="scenario-option">D. Nothing — logical replication is exhaustive across all object types</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d23q14', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d23q14"><strong>Correct answer: B.</strong> Logical replication does not cover every object type identically across engines, so stored procedures, users, and similar objects must be validated and often recreated manually before switchover.</div>
+      </div>
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q15.</strong> A workload runs on Aurora rather than standard RDS. Which statement about applying today's intuitions is correct?</p>
+        <div class="scenario-options" id="opts-d23q15">
+            <div class="scenario-option">A. Aurora Replicas behave identically to binlog-based read replicas in lag and promotion time</div>
+            <div class="scenario-option">B. Aurora Replicas share the writer's storage volume, so lag is far lower and promotion is much faster</div>
+            <div class="scenario-option">C. Aurora does not support read scaling at all</div>
+            <div class="scenario-option">D. Aurora Global Database is a Multi-AZ construct within one region</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d23q15', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d23q15"><strong>Correct answer: B.</strong> Aurora Replicas read from the same distributed storage volume as the writer, so they lag far less than log-shipping replicas and can be promoted in seconds. Aurora Global Database is a cross-region construct, not Multi-AZ.</div>
+      </div>
+      </section>
+      <section class="doc-section" id="preview">
+        <h2 class="section-heading">Peek into Tomorrow: When the Database Itself Is the Bottleneck</h2>
+        <div class="card card-purple">
+          <p>Everything in this day assumed a relational engine whose scaling story is vertical: you make the primary bigger, you add replicas to spread reads, and you accept that writes funnel through one instance. That assumption holds until it does not, and the failure is not graceful. A relational primary that is saturated on writes cannot be fixed by adding replicas, because replicas do not accept writes at all — they only multiply your read capacity while the write path stays exactly as narrow as it was. The question this day leaves open is what you do when the write volume itself is the constraint, and when the schema is changing fast enough that migrations are a constant tax rather than an occasional project.</p>
+          <p>Tomorrow's material turns to DynamoDB, and the first thing it does is move the bottleneck somewhere less obvious. DynamoDB has no primary instance to resize, so the naive assumption is that it scales without limit — but it partitions data by the hash of the partition key, and each partition has its own throughput ceiling. That means a table can throttle even when the table-level capacity looks generous, because a low-cardinality or hot partition key concentrates traffic onto a handful of partitions. The open question worth carrying into tomorrow is how you would even detect that condition, since the table-level metrics look healthy while individual requests fail. The answer involves per-partition visibility and a key-design discipline that has no real analogue in the relational world you have been living in for the last two days.</p>
+        </div>
+      </section>
+      <section class="doc-section" id="sources">
+        <h2 class="section-heading">Sources</h2>
+        <div class="card">
+          <ul class="source-list">
+            <li><a href="https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Concepts.MultiAZ.html" target="_blank" rel="noopener">Amazon RDS User Guide — Multi-AZ deployments for high availability</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_ReadRepl.html" target="_blank" rel="noopener">Amazon RDS User Guide — Working with read replicas</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/blue-green-deployments.html" target="_blank" rel="noopener">Amazon RDS User Guide — Using Amazon RDS Blue/Green Deployments</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Concepts.MultiAZCluster.html" target="_blank" rel="noopener">Amazon RDS User Guide — Multi-AZ DB cluster deployments</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_ReadRepl.CrossRegion.html" target="_blank" rel="noopener">Amazon RDS User Guide — Creating a cross-region read replica</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/CHAP_Monitoring.html" target="_blank" rel="noopener">Amazon RDS User Guide — Monitoring metrics in Amazon RDS</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Concepts.RDS_Fea_Regions_DB-eng.Feature.BlueGreenDeployments.html" target="_blank" rel="noopener">Amazon RDS User Guide — Blue/Green Deployments engine and version support</a></li>
+            <li><a href="https://docs.aws.amazon.com/wellarchitected/latest/reliability-pillar/welcome.html" target="_blank" rel="noopener">AWS Well-Architected Framework — Reliability Pillar</a></li>
+          </ul>
+        </div>
       </section>
       <div class="day-nav">
         <a href="day-022.html">&larr; Day 22: Amazon Aurora Architecture &amp; Aurora Global Database</a>

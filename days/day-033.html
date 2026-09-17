@@ -104,37 +104,346 @@
         <span class="pill pill-green">Phase 3: SRE Observability, Resilience &amp; DR</span>
       </div>
       <h1 class="hero-title">AWS Fault Injection Service (FIS) — Chaos Engineering Fundamentals</h1>
-      <div class="reading-meta">&#128337; ~3 min read &middot; 3 services covered</div>
+      <div class="reading-meta">&#128337; ~58 min read &middot; 3 services covered</div>
       <div class="services-grid">
         <span class="service-tag">AWS FIS</span>
         <span class="service-tag">Experiment Templates</span>
         <span class="service-tag">Stop Conditions</span>
       </div>
       <div id="tracker"></div>
-      <section class="doc-section">
-        <h2 class="section-heading">Today's Concept</h2>
+
+      <section class="doc-section" id="recap">
+        <h2 class="section-heading">Recap: From Reading Logs to Breaking Things On Purpose</h2>
         <div class="card card-accent">
-          <p>FIS runs controlled chaos experiments (EC2/ECS/EKS termination, CPU/network stress, RDS/AZ failover) defined as experiment templates with mandatory stop conditions tied to CloudWatch alarms, automatically halting the experiment if it threatens production stability.</p>
-        </div>
-        <h3 class="sub-heading">Hands-on Lab / Practical Action (45 min)</h3>
-        <div class="card">
-          <p>Execute an FIS experiment terminating a random ECS task and verify the service self-heals within its target RTO, with a stop condition tied to an error-rate alarm.</p>
+          <p>Day 32 ended on a deceptively comfortable note. Logs Insights gave us a query language over CloudWatch Logs, and subscription filters gave us a way to stream those logs in near-real time into a centralized logging account for org-wide search, retention, and SIEM ingestion. That combination is genuinely powerful, and it is also entirely passive. Every signal we built yesterday waits for something to go wrong and then describes it after the fact. A subscription filter forwarding ERROR-level events to a central account tells you that a service failed; it does not tell you whether the system was designed to survive that failure, how long recovery actually took, or whether the alarm that was supposed to page someone fired at all.</p>
+          <p>FIS extends that observability investment into something active. The alarms, metrics, and log pipelines from Days 29 through 32 stop being a rear-view mirror and become the safety harness for deliberately injecting failure into a running system. The centralized logging account becomes the place you go to prove what happened during an experiment, and the composite alarms from Day 29 become the stop conditions that keep the experiment from becoming an incident. Today is where the SRE phase stops measuring and starts testing.</p>
         </div>
       </section>
-      <section class="doc-section">
-        <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
-        
-      <div class="scenario-card">
-        <p class="scenario-question"><strong>Q1.</strong> A team wants to safely test EC2 instance failure in production without risking an uncontrolled outage. What FIS feature guarantees the experiment halts if things go wrong?</p>
-        <div class="scenario-options" id="opts-d33q0">
+
+      <section class="doc-section" id="why-on-exam">
+        <h2 class="section-heading">1. Why FIS Is on the Exam</h2>
+        <p>SAP-C02 has a resilience domain that is weighted heavily, and within that domain the exam repeatedly probes a specific gap: the difference between an architecture that is theoretically resilient and one that has been demonstrated to be resilient. Almost every candidate can draw a multi-AZ design on a whiteboard. Far fewer can describe how they would prove that the design actually fails over correctly, that the failover completes inside the stated RTO, and that the monitoring catches the failure rather than the customers. FIS is the AWS-native answer to that second question, and the exam uses it as a marker for whether you think about resilience as a design artifact or as a continuously verified property.</p>
+        <p>The service also shows up because it forces a conversation about blast radius and safety controls that maps cleanly onto the Well-Architected Reliability pillar's failure management area. A scenario that asks you to validate recovery procedures without risking production is describing FIS with stop conditions. A scenario that asks how you would test that an Auto Scaling group replaces unhealthy instances is describing an FIS action targeting EC2 with an instance-termination fault. A scenario that asks how you would validate that a multi-AZ RDS failover completes within the RTO is describing the RDS reboot-with-failover action. The exam rarely asks "what is FIS" directly; it asks you to select the right tool for a validation goal, and FIS is the only AWS service whose entire purpose is that goal.</p>
+        <p>There is a third reason it appears, and it is the one that separates a passing answer from a confident one. FIS is frequently the correct answer in scenarios where the tempting answer is "build a custom Lambda that terminates instances on a schedule." That custom approach works, but it has no stop conditions, no IAM-scoped experiment roles, no audit trail of what was targeted, and no way to express a fault as a reusable template. The exam rewards the managed service because the managed service encodes the safety model. Understanding why the safety model matters is the real content of this day.</p>
+      </section>
+
+      <section class="doc-section" id="mechanism">
+        <h2 class="section-heading">2. How FIS Actually Works</h2>
+        <p>FIS is built around four objects, and understanding how they compose is most of the mechanism. An <em>action</em> is a single fault to inject: terminate an EC2 instance, stop an ECS task, inject CPU stress on a percentage of instances, add latency to network traffic, reboot an RDS instance with failover, or fail over an Aurora cluster. A <em>target</em> is the set of resources the action applies to, selected either by resource ID, by resource tag, or by a resource filter that resolves at runtime. An <em>experiment template</em> is the reusable definition that binds actions to targets along with the parameters, the IAM role FIS assumes, and the stop conditions. An <em>experiment</em> is a single execution of that template, with its own run ID, its own resolved target list, and its own log of what actually happened.</p>
+        <p>The target resolution step is where most of the operational subtlety lives. When you specify targets by tag, FIS resolves the tag to a concrete list of resource IDs at the moment the experiment starts, not when the template was authored. That means a template written months ago against a tag like <code>chaos-eligible=true</code> will target whatever carries that tag today. This is deliberate and it is the mechanism that makes FIS safe to keep in a repository: you control the blast radius by controlling tag membership, and you can shrink the eligible set to a single canary instance by removing the tag from everything else. The exam likes this pattern because it is the same tag-driven scoping used for Auto Scaling groups and backup plans, so it rewards candidates who recognize the idiom.</p>
+        <p>Actions within an experiment run in parallel by default, and each action can carry its own duration and its own parameters. A CPU stress action, for example, takes a percentage and a duration; a network latency action takes a delay in milliseconds and a target interface. FIS assumes an IAM role that you specify in the template, and that role's permissions define the outer bound of what the experiment can touch. This is a deliberate design choice: the service does not have standing permission to terminate your instances, it borrows a role you scoped for the purpose. If the role cannot describe or act on a resource, the experiment fails at that action rather than silently skipping it, which is the behavior you want when the whole point is to know exactly what was tested.</p>
+        <p>Finally, every experiment writes its state transitions and action outcomes to CloudWatch Logs and emits metrics, and it can optionally publish an event to EventBridge. That gives you a durable record of what was injected, when, against which resolved targets, and whether each action succeeded or was aborted by a stop condition. For an audit or a post-incident review, that record is the difference between "we think we tested failover last quarter" and "here is the experiment run ID and the exact instance that was terminated."</p>
+      </section>
+
+      <section class="doc-section" id="decision-boundary">
+        <h2 class="section-heading">3. The Core Decision Boundary: What Are You Trying to Prove?</h2>
+        <p>Every FIS scenario on the exam reduces to one question: what claim about the system are you trying to validate? The answer determines the action, the target, and — critically — the stop condition. Candidates who skip straight to picking an action tend to pick the most dramatic one, which is usually wrong. The right move is to name the claim first, then work backwards. "Our ECS service recovers from a single task failure within its target RTO" is a claim that maps to a task-termination action against a small percentage of tasks, with a stop condition on the service's error rate. "Our multi-AZ database survives an AZ loss" is a claim that maps to an RDS reboot-with-failover action, with a stop condition on connection errors. The action is downstream of the claim.</p>
+        <p>The second half of the boundary is the safety envelope. FIS experiments are only as safe as the stop conditions attached to them, and the exam tests whether you understand that stop conditions are not optional in spirit even when the API allows you to omit them. A stop condition is a CloudWatch alarm ARN; when that alarm enters ALARM state during the experiment, FIS halts the experiment and begins rolling back what it can. The rollback is not magic — terminating an instance cannot be un-terminated — but halting the remaining actions and stopping the stress injection limits how much further damage accumulates. The practical rule is that the stop condition should be the alarm that would page a human if this were a real incident, because that is exactly the threshold at which you want the experiment to stop pretending.</p>
+        <p>The table below maps common validation claims to the action and stop condition that serve them. This is the decision boundary in tabular form, and it is worth internalizing because exam scenarios are usually a paraphrase of one of these rows.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Claim to validate</th><th>FIS action</th><th>Typical target</th><th>Stop condition</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Service survives loss of a single task</td><td>ECS task termination</td><td>Tag-scoped task set, count 1</td><td>Service 5xx rate alarm</td></tr>
+              <tr><td>ASG replaces unhealthy instances</td><td>EC2 instance termination</td><td>Tag-scoped instances, percentage 10-20%</td><td>Healthy host count alarm</td></tr>
+              <tr><td>Database survives AZ loss</td><td>RDS reboot with failover</td><td>Single DB identifier</td><td>Connection failure alarm</td></tr>
+              <tr><td>App degrades gracefully under CPU pressure</td><td>CPU stress</td><td>Tag-scoped instances, percentage 50%</td><td>p99 latency alarm</td></tr>
+              <tr><td>Timeouts and retries behave under latency</td><td>Network latency injection</td><td>Tag-scoped instances, delay in ms</td><td>Error rate alarm</td></tr>
+              <tr><td>Global failover completes inside RTO</td><td>Aurora cluster failover</td><td>Cluster identifier</td><td>Replication lag or write error alarm</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="doc-section" id="config-tradeoffs">
+        <h2 class="section-heading">4. Configuration Modes and Their Tradeoffs</h2>
+        <p>The first real knob is target selection mode, and it determines how much of your blast radius is fixed at authoring time versus resolved at run time. Explicit resource IDs are the most predictable: the template names exactly which instances or tasks it will hit, and nothing else can ever be affected. That predictability is also the limitation, because the template goes stale the moment the fleet changes — a terminated instance ID is a permanently broken experiment. Tag-based selection inverts the tradeoff. The template stays valid as the fleet churns, and you control scope by controlling which resources carry the tag, but you have to be disciplined about tag hygiene because a misapplied tag silently widens the blast radius. Resource filters sit in between, letting you express conditions like "instances in this ASG with this state" that resolve dynamically but with more structure than a bare tag.</p>
+        <p>The second knob is the action's scope parameter, which for most instance-level actions is expressed as a count or a percentage. A percentage is almost always the right choice for a fleet because it scales with the fleet size and keeps the experiment proportional as you grow. A count is right when the claim is specifically about a fixed number of failures — "we survive the loss of exactly one task" — or when the fleet is small enough that a percentage would round to something meaningless. The exam will sometimes describe a scenario where a percentage-based experiment on a two-instance fleet would take out 50% of capacity, which is a hint that the candidate should be thinking about whether the claim is about proportional degradation or absolute failure count.</p>
+        <p>The third knob is duration and rollback behavior. Stress and latency actions have a duration after which the fault stops on its own, which is the safest configuration because the experiment self-terminates even if nothing else goes wrong. Termination actions have no duration — the instance is gone — so the recovery mechanism is the system's own self-healing rather than FIS. This distinction matters for how you write the experiment's success criteria: a stress experiment succeeds if the system holds its SLO for the duration, while a termination experiment succeeds if the system restores capacity within the RTO. Confusing the two leads to experiments that "pass" because the fault ended rather than because the system recovered.</p>
+        <p>The fourth knob is the IAM role. FIS assumes a role you name in the template, and that role's policy is the hard ceiling on what the experiment can do. The best practice is a dedicated role per experiment family with permissions scoped to exactly the actions and resource types involved, plus the <code>iam:PassRole</code> permission granted to whoever launches the experiment rather than baked into the role itself. A role that can terminate any EC2 instance in the account is a role that turns a typo in a target filter into an outage. The exam occasionally presents a scenario where the experiment fails with an access-denied error, and the answer is almost always that the FIS role lacks a describe or act permission on the resolved target type.</p>
+      </section>
+
+      <section class="doc-section" id="sizing-limits">
+        <h2 class="section-heading">5. Sizing, Limits and Quotas</h2>
+        <p>FIS quotas are modest by design, and the numbers are worth knowing because they constrain how you structure a large chaos program. An experiment template can contain a limited number of actions and targets, and the service enforces a cap on concurrent running experiments per account and per region. The practical consequence is that you cannot run a hundred simultaneous experiments across a large estate; you run a small number of well-scoped experiments, often sequentially, and you use tags to widen the target set within a single experiment rather than multiplying experiments. This is a deliberate constraint that pushes teams toward fewer, more meaningful experiments rather than a spray of small ones.</p>
+        <p>Target resolution has its own practical ceiling. When you select targets by tag, FIS resolves the tag to a list of resource IDs, and very large target sets increase the time the experiment spends in the resolving and starting phases before any fault is injected. For a fleet in the thousands, the experiment's setup time becomes visible in the run timeline, and the first action may not fire until resolution completes. This is rarely a correctness problem, but it does mean that a "quick" experiment against a huge tag set is not actually quick, and the stop conditions need to be evaluated against the window in which the fault is actually active rather than the window in which the experiment is nominally running.</p>
+        <p>Stop condition evaluation is bounded by CloudWatch alarm behavior, which is the constraint most candidates miss. A CloudWatch alarm evaluates its metric over a configured number of periods and requires a number of breaching periods before it transitions to ALARM. An alarm with a one-minute period and three evaluation periods takes roughly three minutes of sustained breach before it fires. If your experiment injects a fault for two minutes, the stop condition may never trigger even if the system is genuinely failing, because the alarm never had time to transition. The fix is to configure the stop-condition alarm with a shorter evaluation window than the experiment's fault duration, or to lengthen the fault duration so the alarm has room to fire. This is a real design coupling between the experiment and the alarm, and it is exactly the kind of detail the exam probes with a scenario about an experiment that "did not stop when it should have."</p>
+        <p>Finally, FIS is a regional service. Experiments, templates, and their logs live in the region where they run, and an experiment targeting resources in another region is not a thing. For multi-region validation you run separate experiments per region, and if you want a coordinated multi-region failure you orchestrate that at a higher layer — which is precisely the gap that tomorrow's Game Day discussion fills.</p>
+      </section>
+
+      <section class="doc-section" id="failure-modes">
+        <h2 class="section-heading">6. Failure Modes and What They Look Like in Production</h2>
+        <p>The most common failure mode is not the experiment going wrong; it is the experiment going right and revealing that the system was never as resilient as the design diagram claimed. The symptom is a service that does not recover within its RTO after a single task termination, or an Auto Scaling group that takes longer than expected to replace an instance because the launch template's bootstrap script is slow. These are findings, not bugs in FIS, and the correct response is to treat them as production defects with the same priority as any other reliability gap. The first diagnostic move is to read the experiment's action log to confirm the fault actually landed on the intended target, then read the service's own metrics over the experiment window to see where recovery stalled.</p>
+        <p>The second failure mode is a stop condition that fires too late or not at all, which turns a controlled experiment into an uncontrolled incident. The symptom is an experiment that runs to completion while the service is visibly degraded, with no automatic halt. The cause is almost always an alarm whose evaluation window is longer than the fault duration, or an alarm that is watching the wrong metric — for example, an alarm on host-level CPU when the actual user-facing symptom is elevated latency. The first diagnostic move is to check the alarm's state history for the experiment window and confirm whether it ever entered ALARM. If it did not, the alarm configuration is the defect, not the experiment.</p>
+        <p>The third failure mode is target resolution picking up more than intended. This happens when a tag used for chaos eligibility is also applied to resources that were never meant to be in scope, often because the tag was added by an automated process or copied from a template. The symptom is an experiment that reports a target count far higher than expected, or that touches a resource in an environment you did not intend. The first diagnostic move is to inspect the resolved target list in the experiment details before the fault is injected — FIS exposes this — and to treat any surprise in that list as a reason to abort. The durable fix is to make the chaos tag exclusive and to enforce its application through a Config rule or an SCP rather than relying on humans to remember.</p>
+        <p>The fourth failure mode is permission drift. The FIS role works today and fails next quarter because someone tightened a policy or renamed a resource type. The symptom is an experiment that fails immediately with an access-denied error on one action while others succeed. The first diagnostic move is to read the failed action's error and compare the required permission against the role's policy. Because FIS fails loudly rather than skipping, this is a benign failure mode — it costs you a test run, not an outage — but it does mean that experiment templates need to be exercised regularly enough that permission drift is caught before you need the experiment to work.</p>
+      </section>
+
+      <section class="doc-section" id="sre-angle">
+        <h2 class="section-heading">7. The Operational and SRE Angle</h2>
+        <p>From an SRE perspective, FIS is the mechanism that converts an SLO from a dashboard number into a tested property. The operational pattern is to tie each experiment to a specific SLO and to a specific alarm that represents that SLO being breached, then run the experiment on a schedule and treat a stop-condition trip as a finding. If the experiment trips the stop condition, the system did not hold its SLO under the injected fault, and that is a reliability defect to be fixed before the next experiment. If the experiment completes without tripping, you have evidence — with a run ID and a timestamp — that the system held its SLO under that fault. Over time, that evidence is what lets you raise confidence in the RTO and RPO numbers you publish.</p>
+        <p>The monitoring shape follows directly. You want the experiment's own metrics and logs alongside the service's metrics, so that a reviewer can see the fault window and the service's response on the same timeline. FIS emits experiment state transitions and action outcomes, and it can publish to EventBridge, which means you can route experiment events into the same centralized logging account that Day 32 built. That gives you a single place where an experiment's start, its resolved targets, its action outcomes, and its stop-condition trips are all recorded next to the application logs they affected. For an audit, that is the complete story.</p>
+        <p>The runbook shape is a short, repeatable procedure: confirm the experiment template's target set is what you expect, confirm the stop-condition alarm is in OK state and has a sane evaluation window, launch the experiment, watch the experiment timeline and the service's golden signals together, and record the outcome against the SLO. The runbook should also name the abort path — how to stop a running experiment manually if the stop condition does not fire — because the stop condition is a safety net, not a substitute for a human watching the first few runs. New experiments should run in a non-production environment first, then against a single canary in production, then against a wider tag set once the canary runs clean.</p>
+        <p>One operational detail worth internalizing: FIS experiments are not free of side effects on your monitoring. A CPU stress experiment will move your CPU utilization metrics, and if you have anomaly-detection alarms on those metrics, the experiment will trip them. That is usually desirable — it proves the alarm works — but it also means that experiment windows should be annotated on dashboards and excluded from SLO calculations where the SLO is meant to reflect real user traffic. The cleanest approach is to tag experiment windows in your observability tooling so that post-incident reviews can distinguish injected faults from organic ones.</p>
+      </section>
+
+      <section class="doc-section" id="gotchas">
+        <h2 class="section-heading">8. Edge Cases and Exam Gotchas</h2>
+        <p>The single most-tested gotcha is that stop conditions are CloudWatch alarms, not FIS-native thresholds. You cannot express "stop if error rate exceeds 5%" directly in FIS; you create a CloudWatch alarm that does that and reference its ARN. Candidates who describe a stop condition as a percentage or a rule rather than an alarm ARN are describing something the service does not do. The corollary is that the alarm's evaluation period and datapoints-to-alarm settings are part of the stop condition's behavior, and a stop condition that never fires is usually an alarm configuration problem rather than an FIS problem.</p>
+        <p>The second gotcha is that FIS does not roll back destructive actions. Terminating an instance is not reversible; the recovery is the system's own self-healing. This means the experiment's success criterion for a destructive action is about recovery time, not about the fault ending. A scenario that asks how to test that an ASG replaces a terminated instance is asking about the ASG's health-check and replacement behavior, with FIS as the trigger. A scenario that asks how to test graceful degradation under load is asking about a stress action with a duration, where the fault does end on its own.</p>
+        <p>The third gotcha is the distinction between FIS and a custom automation. A Lambda that terminates instances on a schedule can inject the same fault, but it has no stop conditions, no resolved-target audit trail, no reusable template, and no scoped experiment role. When a scenario emphasizes safety, auditability, or repeatability, FIS is the answer; when a scenario emphasizes a bespoke fault that no FIS action supports, a custom automation may be the only option, and the exam will usually signal that by describing a fault type outside FIS's action catalog.</p>
+        <p>The fourth gotcha is scope creep through tags. Because tag-based targeting resolves at run time, a tag that is applied too broadly silently widens the blast radius. The exam may describe an experiment that affected more instances than intended, and the answer is usually about tag hygiene and enforcement rather than about FIS configuration. The fifth gotcha is regional scope: FIS experiments are regional, and a multi-region failure requires either separate experiments per region or an orchestration layer above FIS. The sixth is that the FIS role needs <code>iam:PassRole</code> granted to the principal launching the experiment, not to the role itself, which is a common source of access-denied errors in lab environments.</p>
+      </section>
+
+      <section class="doc-section" id="vs-comparison">
+        <h2 class="section-heading">9. FIS vs. the Services It Gets Confused With</h2>
+        <p>FIS is most often confused with three things: custom fault-injection automation, load testing tools, and the observability services it depends on. The distinction with custom automation is the safety model — FIS encodes stop conditions, scoped roles, and resolved-target auditing that a hand-rolled Lambda does not. The distinction with load testing is intent: load testing asks whether the system can handle a given volume of traffic, while FIS asks whether the system behaves correctly when a component fails. A load test that saturates a service and a chaos experiment that kills a task are different questions, and the exam will sometimes present a scenario where the correct answer is a load test rather than FIS because the goal is capacity validation rather than failure validation.</p>
+        <p>The distinction with observability services is that FIS consumes them rather than replacing them. CloudWatch alarms are the stop conditions; CloudWatch Logs is where experiment outcomes land; X-Ray traces show how the request path behaved during the fault; Synthetics canaries show whether the user-facing flow stayed healthy. FIS without those services is a fault injector with no safety net and no evidence. The exam rewards candidates who describe FIS as the active layer on top of a passive observability stack, which is exactly the relationship this day has to Day 32.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Option</th><th>What it does</th><th>Pick it when…</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>AWS FIS</td><td>Managed fault injection with templates, scoped roles, and alarm-based stop conditions</td><td>You need safe, auditable, repeatable failure validation against real infrastructure</td></tr>
+              <tr><td>Custom Lambda automation</td><td>Bespoke fault injection with no built-in safety model</td><td>The fault type is outside FIS's action catalog and you accept building the safety controls yourself</td></tr>
+              <tr><td>Load testing tools</td><td>Generates traffic volume to validate capacity and throughput</td><td>The question is whether the system handles a given load, not whether it survives a component failure</td></tr>
+              <tr><td>CloudWatch alarms</td><td>Detects and notifies on metric thresholds</td><td>You need detection and paging — FIS uses these as stop conditions rather than replacing them</td></tr>
+              <tr><td>X-Ray / Synthetics</td><td>Traces request paths and probes user flows</td><td>You need to see how the system behaved during the fault, not to inject the fault</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="doc-section" id="lab">
+        <h2 class="section-heading">Hands-on Lab: Terminating an ECS Task Under a Stop Condition</h2>
+        <div class="card card-green">
+          <p><strong>Goal:</strong> run a controlled FIS experiment that terminates a single ECS task in a running service, with a stop condition tied to the service's error-rate alarm, and verify the service self-heals within its target RTO.</p>
+          <p><strong>Prerequisites:</strong> an ECS service running on Fargate or EC2 with at least two tasks, an Application Load Balancer in front of it, a CloudWatch alarm on the ALB's 5xx count or the service's error rate, and permissions to create IAM roles, FIS templates, and CloudWatch alarms.</p>
+          <ol>
+            <li>Tag the ECS tasks that are eligible for chaos with a dedicated tag, for example <code>chaos-eligible=true</code>. Apply it to the service's tasks only, and confirm no other resource in the account carries that tag. This tag is the blast-radius control for the whole lab.</li>
+            <li>Create the stop-condition alarm. Point it at the ALB's HTTPCode_Target_5XX_Count metric (or your service's equivalent error metric), set the period to one minute, set the evaluation periods to one, and set the datapoints to alarm to one. A one-minute, one-datapoint alarm transitions to ALARM quickly, which is what you want for a short experiment. Confirm the alarm is in OK state before proceeding.</li>
+            <li>Create the FIS execution role. The role needs permissions to describe and stop ECS tasks in the target cluster, plus permissions to describe the resources FIS resolves during target selection. Keep the policy scoped to the specific cluster and task definition rather than granting <code>ecs:*</code>.</li>
+            <li>Create the experiment template. Add one action of type <code>aws:ecs:stop-task</code>. Set the target to the ECS task ARNs selected by the <code>chaos-eligible=true</code> tag, with a selection mode of COUNT and a count of one. Attach the stop-condition alarm ARN from step 2. Attach the execution role from step 3. Give the template a name that encodes the claim it validates, for example <code>ecs-single-task-loss-rto</code>.</li>
+            <li>Before launching, open the template's target preview and confirm the resolved target list contains exactly the tasks you expect. If the list is larger than expected, stop and fix the tag before running anything.</li>
+            <li>Launch the experiment. Watch three things on the same timeline: the FIS experiment timeline (resolving, running, completed), the ECS service's running-task count, and the ALB's healthy-host count. Note the timestamp when the task is stopped and the timestamp when the service returns to its desired task count.</li>
+            <li>Compute the recovery time as the difference between those two timestamps. Compare it against the RTO you have documented for the service. If recovery exceeds the RTO, you have found a real defect — investigate the task's startup time, the health-check grace period, and the ALB's deregistration delay.</li>
+            <li>Deliberately trip the stop condition to prove it works. Temporarily lower the alarm threshold so that normal traffic breaches it, launch the experiment again, and confirm that FIS halts the experiment and reports the stop condition as the reason. Restore the threshold afterwards.</li>
+            <li>Record the outcome. Capture the experiment run ID, the resolved target, the recovery time, and whether the stop condition fired. Store this alongside the service's SLO documentation so the next reviewer can see the evidence rather than the claim.</li>
+          </ol>
+          <p><strong>What to look for:</strong> the most common finding is that recovery is slower than expected because the ALB's deregistration delay keeps the terminated task's connections draining longer than the service's own startup time. That is a configuration defect worth fixing, and it is exactly the kind of thing a design review would never surface.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="quiz">
+        <h2 class="section-heading">Scenario Question Drills</h2>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q1.</strong> A team wants to safely test EC2 instance failure in production without risking an uncontrolled outage. What FIS feature guarantees the experiment halts if things go wrong?</p>
+          <div class="scenario-options" id="opts-d33q1">
             <div class="scenario-option">A. IAM permission boundaries</div>
             <div class="scenario-option">B. Stop conditions tied to CloudWatch alarms</div>
             <div class="scenario-option">C. Increasing the blast radius</div>
             <div class="scenario-option">D. Manual monitoring only</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d33q1', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d33q1"><strong>Correct answer: B.</strong> FIS stop conditions automatically abort a running experiment the moment a linked CloudWatch alarm enters ALARM state, capping the blast radius of chaos testing.</div>
         </div>
-        <button class="scenario-reveal-btn" onclick="revealAnswer('d33q0', 1)">Reveal Answer</button>
-        <div class="scenario-explanation" id="exp-d33q0"><strong>Correct answer: B.</strong> FIS stop conditions automatically abort a running experiment the moment a linked CloudWatch alarm enters ALARM state, capping the blast radius of chaos testing.</div>
-      </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q2.</strong> An experiment template targets instances by the tag <code>chaos-eligible=true</code>. Six months later the experiment is launched and affects far more instances than the original author intended. What is the most likely cause?</p>
+          <div class="scenario-options" id="opts-d33q2">
+            <div class="scenario-option">A. FIS ignores tags and always targets the whole account</div>
+            <div class="scenario-option">B. Tag-based targets resolve at run time, so any resource that acquired the tag since authoring is now in scope</div>
+            <div class="scenario-option">C. The experiment template cached the original target list and reused it</div>
+            <div class="scenario-option">D. Stop conditions widened the target set</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d33q2', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d33q2"><strong>Correct answer: B.</strong> Tag-based target selection resolves to concrete resource IDs at experiment start, not at template authoring, so tag hygiene and enforcement are the real blast-radius control.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q3.</strong> A team configures a stop condition on an alarm with a five-minute period and three evaluation periods, then runs an experiment that injects a fault for two minutes. The experiment completes without stopping even though the service degraded. Why?</p>
+          <div class="scenario-options" id="opts-d33q3">
+            <div class="scenario-option">A. FIS stop conditions only work on EC2 actions</div>
+            <div class="scenario-option">B. The alarm needs roughly fifteen minutes of sustained breach to transition to ALARM, far longer than the fault window</div>
+            <div class="scenario-option">C. Stop conditions must be SNS topics, not alarms</div>
+            <div class="scenario-option">D. The experiment role lacked permission to read the alarm</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d33q3', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d33q3"><strong>Correct answer: B.</strong> A stop condition is only as fast as its alarm's evaluation window; the alarm must be able to transition to ALARM within the fault duration for the stop condition to be meaningful.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q4.</strong> Which FIS action is appropriate for validating that an application degrades gracefully under sustained CPU pressure without the fault persisting indefinitely?</p>
+          <div class="scenario-options" id="opts-d33q4">
+            <div class="scenario-option">A. EC2 instance termination</div>
+            <div class="scenario-option">B. CPU stress with a configured duration</div>
+            <div class="scenario-option">C. RDS reboot with failover</div>
+            <div class="scenario-option">D. Aurora cluster failover</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d33q4', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d33q4"><strong>Correct answer: B.</strong> Stress actions take a duration and stop on their own, which is the right shape for validating graceful degradation; termination actions have no duration and rely on the system's own recovery.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q5.</strong> A team wants to prove that their multi-AZ RDS deployment survives an Availability Zone loss within the documented RTO. Which FIS action and stop condition pairing fits?</p>
+          <div class="scenario-options" id="opts-d33q5">
+            <div class="scenario-option">A. EC2 instance termination with a CPU alarm as the stop condition</div>
+            <div class="scenario-option">B. RDS reboot with failover, with a connection-failure alarm as the stop condition</div>
+            <div class="scenario-option">C. Network latency injection with a healthy-host alarm</div>
+            <div class="scenario-option">D. ECS task termination with a 5xx alarm</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d33q5', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d33q5"><strong>Correct answer: B.</strong> The RDS reboot-with-failover action forces the standby to take over, and the stop condition should be the alarm that represents the user-facing symptom of a database outage.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q6.</strong> An FIS experiment fails immediately with an access-denied error on one action while other actions succeed. What is the most likely cause?</p>
+          <div class="scenario-options" id="opts-d33q6">
+            <div class="scenario-option">A. The stop condition alarm is in ALARM state</div>
+            <div class="scenario-option">B. The FIS execution role lacks the permission required for that action's resource type</div>
+            <div class="scenario-option">C. FIS cannot run more than one action per experiment</div>
+            <div class="scenario-option">D. The target tag was applied to too many resources</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d33q6', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d33q6"><strong>Correct answer: B.</strong> FIS assumes a role you specify, and that role's policy is the hard ceiling on what the experiment can do; a missing permission fails that action loudly rather than skipping it.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q7.</strong> A team wants to validate that their Auto Scaling group replaces unhealthy instances within the target RTO. Which FIS action and success criterion are correct?</p>
+          <div class="scenario-options" id="opts-d33q7">
+            <div class="scenario-option">A. CPU stress, with success measured by the fault ending on its own</div>
+            <div class="scenario-option">B. EC2 instance termination, with success measured by the ASG restoring capacity within the RTO</div>
+            <div class="scenario-option">C. Network latency injection, with success measured by the alarm staying in OK</div>
+            <div class="scenario-option">D. ECS task termination, with success measured by the task count returning to desired</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d33q7', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d33q7"><strong>Correct answer: B.</strong> Termination is destructive and not rolled back by FIS, so the success criterion is the system's own recovery time, not the fault ending.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q8.</strong> Which statement best describes the relationship between FIS and the observability services built in Days 29-32?</p>
+          <div class="scenario-options" id="opts-d33q8">
+            <div class="scenario-option">A. FIS replaces CloudWatch alarms with its own native threshold engine</div>
+            <div class="scenario-option">B. FIS consumes CloudWatch alarms as stop conditions and writes experiment outcomes to CloudWatch Logs, acting as the active layer on top of a passive observability stack</div>
+            <div class="scenario-option">C. FIS is independent of observability and requires no alarms</div>
+            <div class="scenario-option">D. FIS only works with X-Ray and not with CloudWatch</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d33q8', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d33q8"><strong>Correct answer: B.</strong> FIS does not replace observability; it uses alarms as stop conditions and logs as its audit trail, which is why the observability investment from the previous days is a prerequisite.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q9.</strong> A scenario asks how to validate that a service handles a bespoke failure mode that no FIS action supports. What is the correct approach?</p>
+          <div class="scenario-options" id="opts-d33q9">
+            <div class="scenario-option">A. Force the closest FIS action to approximate the fault</div>
+            <div class="scenario-option">B. Build custom fault-injection automation, accepting that you must implement the safety controls yourself</div>
+            <div class="scenario-option">C. Skip the validation entirely</div>
+            <div class="scenario-option">D. Use a load testing tool instead</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d33q9', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d33q9"><strong>Correct answer: B.</strong> FIS covers a catalog of common faults; a fault outside that catalog requires custom automation, and the tradeoff is that you lose FIS's built-in stop conditions and audit trail.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q10.</strong> A team wants to run a chaos experiment against a fleet of 2,000 instances but only affect a small, proportional slice. Which target configuration is most appropriate?</p>
+          <div class="scenario-options" id="opts-d33q10">
+            <div class="scenario-option">A. Explicitly list 2,000 resource IDs in the template</div>
+            <div class="scenario-option">B. Tag-based selection with a percentage-based scope so the blast radius scales with the fleet</div>
+            <div class="scenario-option">C. A count of 1,000 to keep it simple</div>
+            <div class="scenario-option">D. Run 2,000 separate experiments</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d33q10', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d33q10"><strong>Correct answer: B.</strong> Percentage-based scope keeps the experiment proportional as the fleet grows, and tag-based selection keeps the template valid as instances churn.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q11.</strong> An experiment targeting resources in us-east-1 is authored, but the team also wants to validate the same fault in eu-west-1. What is the correct approach?</p>
+          <div class="scenario-options" id="opts-d33q11">
+            <div class="scenario-option">A. Add the eu-west-1 resources to the same template's target list</div>
+            <div class="scenario-option">B. Run a separate experiment in eu-west-1, since FIS is a regional service</div>
+            <div class="scenario-option">C. Use a global FIS template that spans regions</div>
+            <div class="scenario-option">D. FIS cannot target resources outside the management account</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d33q11', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d33q11"><strong>Correct answer: B.</strong> FIS experiments, templates, and logs are regional; multi-region validation requires separate experiments per region or an orchestration layer above FIS.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q12.</strong> A team's experiment trips its stop condition and halts. What is the correct interpretation of this outcome?</p>
+          <div class="scenario-options" id="opts-d33q12">
+            <div class="scenario-option">A. The experiment failed and should be deleted</div>
+            <div class="scenario-option">B. The system did not hold its SLO under the injected fault, which is a reliability defect to fix before the next experiment</div>
+            <div class="scenario-option">C. The stop condition is misconfigured and should be removed</div>
+            <div class="scenario-option">D. FIS is not suitable for this workload</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d33q12', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d33q12"><strong>Correct answer: B.</strong> A stop-condition trip is a finding, not a failure of the tooling; it means the system breached the threshold you defined as unacceptable, and that gap should be fixed.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q13.</strong> Which permission must be granted to the principal that launches an FIS experiment, in addition to the permissions on the FIS execution role itself?</p>
+          <div class="scenario-options" id="opts-d33q13">
+            <div class="scenario-option">A. <code>cloudwatch:PutMetricData</code></div>
+            <div class="scenario-option">B. <code>iam:PassRole</code> for the FIS execution role</div>
+            <div class="scenario-option">C. <code>ec2:TerminateInstances</code> directly</div>
+            <div class="scenario-option">D. <code>logs:CreateLogGroup</code></div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d33q13', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d33q13"><strong>Correct answer: B.</strong> The launching principal needs <code>iam:PassRole</code> for the execution role; the role itself carries the permissions FIS uses to act on targets.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q14.</strong> A team wants to prove that their alarm actually fires during a real failure, not just that the alarm exists. How should they use FIS to do this?</p>
+          <div class="scenario-options" id="opts-d33q14">
+            <div class="scenario-option">A. Manually set the alarm to ALARM state in the console</div>
+            <div class="scenario-option">B. Inject a fault that should breach the alarm's metric and confirm the alarm transitions to ALARM during the experiment window</div>
+            <div class="scenario-option">C. Delete and recreate the alarm</div>
+            <div class="scenario-option">D. Increase the alarm's evaluation period</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d33q14', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d33q14"><strong>Correct answer: B.</strong> Injecting a fault that should breach the metric is the only way to validate the alarm end-to-end, including its metric, threshold, and evaluation window.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q15.</strong> A team runs a CPU stress experiment and finds that their anomaly-detection alarms on CPU utilization trip during the experiment window, polluting their SLO dashboard. What is the best practice?</p>
+          <div class="scenario-options" id="opts-d33q15">
+            <div class="scenario-option">A. Disable anomaly detection permanently</div>
+            <div class="scenario-option">B. Annotate experiment windows in observability tooling so injected faults can be distinguished from organic ones and excluded from SLO calculations</div>
+            <div class="scenario-option">C. Stop running CPU stress experiments</div>
+            <div class="scenario-option">D. Raise the alarm thresholds so they never trip</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d33q15', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d33q15"><strong>Correct answer: B.</strong> Experiment windows should be annotated so post-incident reviews and SLO calculations can distinguish injected faults from real user-impacting events.</div>
+        </div>
+      </section>
+
+      <section class="doc-section" id="preview">
+        <h2 class="section-heading">Peek into Tomorrow</h2>
+        <div class="card card-purple">
+          <p>Everything covered here assumes a single, well-scoped experiment against a single fault type, run by a team that is watching. That is the right starting point, but it leaves an obvious question unanswered: what does it look like to validate an entire recovery strategy rather than one component? A single ECS task termination proves that the service replaces a task. It does not prove that the organization's runbooks are correct, that the on-call rotation knows what to do when the pager fires, or that the documented RTO for a full Availability Zone loss is anything other than a number someone wrote in a wiki. Those are different claims, and they need a different structure than a single experiment template.</p>
+          <p>Tomorrow's topic is the scheduled Game Day — a simulated AZ outage or region loss exercise that turns DR assumptions into tested facts. The open question today leaves is how you compose multiple FIS experiments, a runbook, and a set of success criteria into a single exercise that a team can actually run and learn from, and how you decide in advance what "the exercise succeeded" means when the failure you are simulating is large enough that partial degradation is expected. That is a design problem about exercises, not about fault injection, and it is where the SRE phase gets genuinely hard.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="sources">
+        <h2 class="section-heading">Sources</h2>
+        <div class="card">
+          <ul class="source-list">
+            <li><a href="https://docs.aws.amazon.com/fis/latest/userguide/what-is.html" target="_blank">AWS Fault Injection Service — User Guide: What Is AWS FIS?</a></li>
+            <li><a href="https://docs.aws.amazon.com/fis/latest/userguide/experiment-templates.html" target="_blank">AWS FIS — Experiment Templates</a></li>
+            <li><a href="https://docs.aws.amazon.com/fis/latest/userguide/stop-conditions.html" target="_blank">AWS FIS — Stop Conditions</a></li>
+            <li><a href="https://docs.aws.amazon.com/fis/latest/userguide/actions.html" target="_blank">AWS FIS — Actions Reference</a></li>
+            <li><a href="https://docs.aws.amazon.com/fis/latest/userguide/targets.html" target="_blank">AWS FIS — Targets and Target Selection</a></li>
+            <li><a href="https://docs.aws.amazon.com/fis/latest/userguide/security-iam.html" target="_blank">AWS FIS — Identity and Access Management</a></li>
+            <li><a href="https://docs.aws.amazon.com/fis/latest/userguide/fis-quotas.html" target="_blank">AWS FIS — Quotas</a></li>
+            <li><a href="https://docs.aws.amazon.com/wellarchitected/latest/reliability-pillar/welcome.html" target="_blank">AWS Well-Architected Framework — Reliability Pillar</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/AlarmThatSendsEmail.html" target="_blank">Amazon CloudWatch — Using Alarms</a></li>
+          </ul>
+        </div>
       </section>
       <div class="day-nav">
         <a href="day-032.html">&larr; Day 32: Amazon CloudWatch Logs Insights &amp; Centralized Logging</a>

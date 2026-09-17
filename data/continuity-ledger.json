@@ -1,0 +1,898 @@
+[
+  {
+    "day": 1,
+    "takeaway": "This curriculum is a 70-day, phase-structured build: each day layers one governance or architecture concept onto the last, so treat the daily recap/peek sections as the connective tissue that keeps the whole arc coherent.",
+    "hooks": [
+      "70-day structure",
+      "phase-based progression",
+      "daily recap/peek continuity",
+      "multi-account governance as Phase 1 opener"
+    ],
+    "thread": "the curriculum orientation thread",
+    "relation": "none"
+  },
+  {
+    "day": 2,
+    "takeaway": "SCPs are a permission ceiling, not a grant — they cap what an account can do but an IAM identity still needs its own allow, and the default FullAWSAccess SCP permits everything until you attach explicit Deny statements.",
+    "hooks": [
+      "FullAWSAccess default SCP",
+      "explicit Deny statements",
+      "region-restriction SCPs",
+      "global services exemption (IAM, Route 53, CloudFront, Support)"
+    ],
+    "thread": "the permission-ceiling thread",
+    "relation": "extends"
+  },
+  {
+    "day": 3,
+    "takeaway": "Control Tower automates the landing zone you'd otherwise build by hand — management, log-archive, and audit accounts plus guardrails implemented as SCPs and Config rules — and AFT extends that to pipeline-driven account provisioning.",
+    "hooks": [
+      "management account",
+      "log-archive account",
+      "audit account",
+      "mandatory vs elective guardrails",
+      "Account Factory for Terraform (AFT)"
+    ],
+    "thread": "the permission-ceiling thread",
+    "relation": "extends"
+  },
+  {
+    "day": 4,
+    "takeaway": "IAM Identity Center replaces per-account IAM users with permission sets mapped to SAML federation from an external IdP, auto-provisioning an IAM role into each assigned account.",
+    "hooks": [
+      "permission sets",
+      "SAML federation",
+      "Entra ID / Okta",
+      "auto-provisioned IAM role per account",
+      "no long-lived per-account IAM users"
+    ],
+    "thread": "the permission-ceiling thread",
+    "relation": "same lifecycle stage different concern"
+  },
+  {
+    "day": 5,
+    "takeaway": "A permission boundary caps the maximum permissions an IAM entity can ever hold even when its attached policies are broader, and STS issues the short-lived credentials that make all this federation work.",
+    "hooks": [
+      "permission boundary",
+      "delegated admin escalation prevention",
+      "AssumeRole",
+      "AssumeRoleWithWebIdentity (EKS IRSA)",
+      "AssumeRoleWithSAML"
+    ],
+    "thread": "the permission-ceiling thread",
+    "relation": "extends"
+  },
+  {
+    "day": 6,
+    "takeaway": "AWS RAM lets a central network account share subnets, Transit Gateways, and Resolver rules with other accounts so app teams launch into a centrally owned VPC without owning it.",
+    "hooks": [
+      "AWS RAM",
+      "shared VPC subnets",
+      "Transit Gateway sharing",
+      "Route 53 Resolver rule sharing",
+      "central network account"
+    ],
+    "thread": "the shared-network-ownership thread",
+    "relation": "contrasts with"
+  },
+  {
+    "day": 7,
+    "takeaway": "Week 1's pieces compose into one enterprise governance model: landing zone design, SCP guardrails, Control Tower automation, centralized SSO, and shared networking all reinforce each other.",
+    "hooks": [
+      "landing zone design",
+      "SCP guardrails",
+      "Control Tower automation",
+      "centralized SSO",
+      "shared networking composition"
+    ],
+    "thread": "the permission-ceiling thread",
+    "relation": "synthesis"
+  },
+  {
+    "day": 8,
+    "takeaway": "Transit Gateway replaces an unmanageable full mesh of VPC peering with a regional hub-and-spoke, where each attachment associates with one TGW route table and propagates routes into others for fine-grained segmentation.",
+    "hooks": [
+      "Transit Gateway route tables",
+      "hub-and-spoke model",
+      "attachment association vs propagation",
+      "shared-services VPC isolation",
+      "replacing VPC peering full mesh"
+    ],
+    "thread": "the hub-and-spoke connectivity thread",
+    "relation": "extends"
+  },
+  {
+    "day": 9,
+    "takeaway": "TGW peering runs across regions over the AWS backbone, but peering attachments do not propagate routes — you must add them statically — and inter-region MTU is capped at 1500 bytes.",
+    "hooks": [
+      "TGW peering",
+      "no route propagation on peering attachments",
+      "static routes required",
+      "1500-byte MTU cap",
+      "AWS backbone not public internet"
+    ],
+    "thread": "the hub-and-spoke connectivity thread",
+    "relation": "same service opposite failure mode"
+  },
+  {
+    "day": 10,
+    "takeaway": "Network Firewall does stateful and stateless inspection with Suricata-compatible rules, typically in a centralized inspection VPC that all traffic is routed through via TGW and appliance-VPC route table tricks.",
+    "hooks": [
+      "Suricata-compatible rules",
+      "stateful vs stateless inspection",
+      "centralized inspection VPC",
+      "appliance VPC pattern",
+      "egress routing via TGW"
+    ],
+    "thread": "the hub-and-spoke connectivity thread",
+    "relation": "extends"
+  },
+  {
+    "day": 11,
+    "takeaway": "Direct Connect gives you a dedicated private link into AWS, with Private VIFs for one VPC, Transit VIFs for a TGW, and Public VIFs for public endpoints — and real resilience needs redundant connections and locations with BGP failover.",
+    "hooks": [
+      "Private VIF",
+      "Transit VIF",
+      "Public VIF",
+      "BGP failover",
+      "redundant connections/locations"
+    ],
+    "thread": "the hybrid-connectivity thread",
+    "relation": "extends"
+  },
+  {
+    "day": 12,
+    "takeaway": "Route 53 Resolver bridges hybrid DNS: Inbound endpoints let on-prem resolvers query AWS private hosted zones, while Outbound endpoints plus forwarding rules let AWS resources resolve on-prem names over DX or VPN.",
+    "hooks": [
+      "Inbound endpoints",
+      "Outbound endpoints",
+      "forwarding rules",
+      "private hosted zones",
+      "hybrid DNS over Direct Connect"
+    ],
+    "thread": "the hybrid-connectivity thread",
+    "relation": "extends"
+  },
+  {
+    "day": 13,
+    "takeaway": "PrivateLink exposes a single service across accounts via an ENI-backed Interface Endpoint with no peering, no route table changes, and no CIDR conflicts — while Gateway endpoints (S3/DynamoDB only) use route table entries and are free.",
+    "hooks": [
+      "Interface Endpoint (ENI-backed)",
+      "no overlapping-CIDR conflicts",
+      "Gateway endpoints (S3, DynamoDB only)",
+      "free gateway endpoints",
+      "exposing one microservice to many accounts"
+    ],
+    "thread": "the hybrid-connectivity thread",
+    "relation": "contrasts with"
+  },
+  {
+    "day": 14,
+    "takeaway": "Week 2 consolidates hybrid connectivity decision-making — TGW vs peering vs PrivateLink, DX resiliency patterns, and hybrid DNS — one of the highest-weight clusters on the exam.",
+    "hooks": [
+      "TGW vs peering vs PrivateLink",
+      "DX resiliency patterns",
+      "hybrid DNS resolution",
+      "highest-weight exam cluster",
+      "networking lab exam"
+    ],
+    "thread": "PHASE-CLOSE: the hybrid-connectivity thread",
+    "relation": "synthesis"
+  },
+  {
+    "day": 15,
+    "takeaway": "Fargate runs ECS tasks with no EC2 to manage, each task getting its own isolated compute allocation from a task definition, and awsvpc networking gives every task its own ENI and security group.",
+    "hooks": [
+      "task definition (CPU/memory, IAM task role)",
+      "awsvpc network mode",
+      "per-task ENI and security group",
+      "Fargate isolated compute allocation",
+      "no EC2 instances to manage"
+    ],
+    "thread": "the compute-abstraction thread",
+    "relation": "extends"
+  },
+  {
+    "day": 16,
+    "takeaway": "EKS runs the Kubernetes control plane as a managed service, and you choose worker capacity from self-managed nodes, managed node groups, or Fargate profiles — with Fargate losing DaemonSets and costing more per pod.",
+    "hooks": [
+      "managed node groups (AWS-managed ASGs)",
+      "EKS Fargate profiles",
+      "no DaemonSets on Fargate",
+      "higher per-pod cost on Fargate",
+      "self-managed nodes"
+    ],
+    "thread": "the compute-abstraction thread",
+    "relation": "same trap different service"
+  },
+  {
+    "day": 17,
+    "takeaway": "Lifecycle hooks pause instances in Pending:Wait or Terminating:Wait so bootstrap and drain scripts can run, and warm pools keep pre-initialized stopped instances ready to scale out without full boot latency.",
+    "hooks": [
+      "Pending:Wait",
+      "Terminating:Wait",
+      "deregister from load balancer in hook",
+      "warm pools with stopped instances",
+      "avoiding full boot/bootstrap latency"
+    ],
+    "thread": "the elastic-capacity thread",
+    "relation": "extends"
+  },
+  {
+    "day": 18,
+    "takeaway": "ALB routes by path, host, header, or query string to multiple target groups, supports weighted target groups for blue/green and canary shifting, and can target Lambda directly.",
+    "hooks": [
+      "path-based routing rules",
+      "host-based routing",
+      "weighted target groups",
+      "blue/green and canary traffic shifting",
+      "Lambda targets"
+    ],
+    "thread": "the elastic-capacity thread",
+    "relation": "extends"
+  },
+  {
+    "day": 19,
+    "takeaway": "Reserved concurrency caps and guarantees a function's max concurrency while provisioned concurrency pre-warms environments to kill cold starts, and event source mapping polls Kinesis, DynamoDB Streams, and SQS in batches with per-source concurrency and error handling.",
+    "hooks": [
+      "reserved concurrency",
+      "provisioned concurrency",
+      "cold starts",
+      "event source mapping batching",
+      "partial batch failures and DLQs"
+    ],
+    "thread": "the serverless-scaling thread",
+    "relation": "extends"
+  },
+  {
+    "day": 20,
+    "takeaway": "Step Functions orchestrates multi-step workflows with built-in retry/catch and a Standard (exactly-once, auditable) vs Express (high-throughput, at-least-once) split, while API Gateway fronts them with REST/HTTP APIs and native integrations that bypass Lambda for simple pass-through.",
+    "hooks": [
+      "Standard vs Express workflows",
+      "exactly-once vs at-least-once",
+      "retry/catch in state machines",
+      "human approval waits",
+      "API Gateway native service integrations bypassing Lambda"
+    ],
+    "thread": "the serverless-scaling thread",
+    "relation": "extends"
+  },
+  {
+    "day": 21,
+    "takeaway": "Week 3 consolidates compute choice: ECS vs EKS, serverless vs server-based, Fargate vs managed nodes, and scaling mechanics — with scenario questions hinging on operational overhead, cost, and control.",
+    "hooks": [
+      "ECS vs EKS decision criteria",
+      "serverless vs server-based",
+      "Fargate vs managed nodes",
+      "scaling mechanics",
+      "operational overhead vs cost vs control"
+    ],
+    "thread": "the compute-abstraction thread",
+    "relation": "synthesis"
+  },
+  {
+    "day": 22,
+    "takeaway": "Aurora decouples compute from a self-healing storage layer replicated 6 ways across 3 AZs, and Aurora Global Database adds cross-region replication via the storage layer (not binlog) with sub-second lag and sub-minute promotion.",
+    "hooks": [
+      "6-way replication across 3 AZs",
+      "storage-layer replication (not binlog)",
+      "Aurora Global Database",
+      "<1s cross-region lag",
+      "secondary region promotable in under a minute"
+    ],
+    "thread": "the global-database-durability thread",
+    "relation": "extends"
+  },
+  {
+    "day": 23,
+    "takeaway": "Multi-AZ is for HA with a synchronous standby and same endpoint but does not scale reads, read replicas scale reads asynchronously with data-loss risk on promotion, and Blue/Green Deployments give a synchronized staging environment for safer upgrades.",
+    "hooks": [
+      "Multi-AZ synchronous standby",
+      "same endpoint on failover",
+      "async read replicas with promotion data-loss risk",
+      "RDS Blue/Green Deployments",
+      "fast switchover for major-version upgrades"
+    ],
+    "thread": "the global-database-durability thread",
+    "relation": "contrasts with"
+  },
+  {
+    "day": 24,
+    "takeaway": "DynamoDB partitions by hash of the partition key, so low-cardinality or hot keys throttle regardless of table throughput, and on-demand vs provisioned capacity is a predictability-vs-cost trade-off.",
+    "hooks": [
+      "partition key hash partitioning",
+      "hot keys and low cardinality",
+      "throttling despite table throughput",
+      "on-demand capacity mode",
+      "provisioned capacity with auto scaling"
+    ],
+    "thread": "the global-database-durability thread",
+    "relation": "same service opposite failure mode"
+  },
+  {
+    "day": 25,
+    "takeaway": "DynamoDB Global Tables give you multi-region, multi-active writes with last-writer-wins conflict resolution, while DAX is an in-memory read-through/write-through cache that drops read latency from milliseconds to microseconds.",
+    "hooks": [
+      "last-writer-wins conflict resolution",
+      "multi-region multi-active replication",
+      "DAX read-through/write-through cache",
+      "microsecond read latency",
+      "no single-region bottleneck"
+    ],
+    "thread": "the global data replication thread",
+    "relation": "extends"
+  },
+  {
+    "day": 26,
+    "takeaway": "S3 storage classes trade cost against retrieval latency and availability, lifecycle rules automate the transitions and expirations, and CRR/SRR replicate objects asynchronously for DR or data residency.",
+    "hooks": [
+      "Glacier Deep Archive",
+      "Intelligent-Tiering",
+      "One Zone-IA",
+      "lifecycle transition rules",
+      "CRR vs SRR"
+    ],
+    "thread": "the storage cost-tiering thread",
+    "relation": "contrasts with"
+  },
+  {
+    "day": 27,
+    "takeaway": "Redis is the choice whenever HA, persistence, or complex data structures matter (with Global Datastore for cross-region), while Memcached is a simple, multi-threaded, non-persistent cache with no replication.",
+    "hooks": [
+      "Redis cluster mode sharding",
+      "Global Datastore",
+      "Memcached multi-threaded non-persistent",
+      "Redis pub/sub",
+      "no replication in Memcached"
+    ],
+    "thread": "the caching layer thread",
+    "relation": "same lifecycle stage different concern"
+  },
+  {
+    "day": 28,
+    "takeaway": "This synthesis locks in the database/storage selection matrix — relational vs key-value vs cache, consistency models, and the global replication trade-off between Aurora Global DB and DynamoDB Global Tables.",
+    "hooks": [
+      "Aurora Global DB vs DynamoDB Global Tables",
+      "relational vs key-value vs cache",
+      "consistency model trade-offs",
+      "heavily tested exam domain",
+      "scenario drills"
+    ],
+    "thread": "PHASE-CLOSE: the data selection matrix thread",
+    "relation": "extends"
+  },
+  {
+    "day": 29,
+    "takeaway": "CloudWatch alarms fire on static thresholds or ML-based anomaly detection bands, and composite alarms combine multiple alarm states with AND/OR logic so you only page on a true incident pattern like high latency AND high error rate together.",
+    "hooks": [
+      "composite alarms AND/OR logic",
+      "anomaly detection bands",
+      "high latency AND high error rate",
+      "alert noise reduction",
+      "static vs ML thresholds"
+    ],
+    "thread": "PHASE-OPEN: the observability signal thread",
+    "relation": "extends"
+  },
+  {
+    "day": 30,
+    "takeaway": "Synthetics canaries are scripted Puppeteer/Selenium probes that exercise your endpoints and user flows from outside your infrastructure, catching availability and latency SLO breaches before real users report them.",
+    "hooks": [
+      "Puppeteer/Selenium canaries",
+      "synthetic probes from outside",
+      "SLO breach detection",
+      "user flow monitoring",
+      "complementary to internal metrics"
+    ],
+    "thread": "the observability signal thread",
+    "relation": "extends"
+  },
+  {
+    "day": 31,
+    "takeaway": "X-Ray traces a request across microservices into a service map that highlights per-hop latency and error hotspots, with sampling rules controlling cost and annotations/subsegments letting you drill into a specific slow downstream call.",
+    "hooks": [
+      "X-Ray service map",
+      "sampling rules",
+      "annotations and subsegments",
+      "slow DynamoDB query inside Lambda",
+      "per-hop latency hotspots"
+    ],
+    "thread": "the observability signal thread",
+    "relation": "same service opposite failure mode"
+  },
+  {
+    "day": 32,
+    "takeaway": "Logs Insights gives you a query language over CloudWatch Logs for ad-hoc analysis, while subscription filters stream logs in real time to a centralized logging account for org-wide search, retention, and SIEM ingestion.",
+    "hooks": [
+      "Logs Insights query language",
+      "subscription filters",
+      "centralized logging account",
+      "Kinesis Data Firehose/Streams",
+      "SIEM ingestion"
+    ],
+    "thread": "the observability signal thread",
+    "relation": "extends"
+  },
+  {
+    "day": 33,
+    "takeaway": "FIS runs controlled chaos experiments — EC2/ECS/EKS termination, CPU/network stress, RDS/AZ failover — defined as experiment templates with mandatory stop conditions tied to CloudWatch alarms that halt the experiment if production stability is threatened.",
+    "hooks": [
+      "experiment templates",
+      "mandatory stop conditions",
+      "AZ failover experiment",
+      "CPU/network stress",
+      "stop conditions tied to CloudWatch alarms"
+    ],
+    "thread": "the chaos engineering thread",
+    "relation": "extends"
+  },
+  {
+    "day": 34,
+    "takeaway": "A Game Day is a scheduled exercise simulating a real failure — AZ outage, dependency failure, region loss — to validate that runbooks, alarms, and automated recovery actually work, turning DR assumptions into tested facts.",
+    "hooks": [
+      "scheduled Game Day",
+      "simulated AZ outage",
+      "region loss exercise",
+      "runbook validation",
+      "DR assumptions into tested facts"
+    ],
+    "thread": "the chaos engineering thread",
+    "relation": "extends"
+  },
+  {
+    "day": 35,
+    "takeaway": "Active-active serves live traffic from two or more regions at once, requiring multi-region replication with conflict resolution and global traffic steering via Route 53 latency/geoproximity routing or Global Accelerator anycast IPs for network-layer failover.",
+    "hooks": [
+      "Global Accelerator anycast IPs",
+      "Route 53 geoproximity routing",
+      "multi-writer Aurora Global Database",
+      "conflict resolution via partitioning",
+      "serve live traffic from 2+ regions"
+    ],
+    "thread": "the multi-region failover thread",
+    "relation": "extends"
+  },
+  {
+    "day": 36,
+    "takeaway": "DR strategies form a cost/RTO spectrum — Backup & Restore (hours-days), Pilot Light (~tens of minutes), Warm Standby (minutes), and Multi-Site Active-Active (lowest RTO/RPO, highest cost).",
+    "hooks": [
+      "Backup & Restore highest RTO",
+      "Pilot Light core data replicated",
+      "Warm Standby scaled-down replica",
+      "Multi-Site Active-Active lowest RTO/RPO",
+      "cost/RTO spectrum"
+    ],
+    "thread": "the multi-region failover thread",
+    "relation": "contrasts with"
+  },
+  {
+    "day": 37,
+    "takeaway": "Route 53 ARC adds readiness checks that continuously validate a standby region can actually take over, plus routing controls on a control plane independent of any single region for deterministic, auditable failover.",
+    "hooks": [
+      "readiness checks",
+      "routing controls",
+      "control plane independent of a single region",
+      "deterministic auditable failover",
+      "safer than ad hoc health-check failover"
+    ],
+    "thread": "the multi-region failover thread",
+    "relation": "extends"
+  },
+  {
+    "day": 38,
+    "takeaway": "Route 53 routing policies — simple, weighted, latency, failover, geolocation, geoproximity with bias, and multi-value — each pair with health checks that automatically pull unhealthy endpoints out of DNS responses.",
+    "hooks": [
+      "geoproximity with bias",
+      "weighted routing for canary/A-B",
+      "multi-value answer routing",
+      "health checks removing unhealthy endpoints",
+      "latency-based routing"
+    ],
+    "thread": "the multi-region failover thread",
+    "relation": "same service opposite failure mode"
+  },
+  {
+    "day": 39,
+    "takeaway": "AWS Backup centralizes policy-based backup across EBS, RDS, DynamoDB, and EFS with schedules, lifecycle, and cross-region/cross-account copy, while Vault Lock enforces WORM immutability for compliance and ransomware protection.",
+    "hooks": [
+      "Vault Lock WORM immutability",
+      "cross-region and cross-account copy",
+      "policy-based backup schedules",
+      "ransomware protection",
+      "one console across EBS/RDS/DynamoDB/EFS"
+    ],
+    "thread": "the recovery assurance thread",
+    "relation": "was a prerequisite for"
+  },
+  {
+    "day": 40,
+    "takeaway": "The Reliability pillar rests on four areas — foundations (service quotas, network topology), workload architecture (distributed design, graceful degradation), change management, and failure management with tested recovery.",
+    "hooks": [
+      "service quotas as foundations",
+      "graceful degradation",
+      "automated deployment change management",
+      "tested recovery procedures",
+      "distributed system design"
+    ],
+    "thread": "the recovery assurance thread",
+    "relation": "extends"
+  },
+  {
+    "day": 41,
+    "takeaway": "Operational Excellence means performing operations as code (IaC, automated runbooks), making frequent small reversible changes, anticipating failure via game days, and learning from blameless post-incident reviews.",
+    "hooks": [
+      "operations as code",
+      "automated runbooks/playbooks",
+      "small reversible changes",
+      "blameless post-incident review",
+      "anticipate failure via game days"
+    ],
+    "thread": "the recovery assurance thread",
+    "relation": "same lifecycle stage different concern"
+  },
+  {
+    "day": 42,
+    "takeaway": "This synthesis consolidates observability (metrics, tracing, synthetics), chaos engineering, and DR pattern selection from backup/restore through active-active — the SRE cluster central to the exam's resilience domain.",
+    "hooks": [
+      "FIS",
+      "Route 53 ARC",
+      "AWS Backup",
+      "X-Ray",
+      "backup/restore through active-active spectrum"
+    ],
+    "thread": "PHASE-CLOSE: the recovery assurance thread",
+    "relation": "extends"
+  },
+  {
+    "day": 43,
+    "takeaway": "The 7 Rs classify each workload's move — Retire, Retain, Rehost (MGN), Relocate (VMware Cloud on AWS), Repurchase (SaaS), Replatform (lift-tinker-and-shift), Refactor — with Migration Hub tracking progress across tools.",
+    "hooks": [
+      "the 7 Rs",
+      "Relocate to VMware Cloud on AWS",
+      "Replatform lift-tinker-and-shift",
+      "self-managed MySQL to RDS",
+      "Migration Hub tracking progress"
+    ],
+    "thread": "PHASE-OPEN: the workload migration thread",
+    "relation": "extends"
+  },
+  {
+    "day": 44,
+    "takeaway": "Application Discovery Service (agent-based or agentless) inventories on-prem servers, dependencies, and utilization data to build a data-driven migration plan and right-size target instances, feeding into Migration Hub.",
+    "hooks": [
+      "agent-based vs agentless discovery",
+      "dependency mapping",
+      "utilization data for right-sizing",
+      "Migration Evaluator",
+      "feeds into Migration Hub"
+    ],
+    "thread": "the workload migration thread",
+    "relation": "was a prerequisite for"
+  },
+  {
+    "day": 45,
+    "takeaway": "MGN performs continuous low-impact block-level replication from source servers to a staging area in AWS, letting you launch test and cutover instances at any point with minimal downtime — the standard rehost tool replacing CloudEndure/SMS.",
+    "hooks": [
+      "continuous block-level replication",
+      "staging area in AWS",
+      "test and cutover instances",
+      "minimal downtime cutover",
+      "replaces CloudEndure/SMS"
+    ],
+    "thread": "the workload migration thread",
+    "relation": "extends"
+  },
+  {
+    "day": 46,
+    "takeaway": "SCT converts schema, views, stored procedures, and functions between different engines and reports a conversion-completeness percentage, but even 95% leaves complex procedural code needing manual remediation — SCT handles schema, DMS handles data.",
+    "hooks": [
+      "conversion-completeness percentage",
+      "Oracle to Aurora PostgreSQL",
+      "stored procedures and functions",
+      "95% still needs manual remediation",
+      "SCT schema vs DMS data"
+    ],
+    "thread": "the workload migration thread",
+    "relation": "same trap different service"
+  },
+  {
+    "day": 47,
+    "takeaway": "DataSync automates and accelerates online transfer of files and objects between on-prem storage (NFS, SMB, HDFS) and AWS storage (S3, EFS, FSx) with scheduling, encryption, bandwidth throttling, and integrity validation — and unlike DMS it is not database-aware.",
+    "hooks": [
+      "NFS/SMB/HDFS sources",
+      "bandwidth throttling",
+      "data integrity validation",
+      "not database-aware unlike DMS",
+      "transfer to S3/EFS/FSx"
+    ],
+    "thread": "the workload migration thread",
+    "relation": "contrasts with"
+  },
+  {
+    "day": 48,
+    "takeaway": "Storage Gateway comes in three distinct flavors — File (S3 as NFS/SMB share), Volume (iSCSI block backed by S3 in cached or stored mode), and Tape (virtual tape library replacing physical tape) — and picking the right one depends on whether the on-prem workload speaks file, block, or tape.",
+    "hooks": [
+      "File Gateway NFS/SMB share backed by S3",
+      "Volume Gateway cached vs stored mode",
+      "iSCSI block storage",
+      "Tape Gateway virtual tape library (VTL)"
+    ],
+    "thread": "the hybrid-storage-bridge thread",
+    "relation": "extends"
+  },
+  {
+    "day": 49,
+    "takeaway": "The Snow Family is the offline-transfer answer when the network is the bottleneck: Snowcone for small/rugged edge, Snowball Edge Storage Optimized (~80TB usable) or Compute Optimized with GPU, and Snowmobile for exabyte-scale shipping-container transfers.",
+    "hooks": [
+      "Snowball Edge Storage Optimized ~80TB usable",
+      "Snowball Edge Compute Optimized with GPU",
+      "Snowmobile exabyte-scale shipping container",
+      "OpsHub",
+      "Snowcone rugged edge"
+    ],
+    "thread": "the offline-data-mover thread",
+    "relation": "same lifecycle stage different concern"
+  },
+  {
+    "day": 50,
+    "takeaway": "Outposts, Local Zones, and Wavelength all push AWS infrastructure closer to the workload, but for different reasons — Outposts for data residency and on-prem latency, Local Zones for metro latency without owning hardware, Wavelength for 5G mobile edge.",
+    "hooks": [
+      "Outposts extends AWS APIs into your data center",
+      "Local Zones in specific metro areas",
+      "Wavelength at telco 5G edge",
+      "data residency requirement"
+    ],
+    "thread": "the extend-AWS-closer thread",
+    "relation": "extends"
+  },
+  {
+    "day": 51,
+    "takeaway": "The Relocate strategy moves VMware workloads to VMware Cloud on AWS without converting them to native EC2/AMI, preserving the hypervisor and VMware tooling — often an interim step before a later native refactor.",
+    "hooks": [
+      "VMware Cloud on AWS",
+      "HCX",
+      "Relocate strategy",
+      "no conversion to native EC2/AMI",
+      "preserving the hypervisor layer"
+    ],
+    "thread": "the lift-and-shift-with-tools thread",
+    "relation": "contrasts with"
+  },
+  {
+    "day": 52,
+    "takeaway": "Large-scale migrations need Direct Connect capacity (or LAG-bundled connections) provisioned ahead of the window, and the hybrid pattern of Snowball for the bulk historical dataset plus DX/DMS CDC for the ongoing delta is a common exam answer.",
+    "hooks": [
+      "Link Aggregation Groups (LAG)",
+      "provision DX capacity ahead of migration window",
+      "Snowball for bulk historical dataset",
+      "DX/DMS CDC for the delta"
+    ],
+    "thread": "the migration-bandwidth-planning thread",
+    "relation": "was a prerequisite for"
+  },
+  {
+    "day": 53,
+    "takeaway": "Match the commitment to the workload: Compute Savings Plans for maximum flexibility, EC2 Instance Savings Plans for cheaper but family/region-locked savings, RIs when you also need capacity reservation, and Spot (up to ~90% off) with Spot Fleet/mixed-instance ASGs for fault-tolerant work.",
+    "hooks": [
+      "Compute Savings Plans (any family/region/OS)",
+      "EC2 Instance Savings Plans locked to family/region",
+      "Spot up to ~90% discount",
+      "2-minute Spot interruption notice",
+      "Spot Fleet / mixed-instance ASG"
+    ],
+    "thread": "the commitment-vs-flexibility thread",
+    "relation": "same trap different service"
+  },
+  {
+    "day": 54,
+    "takeaway": "Compute Optimizer turns utilization metrics into right-sizing recommendations, Cost Explorer visualizes and forecasts spend (and drives RI/Savings Plan purchase advice), and Trusted Advisor flags cost, security, performance, and fault-tolerance issues against best practices.",
+    "hooks": [
+      "Compute Optimizer right-sizing recommendations",
+      "Cost Explorer forecasts and RI purchase recommendations",
+      "Trusted Advisor cost/security/performance/fault-tolerance checks",
+      "over-provisioned instances"
+    ],
+    "thread": "the visibility-and-rightsizing thread",
+    "relation": "extends"
+  },
+  {
+    "day": 55,
+    "takeaway": "FinOps on AWS starts with consistent tagging (enforced via SCPs/Config rules) so Cost Allocation Reports can attribute spend by team/project/environment, with AWS Budgets alerting on overspend and CUR providing the most granular billing data for custom tooling.",
+    "hooks": [
+      "Cost Allocation Tags",
+      "tag enforcement via SCPs/Config rules",
+      "AWS Budgets forecasted vs actual alerts",
+      "Cost and Usage Report (CUR) granular billing data"
+    ],
+    "thread": "the cost-accountability thread",
+    "relation": "same lifecycle stage different concern"
+  },
+  {
+    "day": 56,
+    "takeaway": "DMS is one of the highest-yield exam topics (3-4 questions typically): know full load vs CDC, replication instance sizing, LOB handling, and the DMS+SCT pattern for heterogeneous migrations.",
+    "hooks": [
+      "AWS DMS full load vs CDC",
+      "replication instance sizing",
+      "LOB handling",
+      "AWS SCT for heterogeneous migration",
+      "Change Data Capture"
+    ],
+    "thread": "PHASE-CLOSE: the migration-tooling-deep-dive thread",
+    "relation": "extends"
+  },
+  {
+    "day": 57,
+    "takeaway": "Sit a full 75-question, 180-minute timed mock under real conditions to establish a baseline score and internalize SAP-C02 pacing (~2.4 min/question average, with scenario questions needing more).",
+    "hooks": [
+      "75-question 180-minute timed mock",
+      "~2.4 minutes per question average",
+      "no pausing no notes",
+      "baseline score",
+      "scenario questions need more time"
+    ],
+    "thread": "PHASE-OPEN: the mock-exam-loop thread",
+    "relation": "was a prerequisite for"
+  },
+  {
+    "day": 58,
+    "takeaway": "Distractor analysis is the real work: for every missed question — and every question you got right by luck or elimination — articulate why the correct answer is right and why each distractor is wrong, then tag each miss by domain to find your weakest area.",
+    "hooks": [
+      "distractor analysis",
+      "right by luck or elimination",
+      "tag each miss by domain",
+      "why each distractor is wrong"
+    ],
+    "thread": "the mock-exam-loop thread",
+    "relation": "extends"
+  },
+  {
+    "day": 59,
+    "takeaway": "Targeted deep review of Weeks 1-2 (multi-account governance and hybrid networking) focused specifically on whatever Domain 1 weak areas Day 58's analysis flagged.",
+    "hooks": [
+      "Organizations",
+      "Transit Gateway",
+      "Direct Connect",
+      "Domain 1 weak areas",
+      "multi-account governance"
+    ],
+    "thread": "the mock-exam-loop thread",
+    "relation": "was a prerequisite for"
+  },
+  {
+    "day": 60,
+    "takeaway": "Targeted deep review of Weeks 3-6 (compute, databases, SRE/DR) focused on the Domain 2 weak areas flagged by mock exam analysis.",
+    "hooks": [
+      "Aurora",
+      "DynamoDB",
+      "FIS (Fault Injection Simulator)",
+      "Route 53 ARC",
+      "Domain 2 resilient architectures"
+    ],
+    "thread": "the mock-exam-loop thread",
+    "relation": "same lifecycle stage different concern"
+  },
+  {
+    "day": 61,
+    "takeaway": "Second full timed mock exam — the point is comparing the score delta against Mock Exam 1 to see whether the Day 59-60 deep review actually closed the gaps it targeted.",
+    "hooks": [
+      "Mock Exam 2",
+      "score delta vs Mock Exam 1",
+      "75 questions timed",
+      "did the deep review close the gaps"
+    ],
+    "thread": "the mock-exam-loop thread",
+    "relation": "extends"
+  },
+  {
+    "day": 62,
+    "takeaway": "Repeat the Day 58 distractor-analysis process for Mock Exam 2, tracking whether previously weak domains improved or whether new gaps emerged.",
+    "hooks": [
+      "distractor analysis round 2",
+      "previously weak domains improved?",
+      "new gaps emerged",
+      "tracking domain-level change"
+    ],
+    "thread": "the mock-exam-loop thread",
+    "relation": "same trap different service"
+  },
+  {
+    "day": 63,
+    "takeaway": "Deep review of Weeks 7-8 migration content — the 7 Rs, MGN, DMS/SCT, DataSync, Snow Family, hybrid networking capacity — focused on flagged Domain 3 weak areas.",
+    "hooks": [
+      "MGN (Application Migration Service)",
+      "DMS/SCT",
+      "DataSync",
+      "Snow Family",
+      "the 7 Rs"
+    ],
+    "thread": "the mock-exam-loop thread",
+    "relation": "was a prerequisite for"
+  },
+  {
+    "day": 64,
+    "takeaway": "Deep review of cost optimization content — Savings Plans vs RIs vs Spot, Compute Optimizer, FinOps tagging/budgets — focused on flagged Domain 4 weak areas.",
+    "hooks": [
+      "Savings Plans vs RIs vs Spot",
+      "Compute Optimizer",
+      "AWS Budgets",
+      "FinOps tagging",
+      "Domain 4 cost control"
+    ],
+    "thread": "the mock-exam-loop thread",
+    "relation": "same lifecycle stage different concern"
+  },
+  {
+    "day": 65,
+    "takeaway": "Third full timed mock exam — by this point scores should be trending consistently toward the 80%+ target range.",
+    "hooks": [
+      "Mock Exam 3",
+      "trending toward 80%+",
+      "75 questions timed",
+      "consistency check"
+    ],
+    "thread": "the mock-exam-loop thread",
+    "relation": "extends"
+  },
+  {
+    "day": 66,
+    "takeaway": "Beyond content review, analyze time-per-question data from Mock Exam 3 to find which question types cost the most time, and refine the flag-and-skip strategy accordingly.",
+    "hooks": [
+      "time-per-question data",
+      "flag-and-skip strategy",
+      "which question types cost the most time",
+      "exam pacing"
+    ],
+    "thread": "the mock-exam-loop thread",
+    "relation": "same service opposite failure mode"
+  },
+  {
+    "day": 67,
+    "takeaway": "Fourth full timed mock exam, ideally from a different question bank/vendor than exams 1-3 to reduce pattern memorization and test genuine understanding.",
+    "hooks": [
+      "Mock Exam 4",
+      "different question bank/vendor",
+      "reduce pattern memorization",
+      "test genuine understanding"
+    ],
+    "thread": "the mock-exam-loop thread",
+    "relation": "extends"
+  },
+  {
+    "day": 68,
+    "takeaway": "Final full distractor-analysis pass, refining the flag-and-review technique: which questions do you consistently need a second look at, and why.",
+    "hooks": [
+      "final distractor analysis",
+      "flag-and-review technique",
+      "questions needing a second look",
+      "consistent second-look pattern"
+    ],
+    "thread": "the mock-exam-loop thread",
+    "relation": "same trap different service"
+  },
+  {
+    "day": 69,
+    "takeaway": "Fifth and final full timed mock exam — target consistently scoring above 85% before sitting the real exam.",
+    "hooks": [
+      "Mock Exam 5",
+      "consistently above 85%",
+      "final timed mock",
+      "before the real exam"
+    ],
+    "thread": "the mock-exam-loop thread",
+    "relation": "extends"
+  },
+  {
+    "day": 70,
+    "takeaway": "Light review only the day before the exam: re-read your personal weak-spot cheat sheet, confirm Pearson VUE/OnVUE logistics (ID, room scan, check-in time), and resist cramming new material.",
+    "hooks": [
+      "Pearson VUE / OnVUE logistics",
+      "ID requirements",
+      "room scan for online proctoring",
+      "check-in time",
+      "personal weak-spot cheat sheet",
+      "no cramming new material"
+    ],
+    "thread": "the exam-day-readiness thread",
+    "relation": "same lifecycle stage different concern"
+  }
+]

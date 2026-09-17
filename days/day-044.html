@@ -23,6 +23,23 @@
   <aside class="sidebar" id="sidebar">
     <div class="search-box"><input type="text" id="navSearch" class="search-input" placeholder="Search days..." onkeyup="filterNav()"></div>
     <div class="nav-section">
+      <div class="nav-section-title">On This Page</div>
+      <a href="#recap" class="nav-link">Recap: From Classification to Evidence</a>
+      <a href="#why-on-exam" class="nav-link">1. Why This Is on the Exam</a>
+      <a href="#mechanism" class="nav-link">2. How Discovery Actually Works</a>
+      <a href="#decision-boundary" class="nav-link">3. Agent or Agentless</a>
+      <a href="#config-tradeoffs" class="nav-link">4. Collection Modes and Tradeoffs</a>
+      <a href="#sizing-limits" class="nav-link">5. Sizing, Limits and Quotas</a>
+      <a href="#failure-modes" class="nav-link">6. Failure Modes in Production</a>
+      <a href="#sre-angle" class="nav-link">7. The Operational and SRE Angle</a>
+      <a href="#gotchas" class="nav-link">8. Edge Cases and Exam Gotchas</a>
+      <a href="#vs-comparison" class="nav-link">9. Discovery vs. Adjacent Services</a>
+      <a href="#lab" class="nav-link">Hands-on Lab</a>
+      <a href="#quiz" class="nav-link">Scenario Question Drills</a>
+      <a href="#preview" class="nav-link">Peek into Tomorrow</a>
+      <a href="#sources" class="nav-link">Sources</a>
+    </div>
+    <div class="nav-section">
       <div class="nav-section-title">All Days</div>
       <a href="day-001.html" class="nav-link" data-day="1">Day 1: Multi-Account Architecture &amp; AWS Organizations</a>
       <a href="day-002.html" class="nav-link" data-day="2">Day 2: Service Control Policy (SCP) Mechanics</a>
@@ -104,36 +121,376 @@
         <span class="pill pill-green">Phase 4: Migration, Hybrid &amp; Cost Optimization</span>
       </div>
       <h1 class="hero-title">AWS Application Discovery Service — Assessment &amp; Portfolio Analysis</h1>
-      <div class="reading-meta">&#128337; ~3 min read &middot; 2 services covered</div>
+      <div class="reading-meta">&#128337; ~58 min read &middot; 2 services covered</div>
       <div class="services-grid">
         <span class="service-tag">Application Discovery Service</span>
         <span class="service-tag">Migration Evaluator</span>
       </div>
       <div id="tracker"></div>
-      <section class="doc-section">
-        <h2 class="section-heading">Today's Concept</h2>
+
+      <section class="doc-section" id="recap">
+        <h2 class="section-heading">Recap: From Classification to Evidence</h2>
         <div class="card card-accent">
-          <p>Application Discovery Service (agent-based or agentless) inventories on-prem servers, dependencies, and utilization data to build a data-driven migration plan and right-size target instances, feeding into Migration Hub for tracking.</p>
-        </div>
-        <h3 class="sub-heading">Hands-on Lab / Practical Action (45 min)</h3>
-        <div class="card">
-          <p>Review how agentless discovery (via a VM export/OVA) differs from agent-based discovery for capturing process-level network dependencies.</p>
+          <p>Day 43 gave us the vocabulary for the whole phase: the 7 Rs, with Rehost mapped to MGN, Relocate mapped to VMware Cloud on AWS, and Replatform described as lift-tinker-and-shift — the self-managed MySQL to RDS move being the canonical example. Migration Hub sat above all of it as the tracking surface, a single place to watch application status move from discovery through cutover. That framework was a prerequisite for what we do here, and the dependency runs in a specific direction: the 7 Rs tell you what decision to make, but they say nothing about how you justify it. Assigning an application to Rehost is a judgment call, and a judgment call made in a steering committee without data is how migration programs end up with target instance sizes picked from a spreadsheet of guesses.</p>
+          <p>Application Discovery Service is the evidence layer underneath the classification. It is what turns "we think this app is a Rehost candidate" into "this app runs on four hosts, talks to two databases and one internal API, and its peak CPU utilization is 12%." Migration Hub tracking progress is only meaningful if the plan it tracks was built from measured inventory rather than from a CMDB that was last reconciled three years ago.</p>
         </div>
       </section>
-      <section class="doc-section">
-        <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
-        
-      <div class="scenario-card">
-        <p class="scenario-question"><strong>Q1.</strong> A migration team needs to map network dependencies between individual processes on each server before planning application groupings for migration waves. What captures this?</p>
-        <div class="scenario-options" id="opts-d44q0">
-            <div class="scenario-option">A. Agentless Discovery Connector only</div>
-            <div class="scenario-option">B. Agent-based discovery, which captures process-to-process network connections</div>
-            <div class="scenario-option">C. AWS Config</div>
-            <div class="scenario-option">D. CloudTrail</div>
+
+      <section class="doc-section" id="why-on-exam">
+        <h2 class="section-heading">1. Why This Is on the Exam</h2>
+        <p>Application Discovery Service appears on SAP-C02 in the migration and modernization domain, and it almost never appears as the answer to a question about discovery itself. It appears as the first step in a multi-part scenario where the constraint is that the customer does not actually know what they have. The exam likes this shape because it separates candidates who reach for a migration tool immediately from candidates who recognize that you cannot size a target, sequence a wave, or choose between Rehost and Replatform until you have measured the source estate.</p>
+        <p>The architectural problem it solves is the inventory gap. Most enterprises pursuing a data center exit have a configuration management database, and most of those CMDBs are partially wrong. They were populated by hand, updated inconsistently, and they describe what someone believed was running rather than what is actually running. They also almost never capture the thing that matters most for migration sequencing: which servers talk to which other servers, and how much. A CMDB entry for an application server does not tell you that it makes 400 calls a minute to a licensing daemon on a host nobody remembers installing. Discovery exists to close that gap with measured data.</p>
+        <p>The second reason it is exam-relevant is right-sizing. A migration that lifts a fleet of eight-core, 32 GB virtual machines into identically sized EC2 instances is technically successful and financially indefensible. Discovery collects utilization data — CPU, memory, disk — over a window, and that data is what feeds the target instance recommendation. The exam will describe a customer with a large on-prem footprint, a fixed migration deadline, and a mandate to reduce run-rate cost, and the correct first move is discovery, not MGN.</p>
+        <p>There is also a governance dimension. Discovery data is what you present to a steering committee to justify wave sequencing. It is what you use to identify applications that are Retire candidates because nothing has connected to them in ninety days. It is what tells you that two applications you assumed were independent share a database, which means they cannot be migrated in separate waves without a temporary cross-environment dependency. None of that is derivable from an org chart.</p>
+        <p>Finally, the exam tests the boundary between discovery and assessment. Discovery is inventory and dependency collection. Assessment is the analysis layer on top — Migration Evaluator produces a business case with projected costs, and Migration Hub Strategy Recommendations produces modernization path recommendations. Candidates who conflate these will pick the wrong tool when a question asks specifically for a cost projection or a recommended target platform.</p>
+      </section>
+
+      <section class="doc-section" id="mechanism">
+        <h2 class="section-heading">2. How Discovery Actually Works</h2>
+        <p>Application Discovery Service has two collection mechanisms, and the difference between them is the single most important mechanical fact about the service. The agentless option is the Discovery Connector, a virtual appliance you deploy into your VMware environment as an OVA. It talks to vCenter over the VMware API and collects virtual machine inventory — hostnames, IP addresses, MAC addresses, CPU and memory allocation, disk configuration, and basic performance counters that vCenter already tracks. It requires no software on the guest operating systems, which means it works on machines you cannot touch, machines running operating systems you do not support, and appliances whose vendors will not permit agent installation.</p>
+        <p>The agent-based option is the Discovery Agent, a lightweight collector installed on each server. It reports the same inventory data plus two things the connector cannot see: process-level detail and network connections. Specifically, the agent records which processes are running, their resource consumption, and the outbound network connections each process makes — the remote address, port, and connection frequency. That connection data is what produces the dependency map. The connector can tell you a VM exists and how much CPU it uses; only the agent can tell you that the process on that VM is talking to a specific database on a specific host.</p>
+        <p>Both mechanisms write into the same place: the discovery data store, which is per-region and per-account, and which is queried through the Discovery API or viewed in the Migration Hub console. The data model is roughly three layers. The first is the server record — one per discovered host, with its configuration and utilization. The second is the process record, populated only by agents, describing what runs on each server. The third is the connection record, also agent-only, describing observed network flows between processes on different servers. The dependency map is a rendering of that third layer.</p>
+        <p>Collection is continuous rather than one-shot. Agents report on an ongoing basis, so utilization data accumulates into a window you can analyze rather than a single sample. This matters because a single CPU reading is nearly useless for right-sizing — you need to see the peak, and you need to see whether the peak is a daily pattern or a monthly batch job. The console exposes utilization over time, and the export path lets you pull the raw data into your own analysis if you want to model it differently.</p>
+        <p>Data can be exported. The Discovery API supports exporting collected data to S3, either as a one-time export or on a scheduled basis, and the export includes the server, process, and connection records. This is the mechanism by which discovery data reaches Migration Hub Strategy Recommendations and Migration Evaluator, and it is also how you get the data into a spreadsheet or a BI tool when you need to argue about wave sequencing with people who do not log into the AWS console.</p>
+        <p>One mechanical detail worth internalizing: the agent communicates outbound to the AWS endpoint over TLS, typically through a proxy or NAT path, and it does not require inbound connectivity. That is why discovery can be deployed in a segmented network where the migration team has no ability to open inbound firewall rules. The connector similarly needs outbound access to the AWS endpoint and network access to vCenter.</p>
+      </section>
+
+      <section class="doc-section" id="decision-boundary">
+        <h2 class="section-heading">3. The Core Decision Boundary: Agent or Agentless</h2>
+        <p>Every discovery scenario reduces to one fork: do you need dependency data, or do you only need inventory and utilization? That question determines whether you deploy agents, and it is the fork the exam tests most often. The reason it is a genuine fork rather than a preference is that the two mechanisms produce materially different datasets, and the difference is not a matter of degree. Agentless discovery gives you a complete picture of what exists. Agent-based discovery gives you a complete picture of what exists plus how it is connected. If your migration plan requires wave sequencing — and any migration of more than a handful of applications does — you need the connection data, because wave sequencing is fundamentally the problem of grouping applications that talk to each other into the same migration window.</p>
+        <p>The counter-pressure is operational. Agents require installation on every server, which means change control, which means a maintenance window per server or a coordinated rollout, which in a large estate can take weeks. Agents also require an operating system the agent supports, and they require someone with administrative access to install them. In environments with strict change management, a large population of appliances, or operating systems outside the supported matrix, agentless is the only option that can start today.</p>
+        <p>The practical resolution most organizations land on is a hybrid: deploy the connector first to get immediate inventory coverage across the whole VMware estate, then deploy agents selectively on the servers that matter for dependency mapping. The connector gives you the denominator — how many servers exist — while agents give you the numerator for the applications you are actually planning to move first. This is also the pattern the exam tends to reward, because it acknowledges the real constraint that you cannot always instrument everything.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Capability</th><th>Discovery Connector (agentless)</th><th>Discovery Agent</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Deployment</td><td>OVA appliance in VMware, talks to vCenter</td><td>Per-server software install</td></tr>
+              <tr><td>VM inventory (hostname, IP, CPU, memory, disk)</td><td>Yes</td><td>Yes</td></tr>
+              <tr><td>Utilization over time</td><td>Yes, from vCenter counters</td><td>Yes, measured in-guest</td></tr>
+              <tr><td>Running processes</td><td>No</td><td>Yes</td></tr>
+              <tr><td>Network connections between servers</td><td>No</td><td>Yes</td></tr>
+              <tr><td>Dependency map</td><td>Not produced</td><td>Produced from connection data</td></tr>
+              <tr><td>Works on unsupported OS / appliances</td><td>Yes</td><td>No</td></tr>
+              <tr><td>Change control burden</td><td>One appliance</td><td>Every server</td></tr>
+              <tr><td>Non-VMware sources</td><td>No (VMware only)</td><td>Yes, any supported OS</td></tr>
+            </tbody>
+          </table>
         </div>
-        <button class="scenario-reveal-btn" onclick="revealAnswer('d44q0', 1)">Reveal Answer</button>
-        <div class="scenario-explanation" id="exp-d44q0"><strong>Correct answer: B.</strong> Agent-based discovery installs a lightweight agent per server and captures fine-grained, process-level network connections — agentless discovery only gives VM-level inventory/utilization.</div>
-      </div>
+        <p>Note the last row carefully. The connector is VMware-specific because it depends on the vCenter API. If the source estate includes physical servers, Hyper-V, or another hypervisor, the connector cannot see them at all, and agents are the only path. Exam scenarios that mention physical servers alongside virtual ones are usually testing whether you noticed this.</p>
+      </section>
+
+      <section class="doc-section" id="config-tradeoffs">
+        <h2 class="section-heading">4. Collection Modes and Their Tradeoffs</h2>
+        <p>Beyond the agent-versus-agentless choice, there are configuration decisions that change what the data looks like and how much work the analysis downstream becomes. The first is the collection window. Utilization data is only as good as the period it covers, and the period has to be long enough to capture the workload's real peak. A server that runs a month-end financial close will look idle if you collect for a week in the middle of the month, and right-sizing it from that data will produce an instance that falls over on the first of the month. The general guidance is to collect across at least one full business cycle, which for most organizations means a month, and longer if there are quarterly or annual peaks.</p>
+        <p>The second decision is scope. Discovery can be deployed broadly across an entire data center or narrowly against a specific application's server group. Broad deployment gives you the complete dependency graph, which is what you need to detect the cross-application couplings that break wave plans. Narrow deployment is faster to stand up and produces less data to analyze, but it will miss dependencies that leave the scoped group — and those are exactly the dependencies that cause cutover surprises. The failure mode of narrow scoping is discovering during cutover that the application you moved calls a service you did not move.</p>
+        <p>The third is the export and retention pattern. Discovery data lives in the service, and you can export it to S3 on a schedule. Organizations that intend to do serious analysis — building a dependency graph in a graph database, joining discovery data against CMDB records to find discrepancies, or feeding a cost model — generally set up scheduled exports early rather than trying to pull everything at the end. The export is also the integration point with Migration Hub Strategy Recommendations, which consumes discovery data to produce modernization path recommendations.</p>
+        <p>The fourth is how you handle the agent rollout itself. Installing agents at scale is an operational project, not a configuration toggle. The realistic approaches are to bundle the agent into an existing configuration management pipeline, to deploy it via a scheduled task pushed by Group Policy or an equivalent, or to accept a slower manual rollout prioritized by migration wave. The choice affects your timeline more than your data quality, but it is the step that most often slips in real programs.</p>
+        <p>There is a fifth consideration that is easy to overlook: the agent's own footprint. It is lightweight by design, but it is still a process on a production server, and in environments with strict performance or compliance requirements that fact needs to be socialized before rollout rather than discovered during it. The same applies to the connector appliance, which consumes vCenter API calls and needs to be sized appropriately for the number of VMs it is polling.</p>
+      </section>
+
+      <section class="doc-section" id="sizing-limits">
+        <h2 class="section-heading">5. Sizing, Limits and Quotas</h2>
+        <p>The numbers that matter for discovery are mostly about scale and about what the service will and will not do at volume. The connector is deployed as a virtual appliance and is sized against the number of VMs in the vCenter it is polling; a single connector has a practical ceiling, and larger estates require multiple connectors, typically one per vCenter or per large cluster. The agent is designed to be low-impact and runs as a background process, reporting on an interval rather than continuously streaming.</p>
+        <p>Discovery data is regional. The service collects into the region where you have configured it, and the data store is per-account. This matters for organizations with data residency constraints, because it means you can choose the collection region deliberately rather than having it chosen for you. It also means that if you are running a multi-region migration, you need to think about where discovery data lives relative to where the migration tooling runs.</p>
+        <p>Export to S3 is the escape hatch for anything the console does not render well. The export produces structured records for servers, processes, and connections, and once in S3 you can query it with Athena, load it into a warehouse, or process it with whatever tooling your organization already has. There is no meaningful limit on how much you can export; the limit is on how much you can usefully analyze.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Dimension</th><th>What to know</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Connector deployment unit</td><td>One OVA appliance per vCenter (or per large cluster); multiple connectors for large estates</td></tr>
+              <tr><td>Agent deployment unit</td><td>One agent per server, installed in-guest</td></tr>
+              <tr><td>Data store scope</td><td>Per-region, per-account</td></tr>
+              <tr><td>Collection cadence</td><td>Continuous; utilization accumulates over a window rather than a single sample</td></tr>
+              <tr><td>Recommended collection window</td><td>At least one full business cycle (typically a month) to capture real peaks</td></tr>
+              <tr><td>Export target</td><td>S3, one-time or scheduled, covering server/process/connection records</td></tr>
+              <tr><td>Dependency data availability</td><td>Agent-based collection only</td></tr>
+              <tr><td>Non-VMware source support</td><td>Agent-based collection only</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>One quota-adjacent point that shows up in exam scenarios: discovery is not a real-time monitoring system and should not be treated as one. It is not a replacement for CloudWatch, and it does not produce alarms. Its output is a dataset for planning, refreshed on a cadence appropriate to planning rather than to incident response. Candidates who describe discovery as a monitoring solution have misread the service.</p>
+      </section>
+
+      <section class="doc-section" id="failure-modes">
+        <h2 class="section-heading">6. Failure Modes and What They Look Like in Production</h2>
+        <p>The most common failure mode is incomplete dependency data, and it is insidious because it does not announce itself. You deploy agents on the servers you know about, the dependency map renders, and it looks plausible. What it does not show is the dependency on a server you did not instrument — a licensing server, a jump host, a shared file server, an appliance. The map is not wrong; it is incomplete, and incompleteness in a dependency map is indistinguishable from absence of dependency unless you know the denominator. This is the strongest argument for deploying the connector across the whole estate first: it establishes how many servers exist, so you can tell whether your agent coverage is 95% or 40%.</p>
+        <p>The second failure mode is stale or misleading utilization data. If the collection window is too short, or if it happens to fall during a quiet period, the right-sizing recommendation will be too small. The symptom appears months later as an instance that performs fine in staging and falls over in production at the first peak. The diagnostic move is to check the collection window against the workload's known cycle — if the application has a monthly or quarterly peak, a two-week window is not evidence.</p>
+        <p>The third is agent installation failure on a subset of servers, which is usually silent. The agent installs, the service starts, and then the agent cannot reach the AWS endpoint because of a proxy configuration or a firewall rule that was not opened for that subnet. The server appears in inventory — because the connector saw it — but has no process or connection data. The symptom is a server that shows up in the server list but contributes nothing to the dependency map. The first diagnostic move is to check agent connectivity from the host, not to reinstall the agent.</p>
+        <p>The fourth is connector saturation. A single connector polling a very large vCenter can fall behind, producing inventory that lags reality. The symptom is servers that were decommissioned weeks ago still appearing, or newly provisioned servers not appearing. The fix is additional connectors, and the diagnostic is comparing connector-reported inventory against a known-good source.</p>
+        <p>The fifth, and the one that causes the most program-level damage, is treating discovery output as a migration plan. Discovery tells you what exists and how it is connected. It does not tell you what order to migrate in, which applications should be consolidated, or which should be retired. Those are analysis decisions made on top of the data. Programs that skip the analysis step and treat the dependency graph as a wave plan end up with waves that are technically valid and operationally nonsensical.</p>
+      </section>
+
+      <section class="doc-section" id="sre-angle">
+        <h2 class="section-heading">7. The Operational and SRE Angle</h2>
+        <p>Discovery is a planning tool, not a production system, so the SRE angle is about the discovery pipeline itself rather than about the workloads it observes. The pipeline has three components that can fail independently: the connector appliance, the agents, and the export path to S3. Each needs its own health check, and none of them is covered by the alarms you already have on production workloads.</p>
+        <p>For the connector, the health signal is whether it is successfully polling vCenter and whether the inventory it reports is current. A connector that has lost its vCenter credentials will keep running and keep reporting nothing new, which looks identical to a stable environment. The runbook shape is a periodic reconciliation: compare the connector's server count against vCenter's VM count, and alert on divergence beyond a threshold. That single check catches credential expiry, network partition, and saturation.</p>
+        <p>For agents, the health signal is the last-report timestamp per server. An agent that has stopped reporting is either stopped, disconnected, or the host is down. In a migration program, a server whose agent stopped reporting two weeks ago is a server whose dependency data is two weeks stale, and if that server is in the next wave, the wave plan is built on stale evidence. The runbook is a weekly report of servers with agent data older than a threshold, routed to the migration team rather than to on-call, because it is a planning defect rather than an incident.</p>
+        <p>For the export path, the health signal is the presence and freshness of the S3 objects. A scheduled export that silently stops produces a downstream analysis that quietly goes stale. This is the classic silent-failure pattern: nothing alarms, the dashboard still renders, and the numbers are three weeks old. The check is a freshness assertion on the export prefix, and it belongs in whatever monitoring you use for data pipelines.</p>
+        <p>There is a broader SRE point here that is worth stating explicitly. Discovery data has a shelf life. A dependency map built six months ago describes an environment that has changed, and the rate of change in most enterprises is high enough that a six-month-old map is a liability rather than an asset. If discovery is a one-time project that ends when the migration plan is written, the plan will be executed against a stale picture. The operational posture that works is continuous collection for the duration of the migration program, with the dependency map treated as a living artifact that is re-examined before each wave.</p>
+      </section>
+
+      <section class="doc-section" id="gotchas">
+        <h2 class="section-heading">8. Edge Cases and Exam Gotchas</h2>
+        <p>The single most-tested gotcha is the agentless-versus-agent dependency distinction. If a question asks for a dependency map, process-level detail, or network connections between servers, the answer requires agents. If it asks for inventory, utilization, or right-sizing data and mentions constraints that make agent installation impractical, the answer is the connector. Questions that mention both needs are usually testing whether you propose the hybrid approach.</p>
+        <p>The second gotcha is the VMware-only limitation of the connector. Any scenario that includes physical servers, a non-VMware hypervisor, or servers in a colocation facility without vCenter cannot be covered by the connector alone. This is a common distractor setup: the scenario describes a mixed estate and offers the connector as an answer, and the correct answer is agents or a hybrid.</p>
+        <p>The third is the distinction between discovery and assessment. Discovery collects data. Migration Evaluator builds a business case with cost projections. Migration Hub Strategy Recommendations produces modernization path recommendations. A question that asks for a projected cost of migrating a portfolio is asking for Migration Evaluator, not discovery, even though discovery data feeds it.</p>
+        <p>The fourth is the collection window. Any scenario that describes a workload with a periodic peak and a short collection window is testing whether you noticed that the utilization data is not representative. The correct answer usually involves extending collection rather than accepting the right-sizing recommendation.</p>
+        <p>The fifth is the relationship to Migration Hub. Discovery feeds Migration Hub; it does not replace it. Migration Hub is the tracking surface where applications move through states. Discovery is one of the inputs that populates it. A question that asks where you track migration progress across multiple tools is asking about Migration Hub.</p>
+        <p>The sixth is the data residency angle. Discovery data is regional and per-account. In a scenario with regulatory constraints on where data can be stored, the collection region is a deliberate choice, and the exam may test whether you considered it.</p>
+        <p>The seventh, and the one most often missed, is that discovery does not produce a migration plan. It produces the inputs to one. Any answer option that describes discovery as generating wave plans, recommending target platforms, or sequencing migrations has overstated the service.</p>
+      </section>
+
+      <section class="doc-section" id="vs-comparison">
+        <h2 class="section-heading">9. Discovery vs. the Services It Gets Confused With</h2>
+        <p>The services adjacent to discovery fall into three groups: the assessment layer above it, the migration execution layer below it, and the general-purpose inventory tools that look similar but serve a different purpose. Getting the boundaries right is most of what the exam tests in this area, because the individual services are not complicated — the confusion is entirely about which layer a given question is asking about.</p>
+        <p>The assessment layer is Migration Evaluator and Migration Hub Strategy Recommendations. Migration Evaluator is the business case tool: it takes discovery data and produces a projected cost comparison between running on-premises and running on AWS, including licensing considerations. Strategy Recommendations is the modernization advisor: it takes discovery data and produces recommendations about which applications are candidates for rehost, replatform, or refactor, along with target platform suggestions. Both consume discovery output; neither collects it.</p>
+        <p>The execution layer is MGN for rehost and DMS for database migration. These are the tools that actually move things. They come after discovery and after the plan, and they do not collect inventory themselves — MGN replicates servers it has been told about, and DMS replicates databases it has been configured for. A question that asks how to move 200 servers to EC2 is asking about MGN; a question that asks how to determine which 200 servers to move is asking about discovery.</p>
+        <p>The general-purpose inventory tools are AWS Config and Systems Manager Inventory. Config records resource configuration and configuration changes for resources already in AWS, and it is a compliance and drift tool. Systems Manager Inventory collects metadata from managed instances, which by definition are already in AWS and already running the SSM agent. Neither can see an on-premises estate, which is the entire point of Application Discovery Service. A scenario about discovering on-premises servers cannot be answered with Config or SSM Inventory.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Service</th><th>Layer</th><th>What it does</th><th>Pick it when…</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Application Discovery Service</td><td>Discovery</td><td>Collects on-prem inventory, utilization, processes, and network connections</td><td>You need to know what exists and how it is connected before planning</td></tr>
+              <tr><td>Migration Evaluator</td><td>Assessment</td><td>Builds a cost business case from discovery data</td><td>You need a projected on-prem vs. AWS cost comparison</td></tr>
+              <tr><td>Migration Hub Strategy Recommendations</td><td>Assessment</td><td>Recommends modernization paths and target platforms</td><td>You need guidance on rehost vs. replatform vs. refactor per app</td></tr>
+              <tr><td>Migration Hub</td><td>Tracking</td><td>Tracks application migration status across tools</td><td>You need one place to watch progress across the program</td></tr>
+              <tr><td>AWS MGN</td><td>Execution</td><td>Replicates and cuts over servers to EC2</td><td>You have decided to rehost and need to move the servers</td></tr>
+              <tr><td>AWS DMS</td><td>Execution</td><td>Migrates database data, with CDC for minimal downtime</td><td>You are moving database contents, not servers</td></tr>
+              <tr><td>AWS Config</td><td>Governance</td><td>Records configuration and changes for AWS resources</td><td>You need compliance and drift detection inside AWS</td></tr>
+              <tr><td>SSM Inventory</td><td>Operations</td><td>Collects metadata from managed EC2/on-prem instances with SSM agent</td><td>You need operational metadata for instances already under management</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The rule of thumb that resolves most of these: if the question is about an estate you cannot see, the answer is Application Discovery Service. If it is about deciding what to do with an estate you can now see, the answer is in the assessment layer. If it is about moving something you have already decided to move, the answer is in the execution layer. And if it is about resources already in AWS, the answer is almost never discovery.</p>
+      </section>
+
+      <section class="doc-section" id="lab">
+        <h2 class="section-heading">Hands-on Lab: Building a Discovery Dataset You Can Defend (45 min)</h2>
+        <div class="card card-green">
+          <p>This lab walks through the full discovery workflow against a small simulated estate, with the emphasis on the difference between what agentless and agent-based collection actually produce. You will not need a real vCenter; the goal is to build the reasoning and the artifacts, and to see where the two collection modes diverge. Work through the steps in order and keep notes, because the analysis at the end is the part that matters.</p>
+          <p><strong>Step 1 — Define the estate.</strong> Write down a fictional but realistic estate of twelve servers: four application servers, two database servers, one file server, one licensing server, one jump host, one monitoring server, one build server, and one appliance you cannot install software on. Assign each a role and a rough CPU/memory profile. The point of including the appliance is that it forces you to confront the coverage gap early.</p>
+          <p><strong>Step 2 — Model agentless collection.</strong> For each of the twelve servers, write down what the Discovery Connector would report: hostname, IP, CPU allocation, memory allocation, disk configuration, and a utilization figure. Note that all twelve appear, including the appliance, because the connector sees VMs regardless of what runs inside them. Note also that you have no idea which servers talk to which.</p>
+          <p><strong>Step 3 — Model agent-based collection.</strong> Now assume agents are installed on ten of the twelve servers — everything except the appliance and the jump host, which you could not get change approval for. For each of the ten, write down the processes running and the outbound connections. Deliberately include a connection from an application server to the licensing server, and a connection from two different application servers to the same database. Those two connections are the ones that will change your wave plan.</p>
+          <p><strong>Step 4 — Build the dependency map.</strong> Draw the graph from the connection data in step 3. Then answer three questions in writing. First, which applications are coupled through shared infrastructure? Second, which servers have no observed inbound connections, and are therefore Retire candidates? Third, which servers appear in inventory but contribute nothing to the map, and what does that tell you about your coverage?</p>
+          <p><strong>Step 5 — Identify the coverage gap.</strong> The appliance and the jump host have no agent data. Write down the specific risk this creates: if an application server depends on the appliance, you will not see it, and the dependency will surface during cutover. Then write down the mitigation — in this case, either getting agent approval for those two hosts or explicitly documenting them as known unknowns to be validated manually before the wave that contains their dependents.</p>
+          <p><strong>Step 6 — Right-size from utilization.</strong> Take the utilization figures from step 2 and produce a target instance recommendation for each server. Then deliberately shorten the collection window to three days and redo the recommendation for the server you designated as having a month-end peak. Note how much smaller the recommendation becomes and what that would cost you in production.</p>
+          <p><strong>Step 7 — Export and analyze.</strong> Describe the export you would configure: what records it contains, where it lands in S3, and what you would query it for. A reasonable answer includes joining the server records against the connection records to produce a per-application dependency count, which is the input to wave sequencing.</p>
+          <p><strong>Step 8 — Write the one-page summary.</strong> Produce a single page that a steering committee could read: how many servers exist, how many are instrumented, how many applications are identified, how many cross-application dependencies were found, and what the coverage gap is. This artifact is the actual deliverable of discovery, and it is what makes the 7 Rs classification defensible rather than aspirational.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="quiz">
+        <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q1.</strong> A migration team needs to map network dependencies between individual processes on each server before planning application groupings for migration waves. What captures this?</p>
+          <div class="scenario-options" id="opts-d44q1">
+            <div class="scenario-option">A. Agentless Discovery Connector only</div>
+            <div class="scenario-option">B. Agent-based discovery, which captures process-to-process network connections</div>            <div class="scenario-option">C. AWS Config</div>
+            <div class="scenario-option">D. CloudTrail</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d44q1', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d44q1"><strong>Correct answer: B.</strong> Agent-based discovery installs a lightweight agent per server and captures fine-grained, process-level network connections — agentless discovery only gives VM-level inventory and utilization.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q2.</strong> An enterprise has 400 VMware VMs plus 60 physical servers in a colocation facility. They need a complete inventory before planning migration waves. What is the correct approach?</p>
+          <div class="scenario-options" id="opts-d44q2">
+            <div class="scenario-option">A. Deploy the Discovery Connector only — it covers the whole estate</div>
+            <div class="scenario-option">B. Deploy the Discovery Connector for the VMware estate and Discovery Agents on the physical servers</div>
+            <div class="scenario-option">C. Use AWS Config to inventory both</div>
+            <div class="scenario-option">D. Use Systems Manager Inventory across both</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d44q2', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d44q2"><strong>Correct answer: B.</strong> The connector is VMware-specific because it depends on the vCenter API; physical servers require agents. A hybrid deployment is the only way to cover a mixed estate.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q3.</strong> A customer wants a projected cost comparison between running their current data center and running the same workloads on AWS, including licensing. Which service produces this?</p>
+          <div class="scenario-options" id="opts-d44q3">
+            <div class="scenario-option">A. Application Discovery Service</div>
+            <div class="scenario-option">B. Migration Evaluator</div>
+            <div class="scenario-option">C. AWS MGN</div>
+            <div class="scenario-option">D. AWS Cost Explorer</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d44q3', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d44q3"><strong>Correct answer: B.</strong> Migration Evaluator is the assessment-layer business case tool. Discovery collects the data; Evaluator turns it into a cost projection. Cost Explorer reports on spend you have already incurred.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q4.</strong> Discovery has been running for two weeks and the right-sizing recommendations look aggressive — several eight-core servers are recommended as two-core instances. The application has a month-end batch peak. What is the most likely problem?</p>
+          <div class="scenario-options" id="opts-d44q4">
+            <div class="scenario-option">A. The agent is misreporting CPU</div>
+            <div class="scenario-option">B. The collection window is too short to capture the monthly peak, so the utilization data is not representative</div>
+            <div class="scenario-option">C. The connector is polling the wrong vCenter</div>
+            <div class="scenario-option">D. Right-sizing recommendations are always conservative and should be ignored</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d44q4', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d44q4"><strong>Correct answer: B.</strong> Utilization data is only as good as the window it covers. A two-week window that misses a monthly peak will under-size the target, and the failure appears in production at the first peak.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q5.</strong> A dependency map shows an application server with no observed inbound connections and near-zero utilization for ninety days. What does this most likely indicate?</p>
+          <div class="scenario-options" id="opts-d44q5">
+            <div class="scenario-option">A. The agent is broken on that server</div>
+            <div class="scenario-option">B. The server is a Retire candidate — nothing depends on it and it is not doing work</div>
+            <div class="scenario-option">C. The server must be migrated first because it is isolated</div>
+            <div class="scenario-option">D. The connector missed it</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d44q5', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d44q5"><strong>Correct answer: B.</strong> No inbound connections plus negligible utilization is the signature of an orphaned server. Discovery data is what makes a Retire classification defensible rather than a guess.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q6.</strong> A server appears in the discovery inventory but contributes no process or connection data to the dependency map. What is the first diagnostic step?</p>
+          <div class="scenario-options" id="opts-d44q6">
+            <div class="scenario-option">A. Reinstall the agent</div>
+            <div class="scenario-option">B. Check whether the agent can reach the AWS endpoint from that host (proxy or firewall path)</div>
+            <div class="scenario-option">C. Add a second connector</div>
+            <div class="scenario-option">D. Delete and re-add the server record</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d44q6', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d44q6"><strong>Correct answer: B.</strong> A server visible in inventory but absent from the dependency map is the classic signature of an agent that installed but cannot reach the endpoint. Check connectivity before reinstalling.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q7.</strong> Which statement about the Discovery Connector is accurate?</p>
+          <div class="scenario-options" id="opts-d44q7">
+            <div class="scenario-option">A. It installs a lightweight agent on each VM</div>
+            <div class="scenario-option">B. It is an OVA appliance that polls vCenter and requires no software on the guests</div>
+            <div class="scenario-option">C. It produces the dependency map</div>
+            <div class="scenario-option">D. It works on any hypervisor</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d44q7', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d44q7"><strong>Correct answer: B.</strong> The connector is an agentless OVA appliance that talks to vCenter over the VMware API. It does not produce dependency data and it is VMware-specific.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q8.</strong> A migration program wants to feed discovery data into a graph database to analyze application coupling. What is the mechanism?</p>
+          <div class="scenario-options" id="opts-d44q8">
+            <div class="scenario-option">A. The Discovery API does not support export; data must be read from the console</div>
+            <div class="scenario-option">B. Export discovery data to S3, either one-time or on a schedule, then process it with your own tooling</div>
+            <div class="scenario-option">C. Use AWS Config aggregators</div>
+            <div class="scenario-option">D. Stream from CloudWatch Logs</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d44q8', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d44q8"><strong>Correct answer: B.</strong> Discovery data can be exported to S3 as server, process, and connection records, which is the integration point for custom analysis and for downstream assessment tools.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q9.</strong> A customer asks which service will recommend whether each application should be rehosted, replatformed, or refactored, with target platform suggestions. What should you recommend?</p>
+          <div class="scenario-options" id="opts-d44q9">
+            <div class="scenario-option">A. Application Discovery Service</div>
+            <div class="scenario-option">B. Migration Hub Strategy Recommendations</div>
+            <div class="scenario-option">C. AWS MGN</div>
+            <div class="scenario-option">D. AWS Trusted Advisor</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d44q9', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d44q9"><strong>Correct answer: B.</strong> Strategy Recommendations is the assessment-layer modernization advisor. Discovery collects the data it consumes; it does not produce the recommendations itself.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q10.</strong> Discovery agents have been deployed on 40% of a 500-server estate. The dependency map looks complete and plausible. What is the primary risk?</p>
+          <div class="scenario-options" id="opts-d44q10">
+            <div class="scenario-option">A. None — the map is accurate for the servers it covers</div>
+            <div class="scenario-option">B. The map is incomplete, and incompleteness is indistinguishable from absence of dependency unless you know the total server count</div>
+            <div class="scenario-option">C. The agents will overload the network</div>
+            <div class="scenario-option">D. The connector will conflict with the agents</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d44q10', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d44q10"><strong>Correct answer: B.</strong> A partial dependency map does not look partial. Deploying the connector across the whole estate first establishes the denominator so you can measure coverage.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q11.</strong> Which of the following can Application Discovery Service NOT do?</p>
+          <div class="scenario-options" id="opts-d44q11">
+            <div class="scenario-option">A. Collect CPU and memory utilization from on-premises servers</div>
+            <div class="scenario-option">B. Produce a dependency map of network connections between servers</div>
+            <div class="scenario-option">C. Generate a sequenced migration wave plan</div>
+            <div class="scenario-option">D. Export collected data to S3</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d44q11', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d44q11"><strong>Correct answer: C.</strong> Discovery produces the inputs to a wave plan — inventory, utilization, dependencies — but the sequencing decision is analysis performed on top of that data, not a service output.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q12.</strong> A company has strict change control and cannot install software on 300 production servers within the migration timeline, but still needs inventory and utilization data to size targets. What should they deploy?</p>
+          <div class="scenario-options" id="opts-d44q12">
+            <div class="scenario-option">A. Discovery Agents on all 300 servers</div>
+            <div class="scenario-option">B. The Discovery Connector, which requires no guest software and provides inventory and utilization</div>
+            <div class="scenario-option">C. AWS Config rules</div>
+            <div class="scenario-option">D. CloudWatch agents</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d44q12', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d44q12"><strong>Correct answer: B.</strong> The connector delivers inventory and utilization without touching the guests. The tradeoff is that it produces no dependency data, which is acceptable if the immediate need is right-sizing.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q13.</strong> Discovery data was collected six months ago and the migration plan was written from it. The first wave is about to execute. What is the most important action?</p>
+          <div class="scenario-options" id="opts-d44q13">
+            <div class="scenario-option">A. Nothing — the plan is already written</div>
+            <div class="scenario-option">B. Re-validate the dependency data for the servers in the first wave, since the environment has changed since collection</div>
+            <div class="scenario-option">C. Delete the old data and start over</div>
+            <div class="scenario-option">D. Switch from agents to the connector</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d44q13', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d44q13"><strong>Correct answer: B.</strong> Discovery data has a shelf life. A six-month-old dependency map describes an environment that has changed, and the wave about to execute is the one where staleness causes cutover surprises.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q14.</strong> A single Discovery Connector is polling a vCenter with 3,000 VMs. Servers decommissioned weeks ago still appear in inventory, and newly provisioned servers do not. What is the most likely cause?</p>
+          <div class="scenario-options" id="opts-d44q14">
+            <div class="scenario-option">A. The agents are misconfigured</div>
+            <div class="scenario-option">B. The connector is saturated and falling behind; additional connectors are needed</div>
+            <div class="scenario-option">C. vCenter has a bug</div>
+            <div class="scenario-option">D. Discovery does not support estates that large</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d44q14', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d44q14"><strong>Correct answer: B.</strong> A single connector has a practical ceiling. Lagging inventory — stale entries plus missing new ones — is the signature of saturation, and the fix is additional connectors.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q15.</strong> Which pairing correctly matches a discovery input to the downstream service that consumes it?</p>
+          <div class="scenario-options" id="opts-d44q15">
+            <div class="scenario-option">A. Discovery data → AWS MGN, which uses it to replicate servers</div>
+            <div class="scenario-option">B. Discovery data → Migration Evaluator for cost business case, and → Migration Hub Strategy Recommendations for modernization paths</div>
+            <div class="scenario-option">C. Discovery data → AWS Config for compliance reporting</div>
+            <div class="scenario-option">D. Discovery data → CloudWatch for utilization alarms</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d44q15', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d44q15"><strong>Correct answer: B.</strong> The assessment layer consumes discovery output: Migration Evaluator for the cost case and Strategy Recommendations for modernization guidance. MGN and DMS are execution tools that operate on decisions already made.</div>
+        </div>
+      </section>
+
+      <section class="doc-section" id="preview">
+        <h2 class="section-heading">Peek into Tomorrow</h2>
+        <div class="card card-purple">
+          <p>Discovery has given us a defensible inventory and a dependency map, and the 7 Rs have given us a classification for each application. What none of that addresses is the actual mechanics of the move. When an application is classified as Rehost, the question that follows immediately is how the server gets from a data center to EC2 without a multi-day outage, and how you validate that the target works before you commit to the cutover. That is a harder problem than it sounds, because the source server keeps running and keeps changing while you prepare the target.</p>
+          <p>The open question is whether you can replicate a running server continuously, in the background, without disrupting it, and then cut over in a window measured in minutes rather than days. That requires continuous block-level replication to a staging area in AWS, the ability to launch test instances from that staging area at any point without affecting the source, and a cutover step that is short enough to fit inside a maintenance window. It also raises a question about the tooling itself: the older CloudEndure and Server Migration Service workflows are being replaced, and knowing which tool is current matters for exam answers. Tomorrow's topic is the service that answers all of this.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="sources">
+        <h2 class="section-heading">Sources</h2>
+        <div class="card">
+          <ul class="source-list">
+            <li><a href="https://docs.aws.amazon.com/application-discovery/latest/userguide/what-is-appdiscovery.html" target="_blank" rel="noopener">AWS Application Discovery Service — User Guide: What Is Application Discovery Service?</a></li>
+            <li><a href="https://docs.aws.amazon.com/application-discovery/latest/userguide/discovery-agent.html" target="_blank" rel="noopener">AWS Application Discovery Service — Discovery Agent</a></li>
+            <li><a href="https://docs.aws.amazon.com/application-discovery/latest/userguide/discovery-connector.html" target="_blank" rel="noopener">AWS Application Discovery Service — Discovery Connector</a></li>
+            <li><a href="https://docs.aws.amazon.com/application-discovery/latest/userguide/export-data.html" target="_blank" rel="noopener">AWS Application Discovery Service — Exporting Discovered Data</a></li>
+            <li><a href="https://docs.aws.amazon.com/application-discovery/latest/userguide/discovery-whatis.html" target="_blank" rel="noopener">AWS Application Discovery Service — How It Works</a></li>
+            <li><a href="https://docs.aws.amazon.com/migrationhub/latest/ug/whatishub.html" target="_blank" rel="noopener">AWS Migration Hub — User Guide</a></li>
+            <li><a href="https://aws.amazon.com/migration-evaluator/" target="_blank" rel="noopener">AWS Migration Evaluator — Product Page</a></li>
+            <li><a href="https://docs.aws.amazon.com/migrationhub-strategy/latest/userguide/what-is-migrationhub-strategy.html" target="_blank" rel="noopener">Migration Hub Strategy Recommendations — User Guide</a></li>
+            <li><a href="https://docs.aws.amazon.com/prescriptive-guidance/latest/migration-discovery-assessment/welcome.html" target="_blank" rel="noopener">AWS Prescriptive Guidance — Migration Discovery and Assessment</a></li>
+          </ul>
+        </div>
       </section>
       <div class="day-nav">
         <a href="day-043.html">&larr; Day 43: Migration Strategy Framework — The 7 Rs &amp; Migration Hub</a>

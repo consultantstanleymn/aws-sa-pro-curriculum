@@ -62,6 +62,20 @@
       <a href="day-036.html" class="nav-link" data-day="36">Day 36: Multi-Region Active-Passive &amp; Pilot Light Patterns</a>
       <a href="day-037.html" class="nav-link" data-day="37">Day 37: Route 53 Application Recovery Controller (ARC)</a>
       <a href="day-038.html" class="nav-link" data-day="38">Day 38: Route 53 Routing Policies &amp; Health Checks</a>
+      <a href="#recap" class="nav-link">Recap</a>
+      <a href="#why-on-exam" class="nav-link">1. Why This Is on the Exam</a>
+      <a href="#mechanism" class="nav-link">2. How Routing and Health Checking Work</a>
+      <a href="#decision-boundary" class="nav-link">3. The Core Decision Boundary</a>
+      <a href="#config-tradeoffs" class="nav-link">4. Configuration Modes and Tradeoffs</a>
+      <a href="#sizing-limits" class="nav-link">5. Sizing, Limits and Quotas</a>
+      <a href="#failure-modes" class="nav-link">6. Failure Modes in Production</a>
+      <a href="#sre-angle" class="nav-link">7. The Operational and SRE Angle</a>
+      <a href="#gotchas" class="nav-link">8. Edge Cases and Exam Gotchas</a>
+      <a href="#vs-comparison" class="nav-link">9. This vs. the Services It Gets Confused With</a>
+      <a href="#lab" class="nav-link">Hands-on Lab</a>
+      <a href="#quiz" class="nav-link">Scenario Question Drills</a>
+      <a href="#preview" class="nav-link">Peek into Tomorrow</a>
+      <a href="#sources" class="nav-link">Sources</a>
       <a href="day-039.html" class="nav-link" data-day="39">Day 39: RTO/RPO Design Patterns &amp; Backup Strategies (AWS Backup)</a>
       <a href="day-040.html" class="nav-link" data-day="40">Day 40: Well-Architected Reliability Pillar Deep Dive</a>
       <a href="day-041.html" class="nav-link" data-day="41">Day 41: Well-Architected Operational Excellence Pillar</a>
@@ -104,36 +118,328 @@
         <span class="pill pill-green">Phase 3: SRE Observability, Resilience &amp; DR</span>
       </div>
       <h1 class="hero-title">Route 53 Routing Policies &amp; Health Checks</h1>
-      <div class="reading-meta">&#128337; ~3 min read &middot; 2 services covered</div>
+      <div class="reading-meta">&#128337; ~58 min read &middot; 2 services covered</div>
       <div class="services-grid">
         <span class="service-tag">Route 53</span>
         <span class="service-tag">Latency/Weighted/Failover/Geoproximity Routing</span>
       </div>
       <div id="tracker"></div>
-      <section class="doc-section">
-        <h2 class="section-heading">Today's Concept</h2>
+      <section class="doc-section" id="recap">
+        <h2 class="section-heading">Recap: From Deterministic Failover to Everyday Traffic Steering</h2>
         <div class="card card-accent">
-          <p>Route 53 supports simple, weighted (canary/A-B), latency-based, failover, geolocation, geoproximity (with bias), and multi-value answer routing — each paired with health checks that automatically remove unhealthy endpoints from DNS responses.</p>
-        </div>
-        <h3 class="sub-heading">Hands-on Lab / Practical Action (45 min)</h3>
-        <div class="card">
-          <p>Configure weighted routing to shift 5% of traffic to a canary deployment, combined with a health check that automatically pulls it from rotation on failure.</p>
+          <p>Route 53 Application Recovery Controller answered a specific question: when a region is genuinely lost, how do you flip traffic in a way you can prove was correct? Its readiness checks continuously validate that a standby region actually has the capacity and configuration to absorb production load, and its routing controls live on a control plane independent of any single region, so the failover mechanism itself does not fail with the thing it is failing over from. That combination is what makes ARC failover deterministic and auditable rather than a hopeful side effect of health checks.</p>
+          <p>Today sits on the same service family and inverts the failure mode. ARC is about the rare, catastrophic, human-authorized event: a region is gone, an operator or automation makes a deliberate call, and the audit trail matters as much as the outcome. Route 53 routing policies and health checks are about the continuous, unglamorous, automatic case — a single endpoint degrades, a canary release starts misbehaving, one Availability Zone's targets stop answering, and DNS quietly stops handing out that address without anyone being paged. Same service, opposite failure mode: ARC handles the failure you plan for, health checks handle the failure you hope never needs a human.</p>
         </div>
       </section>
-      <section class="doc-section">
+      <section class="doc-section" id="why-on-exam">
+        <h2 class="section-heading">1. Why This Is on the Exam</h2>
+        <p>Route 53 is the only service in the AWS portfolio that sits in front of essentially every other service, which means it appears in scenario questions that are nominally about something else. A question about a multi-region active-active application, a blue/green deployment, a canary release, a hybrid DNS design, or a disaster recovery runbook will almost always have a routing policy decision buried in it, and that decision is frequently the difference between the two most plausible answer choices. The exam does not ask you to recite the list of policies; it asks you to recognize which policy the stated constraints force you into, and then to notice whether the answer choice also handles the health-check behavior the scenario implies.</p>
+        <p>This maps most directly to Domain 2, Design Resilient Architectures, because routing policy plus health checks is the mechanism by which a multi-AZ or multi-region design actually fails over. It also reaches into Domain 1 through hybrid DNS and private hosted zones, and into Domain 4 whenever a scenario asks you to shift a small percentage of traffic to a new version and roll back cheaply if it goes wrong. The recurring trap is that candidates learn the policy names as a vocabulary list and then pick the one whose name sounds closest to the scenario's adjective — "lowest latency" maps to latency-based, "closest" maps to geoproximity — without checking whether the scenario also requires failover, which is a separate configuration on top of the policy, not a property of it.</p>
+        <p>There is a second reason this day carries weight. Health checks are the part of Route 53 that most candidates under-specify. A routing policy without a health check is a static answer; a routing policy with a health check is a self-healing system. Exam scenarios that describe an outage and ask what would have prevented it are usually testing whether you attached health checks to the records, whether you pointed them at the right thing (an endpoint, a calculated set of other checks, or a CloudWatch alarm), and whether you understood that a health check failing does not remove a record from a simple routing policy at all.</p>
+      </section>
+      <section class="doc-section" id="mechanism">
+        <h2 class="section-heading">2. How Routing and Health Checking Actually Work</h2>
+        <p>Route 53 is an authoritative DNS service, and the mental model that makes everything else fall into place is that a routing policy is a rule evaluated at query time, not a static zone file. When a resolver asks for a name, Route 53 evaluates the record set for that name, applies the policy, filters out any records whose associated health check is failing, and returns the surviving answer or answers. That evaluation happens per query, which is why weighted routing can shift percentages gradually and why a failing health check can take an endpoint out of rotation without any deployment. The client never learns that a policy exists; it just receives an answer, and the answer changes as conditions change.</p>
+        <p>Health checks are separate resources that Route 53 evaluates on its own schedule, independent of incoming queries. A health check can monitor an endpoint directly over HTTP, HTTPS, or TCP, or it can be a calculated health check that combines the status of several child checks with boolean logic, or it can be tied to a CloudWatch alarm so that any metric you can alarm on becomes a routing signal. The endpoint health checker originates requests from a set of Route 53 health-checker IP ranges distributed globally, and it considers an endpoint healthy only when a threshold number of consecutive checks succeed. That threshold behavior is what prevents a single dropped packet from flapping your DNS answers.</p>
+        <p>The interaction between the two is where most of the exam's nuance lives. Health checks attach to individual records within a record set, so a weighted record set with three records can have three different health checks, and a failing one is simply excluded from the weighted distribution — the remaining weights are renormalized across the healthy records. For failover routing, the primary and secondary records each carry a health check, and the secondary is only returned when the primary's check is failing. For simple routing, there is exactly one record and no health-check-driven removal, which is the single most commonly missed fact in this topic: you cannot make a simple routing record fail over, because there is nothing to fail over to.</p>
+        <p>Alias records deserve their own note because they change what you are pointing at. An alias record points at an AWS resource — an ALB, a CloudFront distribution, an S3 website endpoint, another Route 53 record in the same zone — and Route 53 resolves it to the resource's current addresses without you managing them. Alias records are free to query, they can be used at the zone apex where a CNAME cannot, and they inherit the health of the target when the target is an AWS resource that Route 53 can evaluate. Most production designs use alias records for the leaf answers and CNAMEs only where a non-AWS hostname must be referenced.</p>
+      </section>
+      <section class="doc-section" id="decision-boundary">
+        <h2 class="section-heading">3. The Core Decision Boundary: Which Policy Does the Constraint Force?</h2>
+        <p>Every routing question reduces to one fork: is the scenario asking you to distribute traffic by a measurable property of the request, or to select a single answer based on a condition? Distribution policies — weighted, latency, geolocation, geoproximity, multi-value — return one or more answers chosen by a rule and are used when you want traffic spread across endpoints. Selection policies — failover, and simple in its degenerate case — return a specific answer and are used when you want a deterministic choice between a primary and a standby. Getting this fork right eliminates most wrong answers immediately, because a scenario that says "route users to the region closest to them" cannot be satisfied by failover, and a scenario that says "serve from the standby only when the primary is down" cannot be satisfied by latency routing.</p>
+        <p>The second-order question is what the policy measures. Latency-based routing measures the network latency AWS observes between the requester and each region, which is a property of the network path and not of geography — a user in one city may be routed to a region that is not the geographically nearest one because the measured path is faster. Geolocation routing measures where the DNS query originated, at the level of continent, country, or US state, and returns the answer you mapped to that location regardless of how fast the path is. Geoproximity routing measures distance from the resource to the requester and lets you bias the result, which is the only policy that lets you deliberately pull traffic toward or away from a region by a tunable amount. These three are the ones candidates conflate most, and the distinguishing question is always "what is being measured, and can I tune it?"</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Policy</th><th>What it measures</th><th>Answers returned</th><th>Health-check failover</th><th>Typical use</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Simple</td><td>Nothing</td><td>One</td><td>No</td><td>Single endpoint, no redundancy</td></tr>
+              <tr><td>Weighted</td><td>Assigned weight per record</td><td>One (probabilistically)</td><td>Yes, per record</td><td>Canary, A/B, gradual migration</td></tr>
+              <tr><td>Latency</td><td>Measured network latency to region</td><td>One (lowest latency)</td><td>Yes, per record</td><td>Multi-region active-active</td></tr>
+              <tr><td>Failover</td><td>Primary health state</td><td>One (primary or secondary)</td><td>Yes, that is the point</td><td>Active-passive DR</td></tr>
+              <tr><td>Geolocation</td><td>Query origin (continent/country/state)</td><td>One (mapped)</td><td>Yes, per record</td><td>Data residency, localization</td></tr>
+              <tr><td>Geoproximity</td><td>Distance, with tunable bias</td><td>One (nearest after bias)</td><td>Yes, per record</td><td>Shifting traffic share between regions</td></tr>
+              <tr><td>Multi-value answer</td><td>Nothing (returns up to eight healthy records)</td><td>Up to eight</td><td>Yes, per record</td><td>Client-side load spreading without an ELB</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>Multi-value answer routing is the odd one out and is worth calling out because its name misleads. It is not a load balancer and it does not weight anything; it returns up to eight healthy records in a single response and lets the client pick, which is useful when you want crude redundancy without paying for an ELB but is not a substitute for one. If a scenario needs session affinity, connection draining, or per-target health semantics richer than "is this IP answering," multi-value is the wrong answer and an ALB behind a single alias record is the right one.</p>
+      </section>
+      <section class="doc-section" id="config-tradeoffs">
+        <h2 class="section-heading">4. Configuration Modes and Their Tradeoffs</h2>
+        <p>Weighted routing is the policy most often configured incorrectly, because the weights are relative rather than absolute and because the behavior when a record fails is not what people expect. Each record in a weighted set carries a number, and Route 53 returns a record with probability proportional to its weight divided by the sum of all weights in the set. Setting one record to 95 and another to 5 gives you a five percent canary, but setting them to 19 and 1 gives you exactly the same split — the numbers are ratios, not percentages. When a record's health check fails, that record is removed from the set and the remaining weights are renormalized, so a 95/5 split with the 5 failing becomes 100/0 rather than 95/5. That renormalization is usually what you want, but it means a canary that fails does not leave you serving 95 percent of traffic to a healthy primary and five percent to nothing; it leaves you serving everything to the primary, which is the correct outcome and worth stating explicitly in a runbook.</p>
+        <p>Failover routing is the simplest policy to reason about and the easiest to get subtly wrong. You designate one record as primary and one as secondary, attach a health check to the primary, and Route 53 returns the secondary only while the primary's check is failing. The subtlety is that the secondary is not health-checked in the same way — if the secondary is also unhealthy, Route 53 will still return it, because failover routing has no third option. A robust active-passive design therefore either health-checks the secondary too and accepts that a double failure returns nothing, or pairs failover routing with a separate mechanism that alerts on secondary unhealthiness. The other subtlety is TTL: failover is only as fast as your DNS TTL allows, because resolvers and clients cache the previous answer until it expires.</p>
+        <p>Latency and geoproximity routing both spread traffic across regions but differ in tunability. Latency routing is entirely automatic — you cannot tell Route 53 to prefer one region over another for a given user, only to prefer the lowest-latency healthy one. Geoproximity routing adds a bias parameter per record, expressed as a positive or negative number, which expands or shrinks the geographic area from which a region attracts traffic. That bias is the mechanism for deliberately shifting load between two healthy regions without taking either out of service, which is exactly what a gradual regional migration or a capacity rebalance looks like. If a scenario says "shift traffic gradually from us-east-1 to us-west-2 while both are healthy," geoproximity with bias is the answer; latency routing cannot express that intent.</p>
+        <p>Health-check configuration has its own tradeoff surface. The interval determines how quickly you detect failure and how much you pay, with a fast interval costing more per check. The failure threshold determines how many consecutive failures are required before the endpoint is considered unhealthy, and the success threshold determines how many consecutive successes are required before it is considered healthy again. Raising the failure threshold reduces false positives from transient blips at the cost of slower detection; raising the success threshold prevents flapping back into rotation too eagerly. For a canary deployment, a low failure threshold with a fast interval is usually right, because you want to pull a bad canary out quickly and you are not worried about a brief false positive on a five percent slice. For a primary region in an active-passive design, a slightly higher failure threshold is defensible because a spurious failover is expensive.</p>
+      </section>
+      <section class="doc-section" id="sizing-limits">
+        <h2 class="section-heading">5. Sizing, Limits and Quotas</h2>
+        <p>The numbers that matter here are mostly about how many records and health checks you can have and how fast health checking can react, and they are worth knowing because exam scenarios occasionally hinge on whether a design is even expressible. Route 53 allows a large number of records per hosted zone and a large number of hosted zones per account, with the default hosted zone quota being 500 per account and adjustable upward by request. Record sets within a single name are limited to 100 records for most routing policies, which is the practical ceiling on how finely you can slice a weighted distribution — you cannot express a thousand-way split within one record set.</p>
+        <p>Health checks have their own quotas and their own cost model. The default quota is 200 health checks per account, adjustable by request, and each health check is billed monthly with a higher rate for the fast interval and for checks that use HTTPS with SNI or that are configured with string matching. Calculated health checks and CloudWatch-alarm-based health checks count against the same quota. The fast interval is 10 seconds with a 30-second default, and the standard interval is 30 seconds; the failure threshold defaults to three consecutive failures, which means a standard-interval check takes roughly 90 seconds to declare an endpoint unhealthy before DNS even begins to change.</p>
+        <p>TTL is the number that most often determines real-world failover time and is the one candidates forget to include in their arithmetic. A record with a 300-second TTL can be cached by resolvers and clients for five minutes after Route 53 stops returning it, so the effective failover window is the health-check detection time plus the TTL, not just the detection time. Lowering TTL to 60 seconds shortens that window at the cost of more query volume and slightly higher resolution latency, and it is the standard tradeoff for records that participate in failover. Alias records to AWS resources do not have a user-settable TTL in the same way, because Route 53 resolves them to the resource's addresses, which is one more reason alias records are preferred for the leaf answers in a failover design.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Setting</th><th>Default / typical value</th><th>Why it matters</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Hosted zones per account</td><td>500 (adjustable)</td><td>Ceiling on how many domains you can host</td></tr>
+              <tr><td>Records per record set</td><td>100</td><td>Limits how finely a weighted split can be sliced</td></tr>
+              <tr><td>Health checks per account</td><td>200 (adjustable)</td><td>Shared across endpoint, calculated, and alarm checks</td></tr>
+              <tr><td>Health check interval</td><td>30s standard, 10s fast</td><td>Sets detection latency; fast interval costs more</td></tr>
+              <tr><td>Failure threshold</td><td>3 consecutive failures</td><td>~90s to declare unhealthy at standard interval</td></tr>
+              <tr><td>Record TTL</td><td>300s common, 60s for failover</td><td>Adds directly to effective failover time</td></tr>
+              <tr><td>Multi-value answers</td><td>Up to 8 healthy records</td><td>Ceiling on client-side spreading without an ELB</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+      <section class="doc-section" id="failure-modes">
+        <h2 class="section-heading">6. Failure Modes and What They Look Like in Production</h2>
+        <p>The most common production failure is a health check that is technically working but monitoring the wrong thing. A health check pointed at an ALB's DNS name over HTTPS will report healthy as long as the load balancer answers, even if every target behind it is failing, because the ALB itself is still responding — possibly with a 503 that the health check is not configured to treat as unhealthy. The symptom is a routing policy that never fails over during a real application outage, and the first diagnostic move is to look at what the health check is actually requesting and what status codes it accepts. Pointing the check at a dedicated deep-health endpoint that exercises the application's dependencies, and configuring it to accept only 200, is the standard fix.</p>
+        <p>The second common failure is a health check that is too aggressive and causes flapping. If the failure threshold is one and the interval is fast, a brief network hiccup or a garbage-collection pause can mark a healthy endpoint unhealthy, Route 53 removes it, traffic shifts, the endpoint recovers, and the check marks it healthy again — and the cycle repeats. The symptom is oscillating DNS answers and traffic that never settles, visible in the health-check status history and in uneven request distribution across targets. The fix is to raise the failure threshold, raise the success threshold so recovery is also confirmed rather than assumed, and make sure the health check's timeout is comfortably below its interval so slow responses are not counted as failures by accident.</p>
+        <p>The third failure is the one that produces the most confusing incident reports: a failover that does not happen because the record was never eligible to fail over. Simple routing records have no failover behavior, so a scenario where the only record points at a dead endpoint will keep returning that endpoint until someone changes the record. Similarly, a weighted record set where every record has failed returns nothing at all, which surfaces to users as NXDOMAIN or SERVFAIL rather than as a slow response. And a failover configuration where the secondary record has no health check will happily return a secondary that is also down. The diagnostic move in all three cases is the same: enumerate the record set, confirm each record's health-check association, and confirm that at least one record can be healthy under the current conditions.</p>
+        <p>Finally, there is the failure mode that is not a failure of Route 53 at all but of the assumption that DNS is instantaneous. A team declares a five-minute RTO, configures failover routing correctly, and then discovers that clients with long-lived connections never re-resolve and keep talking to the failed endpoint for hours. The symptom is a failover that looks successful in Route 53's console while a subset of users remains broken. The fix is architectural rather than DNS-level: keep TTLs low, ensure clients re-resolve on connection failure, and for the cases where DNS caching cannot be controlled, use a network-layer mechanism such as Global Accelerator that does not depend on the client re-resolving at all.</p>
+      </section>
+      <section class="doc-section" id="sre-angle">
+        <h2 class="section-heading">7. The Operational and SRE Angle</h2>
+        <p>From an SRE perspective, routing policy and health checks are the outermost layer of your availability story, and they deserve the same monitoring discipline as the application itself. The signals worth watching are health-check status transitions, which Route 53 publishes as CloudWatch metrics per health check, and the distribution of answers actually being returned. A health check that has been flapping — alternating between healthy and unhealthy — is a leading indicator of an unstable endpoint, and it is visible in the status metric before it shows up as user-visible latency. Alarming on health-check status changes rather than only on the resulting error rate gives you a head start on the incident.</p>
+        <p>The SLO implication is that your effective availability is bounded by the routing layer's ability to detect and route around failure, not just by the health of individual endpoints. If your health check takes 90 seconds to detect a failure and your TTL is 300 seconds, then a single-endpoint failure costs you roughly six and a half minutes of degraded service for some fraction of users, and that number belongs in your error budget arithmetic. Writing it down explicitly — detection time plus TTL equals worst-case failover window — turns a vague "we have failover" claim into a number you can defend, and it is exactly the kind of reasoning the exam rewards when it asks you to choose between two failover designs.</p>
+        <p>The runbook shape follows from that. A routing-layer runbook should answer four questions in order: which record set is involved and what policy does it use, what is the current health-check status for each record in that set, what is the TTL and therefore how long until clients see a change, and is the standby actually healthy right now. That last question is the one that separates a working runbook from a hopeful one, and it is the same question Route 53 ARC's readiness checks answer continuously for the region-level case. For day-to-day operations, the practical discipline is to treat health checks as production configuration under change control, review them whenever the application's dependency graph changes, and re-test failover deliberately rather than assuming it still works because it worked when it was built.</p>
+      </section>
+      <section class="doc-section" id="gotchas">
+        <h2 class="section-heading">8. Edge Cases and Exam Gotchas</h2>
+        <p>The single most reliable gotcha is that simple routing has no health-check-driven failover. If a scenario describes a single record and asks how to make it resilient, the answer is never "add a health check to the simple record" — it is to move to a policy that supports multiple records, or to put a load balancer behind the record and let the load balancer handle target health. Candidates lose points here because "attach a health check" is the correct instinct for almost every other policy and is simply unavailable for this one.</p>
+        <p>The second gotcha is the distinction between latency and geoproximity when the scenario mentions compliance or data residency. Latency routing optimizes for speed and will happily send a European user to a US region if that path measures faster, which violates a residency requirement. Geolocation routing pins users to a mapped location regardless of speed, which satisfies residency but can be slower. Geoproximity is a distance-based compromise with a tunable bias and is not a residency control. If the scenario says "data must remain in the EU," the answer is geolocation, not latency, and not geoproximity.</p>
+        <p>The third gotcha is that health checks can be based on CloudWatch alarms, which means any metric you can alarm on becomes a routing input. This is the escape hatch for conditions Route 53 cannot probe directly — a queue depth, a custom business metric, a database replication lag — and scenarios that describe routing based on something other than endpoint reachability are usually pointing at this. The related gotcha is calculated health checks, which combine child checks with boolean logic and are the mechanism for expressing "healthy if at least two of these three regions are healthy," a pattern that appears in multi-region designs.</p>
+        <p>The remaining gotchas are smaller but recur. Alias records are required at the zone apex because CNAMEs are not permitted there, and alias records to AWS resources are free to query. Weighted records with all weights set to zero behave as if all records are equally weighted, which is a common accidental configuration. A health check that monitors an endpoint by IP address rather than by hostname will not send the Host header the application expects, producing false unhealthy results. And multi-value answer routing returns up to eight records but does not perform any health-based load balancing beyond excluding unhealthy records, so it is not a substitute for an ELB when the scenario needs connection-level behavior.</p>
+      </section>
+      <section class="doc-section" id="vs-comparison">
+        <h2 class="section-heading">9. This vs. the Services It Gets Confused With</h2>
+        <p>Route 53 routing policies are frequently confused with Global Accelerator and with load balancers, and the confusion is understandable because all three distribute traffic. The distinction is the layer at which the decision is made and what the client experiences. Route 53 makes the decision in DNS, which means the client receives an address and connects to it directly, which in turn means the decision is cached and the failover speed is bounded by TTL. Global Accelerator makes the decision at the network edge using static anycast IPs, so the client connects to an address that never changes and the rerouting happens inside AWS's network without any DNS caching delay. A load balancer makes the decision per connection or per request within a single region, with rich health semantics for individual targets.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Mechanism</th><th>Decision layer</th><th>Failover speed</th><th>Health granularity</th><th>Pick it when…</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Route 53 routing policy</td><td>DNS resolution</td><td>Detection + TTL</td><td>Per record</td><td>You need geographic, weighted, or latency-based steering across regions or endpoints</td></tr>
+              <tr><td>Route 53 health check</td><td>DNS resolution</td><td>Detection + TTL</td><td>Endpoint, calculated, or alarm-based</td><td>You need automatic removal of unhealthy answers</td></tr>
+              <tr><td>Global Accelerator</td><td>AWS network edge (anycast)</td><td>Seconds, no DNS caching</td><td>Endpoint group per region</td><td>Clients cache DNS aggressively or you need instant regional failover</td></tr>
+              <tr><td>Application Load Balancer</td><td>Per request, within a region</td><td>Seconds, target-level</td><td>Per target, with path-based checks</td><td>You need path/host routing, sticky sessions, or per-target draining</td></tr>
+              <tr><td>Network Load Balancer</td><td>Per connection, within a region</td><td>Seconds, target-level</td><td>Per target, TCP/HTTP</td><td>You need extreme throughput or static IPs per AZ</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The practical rules that fall out of this table are worth stating as decision rules. Pick a Route 53 routing policy when the steering decision is about which region or endpoint a user should reach and you can tolerate a failover window measured in detection time plus TTL. Pick Global Accelerator when the client population caches DNS beyond your control, when you need a fixed IP allowlist, or when the failover window must be seconds rather than minutes. Pick an ALB when the decision is about which target within a region should serve a request and you need request-level routing or session affinity. And pick Route 53 ARC, from yesterday, when the decision is a deliberate regional cutover that must be auditable and must not depend on the health of the region you are cutting over from.</p>
+      </section>
+      <section class="doc-section" id="lab">
+        <h2 class="section-heading">Hands-on Lab: Weighted Canary with Automatic Health-Check Rollback (45 min)</h2>
+        <div class="card card-green">
+          <p>The goal is to build a weighted routing configuration that sends five percent of traffic to a canary endpoint and automatically stops sending traffic to it if the canary becomes unhealthy, then to prove the rollback works by deliberately breaking the canary. Work in a test hosted zone rather than a production one, and use two distinct endpoints so the health-check behavior is observable.</p>
+          <p><strong>1. Establish the two endpoints.</strong> Create two targets that are clearly distinguishable in a response body — for example two ALBs, or two EC2 instances behind a single ALB with different target groups, or two S3 static website endpoints. Each should return something that identifies which one answered, such as a version string in the response body or a distinct HTTP header. Confirm both are reachable directly before involving DNS.</p>
+          <p><strong>2. Create the health checks first.</strong> Create an HTTP or HTTPS health check for each endpoint, pointing at a path that exercises the application rather than a static file, and configure it to accept only a 200 response. Set the interval to the fast option and the failure threshold to a low value so the canary is pulled quickly, and note the health-check IDs. Wait for both checks to report healthy in the console before continuing — a routing configuration built on checks that have never been observed healthy is not a valid test.</p>
+          <p><strong>3. Create the weighted record set.</strong> In the test hosted zone, create two records with the same name and type, both using the weighted routing policy. Assign the primary a weight of 95 and the canary a weight of 5, and attach the corresponding health check to each record. Set the TTL to 60 seconds so the experiment completes in a reasonable time. If you are using alias records to AWS resources, note that the TTL is inherited from the target rather than set explicitly.</p>
+          <p><strong>4. Verify the split.</strong> Query the name repeatedly from a client that does not cache — a loop of <code>dig</code> or <code>Resolve-DnsName</code> calls, or a short script that resolves the name many times — and count how often each endpoint's identifying response appears. With a 95/5 split you should see the canary roughly one time in twenty, and the exact ratio will vary because the selection is probabilistic per query. Record the observed ratio as your baseline.</p>
+          <p><strong>5. Break the canary deliberately.</strong> Make the canary endpoint return a non-200 status, or stop the process behind it, so that its health check begins failing. Watch the health-check status transition from healthy to unhealthy, and note how long that takes given the interval and failure threshold you configured. This elapsed time is the detection half of your failover window.</p>
+          <p><strong>6. Confirm the automatic rollback.</strong> Once the canary's health check is unhealthy, repeat the resolution loop. Every answer should now be the primary, because the canary record has been removed from the set and the remaining weight renormalized to 100 percent. Confirm this both by observing the answers and by checking that the canary record shows as unhealthy in the console. This is the behavior that makes weighted routing safe for canary releases: a bad canary removes itself.</p>
+          <p><strong>7. Restore and observe recovery.</strong> Bring the canary back to a healthy state and watch the health check return to healthy after the success threshold is met. Confirm that the five percent split resumes. Note the recovery time separately from the detection time, because the success threshold adds to it.</p>
+          <p><strong>8. Write down the failover window.</strong> Record the total elapsed time from breaking the canary to the last observed canary answer, and decompose it into detection time plus TTL. This number is the one you would put in a runbook, and it is the number an exam scenario is implicitly asking you to reason about when it gives you an interval, a threshold, and a TTL.</p>
+          <p><strong>9. Extend to failover routing.</strong> As a second exercise, create a failover pair in the same zone with the primary and secondary records, attach a health check to the primary only, and break the primary. Observe that the secondary is returned, then break the secondary as well and observe that Route 53 still returns it — the demonstration that failover routing has no third option and that a robust design must monitor the standby separately.</p>
+        </div>
+      </section>
+      <section class="doc-section" id="quiz">
         <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
-        
-      <div class="scenario-card">
-        <p class="scenario-question"><strong>Q1.</strong> You want most users routed to the AWS region with the lowest network latency for them, automatically.</p>
-        <div class="scenario-options" id="opts-d38q0">
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q1.</strong> You want most users routed to the AWS region with the lowest network latency for them, automatically, with no manual tuning.</p>
+          <div class="scenario-options" id="opts-d38q1">
             <div class="scenario-option">A. Weighted routing</div>
             <div class="scenario-option">B. Latency-based routing policy</div>
             <div class="scenario-option">C. Simple routing</div>
             <div class="scenario-option">D. Geolocation routing</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d38q1', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d38q1"><strong>Correct answer: B.</strong> Latency-based routing uses AWS's latency measurements between users and regions to route each request to the lowest-latency healthy endpoint, with no tunable bias.</div>
         </div>
-        <button class="scenario-reveal-btn" onclick="revealAnswer('d38q0', 1)">Reveal Answer</button>
-        <div class="scenario-explanation" id="exp-d38q0"><strong>Correct answer: B.</strong> Latency-based routing uses AWS's latency measurements between users and regions to route each request to the lowest-latency healthy endpoint.</div>
-      </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q2.</strong> A single Route 53 A record points at one EC2 instance. The team asks how to make it fail over automatically if the instance dies.</p>
+          <div class="scenario-options" id="opts-d38q2">
+            <div class="scenario-option">A. Attach a health check to the simple routing record</div>
+            <div class="scenario-option">B. Simple routing does not support health-check failover — move to a policy with multiple records, or put a load balancer behind the record</div>
+            <div class="scenario-option">C. Lower the TTL to 0</div>
+            <div class="scenario-option">D. Enable multi-value answers on the simple record</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d38q2', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d38q2"><strong>Correct answer: B.</strong> Simple routing has exactly one record and no health-check-driven removal, so there is nothing to fail over to. Resilience requires a multi-record policy or a load balancer handling target health.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q3.</strong> A weighted record set has two records with weights 95 and 5. The record with weight 5 fails its health check. What does Route 53 return?</p>
+          <div class="scenario-options" id="opts-d38q3">
+            <div class="scenario-option">A. Nothing, because the set is incomplete</div>
+            <div class="scenario-option">B. The healthy record 95 percent of the time and nothing 5 percent of the time</div>
+            <div class="scenario-option">C. The healthy record for all answers, because the failed record is removed and the remaining weight renormalizes to 100 percent</div>
+            <div class="scenario-option">D. The failed record, because weights override health</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d38q3', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d38q3"><strong>Correct answer: C.</strong> Unhealthy records are excluded from the set and the surviving weights are renormalized, so a failed canary removes itself and the primary serves all traffic.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q4.</strong> A European bank must ensure that customer DNS queries from EU countries are answered by an EU-hosted endpoint regardless of which region would be faster.</p>
+          <div class="scenario-options" id="opts-d38q4">
+            <div class="scenario-option">A. Latency-based routing</div>
+            <div class="scenario-option">B. Geoproximity routing with a bias toward the EU region</div>
+            <div class="scenario-option">C. Geolocation routing, mapping European countries to the EU endpoint</div>
+            <div class="scenario-option">D. Multi-value answer routing</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d38q4', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d38q4"><strong>Correct answer: C.</strong> Geolocation routing pins queries to a mapped location regardless of measured latency, which is what a data-residency requirement demands. Latency routing optimizes for speed and geoproximity is a tunable distance heuristic, not a residency control.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q5.</strong> A team wants to shift traffic gradually from us-east-1 to us-west-2 while both regions remain fully healthy, with the ability to pause or reverse the shift.</p>
+          <div class="scenario-options" id="opts-d38q5">
+            <div class="scenario-option">A. Failover routing with the primary in us-east-1</div>
+            <div class="scenario-option">B. Geoproximity routing with a bias parameter adjusted over time</div>
+            <div class="scenario-option">C. Latency-based routing</div>
+            <div class="scenario-option">D. Simple routing with a low TTL</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d38q5', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d38q5"><strong>Correct answer: B.</strong> Geoproximity routing's bias parameter is the only mechanism that deliberately pulls traffic toward or away from a healthy region by a tunable amount, which is exactly a gradual regional migration.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q6.</strong> A health check is configured against an ALB's DNS name over HTTPS. During an application outage where every target returns 503, the health check still reports healthy and no failover occurs. Why?</p>
+          <div class="scenario-options" id="opts-d38q6">
+            <div class="scenario-option">A. Route 53 health checks cannot monitor ALBs</div>
+            <div class="scenario-option">B. The health check is monitoring the load balancer's reachability, not the application's health, and is not configured to treat 503 as unhealthy</div>
+            <div class="scenario-option">C. The TTL is too high</div>
+            <div class="scenario-option">D. The record set has too many records</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d38q6', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d38q6"><strong>Correct answer: B.</strong> The ALB keeps answering even when all targets fail, so the check must point at a deep-health endpoint and accept only 200 to reflect real application health.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q7.</strong> A failover configuration has a health check on the primary record only. The primary fails, traffic moves to the secondary, and users still report errors. What is the most likely cause?</p>
+          <div class="scenario-options" id="opts-d38q7">
+            <div class="scenario-option">A. Failover routing requires health checks on both records to function</div>
+            <div class="scenario-option">B. The secondary is also unhealthy, and failover routing has no third option so it returns the secondary anyway</div>
+            <div class="scenario-option">C. The TTL is set too low</div>
+            <div class="scenario-option">D. The secondary record needs a higher weight</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d38q7', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d38q7"><strong>Correct answer: B.</strong> Failover routing returns the secondary whenever the primary is unhealthy, without checking the secondary's own health. A robust design monitors the standby separately.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q8.</strong> A team needs routing decisions based on a custom application metric — queue depth — rather than endpoint reachability. What is the mechanism?</p>
+          <div class="scenario-options" id="opts-d38q8">
+            <div class="scenario-option">A. A TCP health check against the queue endpoint</div>
+            <div class="scenario-option">B. A CloudWatch-alarm-based health check, which turns any alarmable metric into a routing signal</div>
+            <div class="scenario-option">C. Multi-value answer routing</div>
+            <div class="scenario-option">D. A calculated health check combining three endpoint checks</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d38q8', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d38q8"><strong>Correct answer: B.</strong> Health checks can be backed by CloudWatch alarms, which is the escape hatch for conditions Route 53 cannot probe directly, such as queue depth or replication lag.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q9.</strong> A multi-region design should be considered healthy as long as at least two of three regional endpoints are healthy. Which health-check construct expresses this?</p>
+          <div class="scenario-options" id="opts-d38q9">
+            <div class="scenario-option">A. Three independent endpoint health checks with no aggregation</div>
+            <div class="scenario-option">B. A calculated health check combining the three child checks with boolean logic</div>
+            <div class="scenario-option">C. A single TCP health check against one region</div>
+            <div class="scenario-option">D. A CloudWatch composite alarm alone</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d38q9', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d38q9"><strong>Correct answer: B.</strong> Calculated health checks combine child checks with boolean logic, which is how you express "healthy if at least two of three are healthy."</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q10.</strong> A record has a 300-second TTL and its health check uses the standard 30-second interval with the default failure threshold of three. Roughly how long after an endpoint fails will all clients stop receiving its address?</p>
+          <div class="scenario-options" id="opts-d38q10">
+            <div class="scenario-option">A. About 30 seconds</div>
+            <div class="scenario-option">B. About 90 seconds</div>
+            <div class="scenario-option">C. About 90 seconds of detection plus up to 300 seconds of TTL caching</div>
+            <div class="scenario-option">D. Immediately, because Route 53 pushes updates to resolvers</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d38q10', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d38q10"><strong>Correct answer: C.</strong> Effective failover time is detection time (interval times failure threshold, roughly 90 seconds) plus the TTL, because resolvers and clients cache the previous answer until it expires.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q11.</strong> A weighted record set has three records, all with weight set to 0. What happens?</p>
+          <div class="scenario-options" id="opts-d38q11">
+            <div class="scenario-option">A. Route 53 returns nothing</div>
+            <div class="scenario-option">B. The records are treated as equally weighted, so traffic is split evenly</div>
+            <div class="scenario-option">C. Only the first record is returned</div>
+            <div class="scenario-option">D. The configuration is rejected</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d38q11', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d38q11"><strong>Correct answer: B.</strong> All-zero weights are treated as equal weighting, which is a common accidental configuration when someone intends to disable a record.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q12.</strong> A team wants redundancy across four web servers without paying for a load balancer, and the application is stateless with clients that retry on connection failure.</p>
+          <div class="scenario-options" id="opts-d38q12">
+            <div class="scenario-option">A. Simple routing with four A records</div>
+            <div class="scenario-option">B. Multi-value answer routing with a health check on each record</div>
+            <div class="scenario-option">C. Failover routing with four records</div>
+            <div class="scenario-option">D. Geolocation routing</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d38q12', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d38q12"><strong>Correct answer: B.</strong> Multi-value answer routing returns up to eight healthy records per response and excludes unhealthy ones, giving crude client-side spreading without an ELB — appropriate for stateless clients that retry.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q13.</strong> A health check is configured against an endpoint by IP address rather than by hostname, and it reports unhealthy even though the application responds correctly to browser requests. What is the likely cause?</p>
+          <div class="scenario-options" id="opts-d38q13">
+            <div class="scenario-option">A. Route 53 cannot health-check IP addresses</div>
+            <div class="scenario-option">B. The check is not sending the Host header the application expects, so the application returns an error the check treats as unhealthy</div>
+            <div class="scenario-option">C. The TTL is too low</div>
+            <div class="scenario-option">D. The endpoint needs an alias record</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d38q13', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d38q13"><strong>Correct answer: B.</strong> Health checks by IP do not send the expected Host header, which commonly produces false unhealthy results for virtual-hosted applications.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q14.</strong> A team declares a five-minute RTO, configures failover routing correctly, and the console shows the failover succeeded — but a subset of users remains broken for hours. What is the most likely explanation?</p>
+          <div class="scenario-options" id="opts-d38q14">
+            <div class="scenario-option">A. The health check threshold is too low</div>
+            <div class="scenario-option">B. Clients with long-lived connections never re-resolve DNS and keep talking to the failed endpoint</div>
+            <div class="scenario-option">C. The secondary record has no health check</div>
+            <div class="scenario-option">D. The hosted zone quota was exceeded</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d38q14', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d38q14"><strong>Correct answer: B.</strong> DNS-based failover only affects new resolutions. Clients holding connections never re-resolve, which is the case for a network-layer mechanism such as Global Accelerator.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q15.</strong> A scenario requires a fixed IP address that clients can allowlist, and failover that completes in seconds without depending on client DNS caching. Which mechanism fits?</p>
+          <div class="scenario-options" id="opts-d38q15">
+            <div class="scenario-option">A. Route 53 latency-based routing with a 60-second TTL</div>
+            <div class="scenario-option">B. Route 53 failover routing with health checks</div>
+            <div class="scenario-option">C. AWS Global Accelerator, which uses static anycast IPs and reroutes at the AWS network edge</div>
+            <div class="scenario-option">D. Multi-value answer routing</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d38q15', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d38q15"><strong>Correct answer: C.</strong> Global Accelerator provides static anycast IPs for allowlisting and reroutes inside the AWS network without any DNS caching delay, unlike any Route 53 policy.</div>
+        </div>
+      </section>
+      <section class="doc-section" id="preview">
+        <h2 class="section-heading">Peek into Tomorrow: What Happens When the Answer Is "Restore It"</h2>
+        <div class="card card-purple">
+          <p>Everything in this day assumed the data still exists somewhere and the problem is choosing which healthy copy to serve it from. Routing policies and health checks are excellent at that, and they are useless when the failure is not an unhealthy endpoint but a deleted table, a corrupted volume, or an account that has been compromised and had its snapshots removed. The open question this leaves is what the recovery path looks like when the correct answer is not "route around it" but "put it back" — and specifically, how you make that path trustworthy when the thing you are recovering from may have had administrative access to your backups.</p>
+          <p>That question has a shape that DNS cannot address. It requires a policy that decides what gets backed up and how often, a lifecycle that decides how long each copy survives, and a copy that lives somewhere the compromised account cannot reach. It also requires immutability, because a backup that an administrator can delete is not a backup against ransomware — it is a backup against hardware failure only. Tomorrow's material covers centralized, policy-based backup across EBS, RDS, DynamoDB, and EFS, cross-region and cross-account copy, and Vault Lock's write-once-read-many guarantee, which is the mechanism that makes the last line of defense actually hold.</p>
+        </div>
+      </section>
+      <section class="doc-section" id="sources">
+        <h2 class="section-heading">Sources</h2>
+        <div class="card">
+          <ul class="source-list">
+            <li><a href="https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/routing-policy.html" target="_blank">Amazon Route 53 Developer Guide — Choosing a routing policy</a></li>
+            <li><a href="https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/dns-failover.html" target="_blank">Amazon Route 53 Developer Guide — Configuring DNS failover</a></li>
+            <li><a href="https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/health-checks-creating.html" target="_blank">Amazon Route 53 Developer Guide — Creating health checks</a></li>
+            <li><a href="https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/dns-failover-types.html" target="_blank">Amazon Route 53 Developer Guide — Types of health checks</a></li>
+            <li><a href="https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/routing-policy-geoproximity.html" target="_blank">Amazon Route 53 Developer Guide — Geoproximity routing</a></li>
+            <li><a href="https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/resource-record-sets-choosing-alias-non-alias.html" target="_blank">Amazon Route 53 Developer Guide — Choosing between alias and non-alias records</a></li>
+            <li><a href="https://docs.aws.amazon.com/general/latest/gr/r53.html" target="_blank">AWS General Reference — Route 53 endpoints and quotas</a></li>
+            <li><a href="https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/monitoring-health-checks.html" target="_blank">Amazon Route 53 Developer Guide — Monitoring health checks using CloudWatch</a></li>
+            <li><a href="https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/recovery-controller.html" target="_blank">Amazon Route 53 Developer Guide — Route 53 Application Recovery Controller</a></li>
+            <li><a href="https://docs.aws.amazon.com/whitepapers/latest/aws-fault-isolation-boundaries/route-53.html" target="_blank">AWS Whitepaper — Fault isolation boundaries and Route 53</a></li>
+          </ul>
+        </div>
       </section>
       <div class="day-nav">
         <a href="day-037.html">&larr; Day 37: Route 53 Application Recovery Controller (ARC)</a>

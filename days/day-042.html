@@ -104,7 +104,7 @@
         <span class="pill pill-green">Phase 3: SRE Observability, Resilience &amp; DR</span>
       </div>
       <h1 class="hero-title">Week Synthesis — SRE &amp; DR Scenario Drills</h1>
-      <div class="reading-meta">&#128337; ~3 min read &middot; 4 services covered</div>
+      <div class="reading-meta">&#128337; ~28 min read &middot; 4 services covered</div>
       <div class="services-grid">
         <span class="service-tag">FIS</span>
         <span class="service-tag">Route 53 ARC</span>
@@ -112,30 +112,378 @@
         <span class="service-tag">X-Ray</span>
       </div>
       <div id="tracker"></div>
-      <section class="doc-section">
-        <h2 class="section-heading">Today's Concept</h2>
+      <section class="doc-section" id="recap">
+        <h2 class="section-heading">Recap — Week 6 in One Frame</h2>
         <div class="card card-accent">
-          <p>Consolidate observability (metrics, tracing, synthetics), chaos engineering, and DR pattern selection (backup/restore through active-active). This SRE cluster is central to the exam's resilience domain.</p>
-        </div>
-        <h3 class="sub-heading">Hands-on Lab / Practical Action (45 min)</h3>
-        <div class="card">
-          <p>Complete 20 scenario questions requiring you to select the correct DR pattern and observability tool given a stated RTO/RPO and budget.</p>
+          <p>Week 6 opened with the DR pattern spectrum — Backup &amp; Restore, Pilot Light, Warm Standby, and Multi-Site Active-Active — and the observation that the choice is a cost/RTO trade rather than a technical preference. From there the week layered the mechanisms that make each point on that spectrum defensible: Route 53 ARC's readiness checks and routing controls for deterministic, auditable failover; AWS Backup with Vault Lock WORM immutability and cross-account copy for ransomware-resistant recovery; FIS experiment templates with mandatory stop conditions tied to CloudWatch alarms for controlled chaos; and X-Ray's service map for isolating the slow hop in a distributed call chain. The Well-Architected Reliability and Operational Excellence pillars supplied the vocabulary that ties them together — quantified RTO/RPO targets, tested recovery procedures, operations as code, and blameless post-incident review. This synthesis extends that arc rather than adding a new service: the exam rarely asks about one of these in isolation, it asks which combination satisfies a stated RTO, RPO, and budget.</p>
         </div>
       </section>
-      <section class="doc-section">
-        <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
-        
-      <div class="scenario-card">
-        <p class="scenario-question"><strong>Q1.</strong> A workload requires near-zero RTO/RPO and budget is not the primary constraint. Which DR strategy and supporting service pairing fits?</p>
-        <div class="scenario-options" id="opts-d42q0">
+      <section class="doc-section" id="decision-matrix">
+        <h2 class="section-heading">The DR Pattern Decision Matrix</h2>
+        <p>The single most reliable way to lose points on the resilience domain is to answer a DR scenario with the pattern that sounds most impressive rather than the one the stated RTO and RPO actually require. Every DR question on SAP-C02 is a constraint-satisfaction problem in disguise: the stem gives you a recovery time objective, a recovery point objective, and usually a cost signal ("minimize cost", "budget is not a constraint", "the business cannot tolerate more than X minutes"), and exactly one pattern on the spectrum satisfies all three. The work is to translate the stem's language into the spectrum's language before you look at the options.</p>
+        <p>The translation is mechanical once you internalize what each pattern actually keeps running. Backup &amp; Restore keeps nothing running in the standby region — only backups exist, and recovery means provisioning infrastructure from templates and restoring data, which is why its RTO is measured in hours to days. Pilot Light keeps core data continuously replicated and a minimal skeleton of infrastructure (often just the database and network) but no application capacity, so recovery means scaling up the compute tier and pointing traffic at it — tens of minutes. Warm Standby keeps a scaled-down but fully functional copy of the entire stack running, so recovery is a scale-up plus a traffic shift — minutes. Multi-Site Active-Active serves live traffic from two or more regions simultaneously, so there is no recovery step at all, only the removal of the failed region from rotation — seconds, bounded by health-check detection and DNS or anycast propagation. The exam pattern is that the stem's RTO number maps almost directly onto one of those four bands, and the distractors are the adjacent bands.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Pattern</th><th>What runs in standby</th><th>Typical RTO</th><th>Typical RPO</th><th>Cost posture</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Backup &amp; Restore</td><td>Nothing; backups only</td><td>Hours to days</td><td>Hours (last backup)</td><td>Lowest standing cost</td></tr>
+              <tr><td>Pilot Light</td><td>Core data replicated, minimal infra</td><td>Tens of minutes</td><td>Minutes (replication lag)</td><td>Low</td></tr>
+              <tr><td>Warm Standby</td><td>Scaled-down full stack</td><td>Minutes</td><td>Seconds to minutes</td><td>Moderate</td></tr>
+              <tr><td>Multi-Site Active-Active</td><td>Full production capacity, serving traffic</td><td>Seconds</td><td>Near zero</td><td>Highest</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>Two refinements matter for exam accuracy. First, RPO is governed by the data replication mechanism, not by the compute pattern — a Warm Standby with asynchronous cross-region replication still has a non-zero RPO equal to the replication lag, and a Pilot Light with synchronous replication can have a better RPO than a Warm Standby with async. Second, the pattern names describe compute posture; the data layer is chosen separately, which is why the same scenario can pair Pilot Light compute with Aurora Global Database storage and still be internally consistent.</p>
+      </section>
+      <section class="doc-section" id="failover-control">
+        <h2 class="section-heading">Failover Control: Route 53 ARC vs Health Checks vs Global Accelerator</h2>
+        <p>Once a pattern is chosen, the next question is what actually executes the failover, and this is where the week's services separate cleanly. Route 53 health checks with failover routing are the default mechanism and are adequate for most workloads: the health check probes an endpoint, and when it fails, Route 53 stops returning that record. The weakness is that the failover decision is only as good as the health check's view of the world, and the mechanism itself lives inside a single service in a single region's control plane. For a workload where a wrong or delayed failover is itself an outage, that is not enough.</p>
+        <p>Route 53 Application Recovery Controller addresses both weaknesses. Readiness checks continuously validate that the standby region can actually take over — that its Auto Scaling Group has the capacity, that its database replica is caught up, that its configuration matches production — so you discover a broken standby during a readiness audit rather than during an incident. Routing controls sit on a control plane deliberately distributed across regions and partitions, so the failover mechanism survives the failure it is responding to, and every routing change is auditable. The exam pattern is that any stem containing "the failover mechanism must not depend on a single region", "we need proof the standby is ready", or "auditable failover" is pointing at ARC, while a stem that just needs traffic to move away from an unhealthy endpoint is pointing at ordinary health checks.</p>
+        <p>Global Accelerator occupies a third position: it fails over at the network layer using static anycast IPs and AWS's global edge, which sidesteps the client-side DNS caching that can make Route 53-only failover slow for some clients. It is the right answer when the stem emphasizes sub-second failover, TCP/UDP workloads, or clients that cache DNS aggressively — and it is orthogonal to ARC, since a mature active-active design often uses Global Accelerator for the data path and ARC for the control decision.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Mechanism</th><th>Failover layer</th><th>Validates standby readiness</th><th>Survives regional control-plane loss</th><th>Pick when…</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Route 53 health checks + failover routing</td><td>DNS</td><td>No</td><td>No</td><td>Standard HA, DNS TTL acceptable</td></tr>
+              <tr><td>Route 53 ARC</td><td>DNS, on a distributed control plane</td><td>Yes (readiness checks)</td><td>Yes</td><td>Critical systems needing auditable, deterministic failover</td></tr>
+              <tr><td>Global Accelerator</td><td>Network (anycast)</td><td>No</td><td>Yes (edge-based)</td><td>Sub-second failover, TCP/UDP, DNS-caching clients</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+      <section class="doc-section" id="observability-stack">
+        <h2 class="section-heading">Observability: Which Signal Answers Which Question</h2>
+        <p>The observability services from this week are frequently confused with each other on the exam because they all "monitor" something, but each answers a structurally different question. CloudWatch metrics and alarms answer "is a known quantity outside its expected range" — they are threshold or anomaly-band detectors over numeric time series, and they are the only one of the group that can drive automated action directly through alarm actions. Composite alarms refine that by requiring correlated signals, so a page fires on high latency AND high error rate together rather than on either alone. Synthetics canaries answer a different question entirely: "does the user-facing flow work from outside our infrastructure", which catches DNS, CDN, and front-end failures that server-side metrics cannot see because the servers are healthy.</p>
+        <p>X-Ray answers "where inside the request did the time go", which is the only question of the four that requires distributed context. A service map built from traces shows per-hop latency and error rates across a call chain, so a p99 regression in a twelve-service application resolves to a specific downstream hop rather than to a guess. The exam pattern is that a stem describing a symptom visible in aggregate but not attributable to a component is an X-Ray question, while a stem describing a user-visible failure with healthy backend metrics is a Synthetics question. Logs Insights and subscription filters sit alongside these as the ad-hoc query and the real-time forwarding mechanism respectively, and they are the answer when the stem asks for correlation across log lines or for org-wide log aggregation.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Signal</th><th>Question it answers</th><th>Blind spot</th><th>Typical exam trigger phrase</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>CloudWatch metrics + composite alarms</td><td>Is a known metric out of band, and do multiple signals agree?</td><td>Cannot see user-facing flows or unknown failure modes</td><td>"reduce alert noise", "page only on real incidents"</td></tr>
+              <tr><td>Synthetics canaries</td><td>Does the end-to-end user flow work from outside?</td><td>Does not explain why it failed</td><td>"customers report the page is broken but servers are healthy"</td></tr>
+              <tr><td>X-Ray</td><td>Which hop in the call chain is slow or failing?</td><td>Sampled; not a complete request census</td><td>"p99 latency rising, unclear which service"</td></tr>
+              <tr><td>Logs Insights / subscription filters</td><td>What do the log lines say, and where should they be aggregated?</td><td>Not a real-time alerting path by itself</td><td>"centrally searchable logs", "SIEM ingestion"</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+      <section class="doc-section" id="chaos-and-backup">
+        <h2 class="section-heading">Chaos Engineering and Backup: Proving the Design Works</h2>
+        <p>The last two pieces of the week are the ones that convert a design from a claim into a verified fact, and they are complementary rather than overlapping. FIS and Game Days test the recovery path: they inject a real failure — instance termination, AZ loss, dependency failure — and observe whether the alarms fire, the runbooks are accurate, and the automated recovery completes inside the target RTO. AWS Backup protects the data that recovery depends on, and its distinguishing features are about surviving the failure of the account itself rather than the failure of a region. Cross-account copy into an isolated backup account means a compromised workload account cannot delete its own backups, and Vault Lock makes the retention policy immutable so that even a root user cannot shorten it before expiry.</p>
+        <p>The exam pattern here is a clean split on the stem's verb. If the stem says "test", "validate", "verify the runbook", or "prove the RTO is achievable", the answer is FIS or a Game Day. If the stem says "protect", "recover from ransomware", "immutable", or "cannot be deleted by an administrator", the answer is AWS Backup with cross-account copy and Vault Lock. A stem that says both — "we need to prove we can recover from a ransomware event within four hours" — is testing whether you recognize that the two services are used together, with Backup providing the immutable copy and FIS or a Game Day validating the restore procedure against the clock.</p>
+        <p>One operational detail worth carrying into the exam: FIS stop conditions are mandatory in the sense that a well-designed experiment always has them, and they are tied to CloudWatch alarms so the experiment aborts automatically when production stability degrades. A stem that describes chaos testing without a safety mechanism is describing a design flaw, and the correct answer will add stop conditions rather than remove the experiment.</p>
+      </section>
+      <section class="doc-section" id="lab">
+        <h2 class="section-heading">Hands-on Lab / Practical Action (45 min)</h2>
+        <div class="card card-green">
+          <p>Build a one-page DR decision worksheet and then pressure-test it against twenty scenarios. Start by writing the four patterns across the top of a table — Backup &amp; Restore, Pilot Light, Warm Standby, Multi-Site Active-Active — and the four constraint columns down the side: stated RTO, stated RPO, cost signal, and failover-control requirement. Then work through the scenarios below, filling in the row for each one before you look at any answer key.</p>
+          <p>For each scenario, force yourself to write two sentences: which pattern satisfies the constraints, and which single constraint eliminated each of the other three. That second sentence is the part that transfers to the exam, because the distractors are always the adjacent patterns and the reason they are wrong is always a specific number in the stem. A scenario that says "RTO of fifteen minutes, minimize standing infrastructure cost" eliminates active-active on cost and eliminates backup/restore on RTO, leaving Pilot Light — and being able to say that out loud is worth more than memorizing the pattern list.</p>
+          <p>Next, layer the failover-control question on top. For each scenario you assigned to Warm Standby or Active-Active, decide whether ordinary Route 53 health checks are sufficient or whether the stem's language demands ARC readiness checks and routing controls. The tell is whether the stem treats a failed failover as catastrophic in its own right; if it does, ARC is in the answer. Then do the same for the observability layer: for each scenario, name the one signal you would alarm on and the one signal you would use to diagnose a failure after the fact. Metrics and composite alarms for the first, X-Ray for the second, Synthetics when the stem's symptom is user-visible but backend-healthy.</p>
+          <p>Finish by writing the backup and chaos clauses. For any scenario with a compliance, ransomware, or immutability requirement, add the AWS Backup configuration — cross-account copy plus Vault Lock — and state explicitly why a same-account backup is insufficient. For any scenario that claims an RTO, add the FIS experiment or Game Day that would prove it, including the stop condition tied to a CloudWatch alarm. The deliverable is a single page where every DR pattern is justified by a number from the stem and every claim of recoverability is backed by a named test. Keep it; it is the artifact you will re-read on Day 60 when the mock exam analysis sends you back to Domain 2.</p>
+        </div>
+      </section>
+      <section class="doc-section" id="quiz">
+        <h2 class="section-heading">Mixed Scenario Quiz — 25 Questions</h2>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q1.</strong> A workload requires near-zero RTO/RPO and budget is not the primary constraint. Which DR strategy and supporting service pairing fits?</p>
+          <div class="scenario-options" id="opts-d42q1">
             <div class="scenario-option">A. Backup &amp; Restore with AWS Backup</div>
             <div class="scenario-option">B. Pilot Light with manual DNS updates</div>
             <div class="scenario-option">C. Multi-Site Active-Active with Route 53 ARC and DynamoDB Global Tables/Aurora Global Database</div>
             <div class="scenario-option">D. Warm standby without health checks</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d42q1', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d42q1"><strong>Correct answer: C.</strong> Near-zero RTO/RPO demands live traffic serving from multiple regions (active-active) with deterministic, tested failover control (ARC) and multi-region-write-capable data services.</div>
         </div>
-        <button class="scenario-reveal-btn" onclick="revealAnswer('d42q0', 2)">Reveal Answer</button>
-        <div class="scenario-explanation" id="exp-d42q0"><strong>Correct answer: C.</strong> Near-zero RTO/RPO demands live traffic serving from multiple regions (active-active) with deterministic, tested failover control (ARC) and multi-region-write-capable data services.</div>
-      </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q2.</strong> A workload can tolerate an RTO of 15 minutes and an RPO of 5 minutes, but the business wants to minimize standing infrastructure cost. Which DR pattern fits best?</p>
+          <div class="scenario-options" id="opts-d42q2">
+            <div class="scenario-option">A. Backup and Restore</div>
+            <div class="scenario-option">B. Pilot Light</div>
+            <div class="scenario-option">C. Multi-Site Active-Active</div>
+            <div class="scenario-option">D. No DR strategy is needed</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d42q2', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d42q2"><strong>Correct answer: B.</strong> Pilot Light keeps only core data continuously replicated and minimal infrastructure running, scaling up the rest on failover — matching a ~15-minute RTO at much lower cost than warm standby or active-active.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q3.</strong> A critical financial system needs failover control that itself will not fail if an entire AWS region goes down, plus proof the standby region is actually ready to serve traffic. What should be used?</p>
+          <div class="scenario-options" id="opts-d42q3">
+            <div class="scenario-option">A. Route 53 simple health-check failover only</div>
+            <div class="scenario-option">B. Route 53 Application Recovery Controller with readiness checks and a routing control cluster</div>
+            <div class="scenario-option">C. CloudWatch Alarms triggering a Lambda failover</div>
+            <div class="scenario-option">D. Global Accelerator alone</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d42q3', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d42q3"><strong>Correct answer: B.</strong> ARC's routing control cluster is deliberately distributed across regions and partitions for resilience of the failover mechanism itself, and readiness checks validate standby capacity before you rely on it.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q4.</strong> A company needs ransomware-resilient backups that cannot be deleted even by a compromised administrator account. What should they configure?</p>
+          <div class="scenario-options" id="opts-d42q4">
+            <div class="scenario-option">A. Standard EBS snapshots only</div>
+            <div class="scenario-option">B. AWS Backup with a cross-account copy into an isolated account, in a vault with Backup Vault Lock enabled</div>
+            <div class="scenario-option">C. S3 versioning only</div>
+            <div class="scenario-option">D. Increase snapshot frequency</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d42q4', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d42q4"><strong>Correct answer: B.</strong> Cross-account isolation prevents a compromised primary account from touching backups, and Vault Lock makes the retention policy immutable — even the root user cannot delete locked backups before expiry.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q5.</strong> A team wants to safely test EC2 instance failure in production without risking an uncontrolled outage. What FIS feature guarantees the experiment halts if things go wrong?</p>
+          <div class="scenario-options" id="opts-d42q5">
+            <div class="scenario-option">A. IAM permission boundaries</div>
+            <div class="scenario-option">B. Stop conditions tied to CloudWatch alarms</div>
+            <div class="scenario-option">C. Increasing the blast radius</div>
+            <div class="scenario-option">D. Manual monitoring only</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d42q5', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d42q5"><strong>Correct answer: B.</strong> FIS stop conditions automatically abort a running experiment the moment a linked CloudWatch alarm enters ALARM state, capping the blast radius of chaos testing.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q6.</strong> A microservices application has growing p99 latency but it is unclear which of twelve services is the bottleneck. What AWS service pinpoints this?</p>
+          <div class="scenario-options" id="opts-d42q6">
+            <div class="scenario-option">A. CloudWatch Logs Insights alone</div>
+            <div class="scenario-option">B. AWS X-Ray, using the service map to isolate the slow hop</div>
+            <div class="scenario-option">C. VPC Flow Logs</div>
+            <div class="scenario-option">D. AWS Config</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d42q6', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d42q6"><strong>Correct answer: B.</strong> X-Ray's distributed tracing and service map visualize per-hop latency across the full call chain, directly identifying the bottleneck service that aggregate metrics cannot isolate.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q7.</strong> Internal CloudWatch metrics show healthy servers, but customers report the login page is broken. What monitoring gap does this reveal?</p>
+          <div class="scenario-options" id="opts-d42q7">
+            <div class="scenario-option">A. Missing X-Ray tracing</div>
+            <div class="scenario-option">B. No outside-in synthetic monitoring of the actual user flow</div>
+            <div class="scenario-option">C. Missing VPC Flow Logs</div>
+            <div class="scenario-option">D. Insufficient EC2 instance count</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d42q7', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d42q7"><strong>Correct answer: B.</strong> Server-side health metrics do not verify end-to-end user experience; Synthetics canaries probe from outside the infrastructure, catching failures (DNS, CDN, front-end bugs) invisible to internal metrics.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q8.</strong> On-call engineers are fatigued by alarms firing on isolated latency spikes that self-resolve. What reduces noise while still catching real incidents?</p>
+          <div class="scenario-options" id="opts-d42q8">
+            <div class="scenario-option">A. Delete the latency alarm</div>
+            <div class="scenario-option">B. A composite alarm requiring both the latency alarm AND the error-rate alarm to be in ALARM state</div>
+            <div class="scenario-option">C. Lower the alarm threshold</div>
+            <div class="scenario-option">D. Increase the evaluation period to 24 hours</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d42q8', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d42q8"><strong>Correct answer: B.</strong> Composite alarms let you require correlated signals before paging, cutting single-metric false positives while preserving sensitivity to genuine multi-symptom incidents.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q9.</strong> An active-active application needs sub-second failover at the network layer when a region's health checks fail, independent of DNS TTL and client caching. What fits?</p>
+          <div class="scenario-options" id="opts-d42q9">
+            <div class="scenario-option">A. Route 53 latency-based routing alone</div>
+            <div class="scenario-option">B. AWS Global Accelerator, which uses static anycast IPs and reroutes at the AWS network edge</div>
+            <div class="scenario-option">C. CloudFront alone</div>
+            <div class="scenario-option">D. A single-region NLB</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d42q9', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d42q9"><strong>Correct answer: B.</strong> Global Accelerator uses anycast IPs and AWS's global network for near-instant failover, avoiding client-side DNS caching delays inherent to Route 53-only failover.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q10.</strong> A team has documented DR runbooks but has never tested them under simulated failure. What is the recommended next step before relying on them?</p>
+          <div class="scenario-options" id="opts-d42q10">
+            <div class="scenario-option">A. Trust the documentation as-is</div>
+            <div class="scenario-option">B. Run a Game Day exercise using FIS to simulate the failure and validate the runbook and automated recovery actually work</div>
+            <div class="scenario-option">C. Increase backup frequency only</div>
+            <div class="scenario-option">D. Skip testing to avoid production risk</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d42q10', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d42q10"><strong>Correct answer: B.</strong> Untested runbooks are unverified assumptions; a Game Day exercises the real failure mode against real infrastructure to confirm RTO/RPO targets are actually achievable.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q11.</strong> Which best exemplifies the Reliability pillar's failure management best practice?</p>
+          <div class="scenario-options" id="opts-d42q11">
+            <div class="scenario-option">A. Using the largest possible instance type</div>
+            <div class="scenario-option">B. Automatically testing recovery procedures via Game Days and setting quantified RTO/RPO targets</div>
+            <div class="scenario-option">C. Manually reviewing logs weekly</div>
+            <div class="scenario-option">D. Avoiding all managed services</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d42q11', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d42q11"><strong>Correct answer: B.</strong> Failure management is about anticipating failure, testing recovery (Game Days), and having quantified, validated RTO/RPO — not just provisioning bigger resources.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q12.</strong> A team manually SSHes into servers to apply emergency patches, occasionally causing configuration drift. Which Operational Excellence practice addresses this?</p>
+          <div class="scenario-options" id="opts-d42q12">
+            <div class="scenario-option">A. Increase server count</div>
+            <div class="scenario-option">B. Perform operations as code using SSM Automation documents and runbooks instead of manual SSH changes</div>
+            <div class="scenario-option">C. Disable CloudTrail logging</div>
+            <div class="scenario-option">D. Add more IAM users</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d42q12', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d42q12"><strong>Correct answer: B.</strong> Operations as code — codifying operational procedures such as SSM Automation — eliminates ad hoc manual changes and the drift and error they introduce.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q13.</strong> An organization wants every account's application logs centrally searchable in a dedicated logging account in near-real time. What is the mechanism?</p>
+          <div class="scenario-options" id="opts-d42q13">
+            <div class="scenario-option">A. Manually export logs nightly via S3</div>
+            <div class="scenario-option">B. CloudWatch Logs subscription filters streaming to Kinesis Data Firehose in the central logging account</div>
+            <div class="scenario-option">C. CloudTrail only</div>
+            <div class="scenario-option">D. Increase log retention in each account</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d42q13', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d42q13"><strong>Correct answer: B.</strong> Subscription filters push log events in near-real time to a destination (commonly Kinesis Firehose or Streams) in a centralized account, enabling org-wide log aggregation.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q14.</strong> A workload requires near-zero RTO/RPO and budget is not the primary constraint. Which DR strategy and supporting service pairing fits?</p>
+          <div class="scenario-options" id="opts-d42q14">
+            <div class="scenario-option">A. Backup &amp; Restore with AWS Backup</div>
+            <div class="scenario-option">B. Pilot Light with manual DNS updates</div>
+            <div class="scenario-option">C. Multi-Site Active-Active with Route 53 ARC and DynamoDB Global Tables or Aurora Global Database</div>
+            <div class="scenario-option">D. Warm standby without health checks</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d42q14', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d42q14"><strong>Correct answer: C.</strong> Near-zero RTO/RPO demands live traffic serving from multiple regions with deterministic, tested failover control and multi-region-write-capable data services.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q15.</strong> A team wants to prove that a regional failover completes inside the four-hour RTO the business has committed to, and that the standby database is caught up before the switch. Which pairing covers both halves?</p>
+          <div class="scenario-options" id="opts-d42q15">
+            <div class="scenario-option">A. AWS Backup Vault Lock plus CloudWatch Logs Insights</div>
+            <div class="scenario-option">B. Route 53 ARC readiness checks plus an FIS experiment or Game Day that exercises the failover</div>
+            <div class="scenario-option">C. X-Ray service map plus Synthetics canaries</div>
+            <div class="scenario-option">D. Composite alarms plus Trusted Advisor</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d42q15', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d42q15"><strong>Correct answer: B.</strong> Readiness checks continuously validate that the standby can take over, and FIS or a Game Day proves the recovery path completes inside the committed RTO — the two halves of a verified DR claim.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q16.</strong> A workload's RPO requirement is five minutes and its data is replicated asynchronously to a standby region. What does this imply about the achievable RPO?</p>
+          <div class="scenario-options" id="opts-d42q16">
+            <div class="scenario-option">A. RPO is zero because replication is continuous</div>
+            <div class="scenario-option">B. RPO is bounded by the replication lag, which must be monitored and kept under five minutes</div>
+            <div class="scenario-option">C. RPO is irrelevant once Multi-AZ is enabled</div>
+            <div class="scenario-option">D. RPO is determined by the backup schedule only</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d42q16', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d42q16"><strong>Correct answer: B.</strong> With asynchronous replication the RPO equals the replication lag at the moment of failure, so the lag itself becomes an SLO that must be alarmed on — not an implementation detail.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q17.</strong> A team wants to test how their application behaves when a dependency becomes slow rather than unavailable, without touching production data. What is the appropriate approach?</p>
+          <div class="scenario-options" id="opts-d42q17">
+            <div class="scenario-option">A. Take the dependency offline in production during business hours</div>
+            <div class="scenario-option">B. Use FIS to inject latency or network stress in a controlled experiment with stop conditions tied to CloudWatch alarms</div>
+            <div class="scenario-option">C. Rely on the next real incident to reveal the behavior</div>
+            <div class="scenario-option">D. Add a composite alarm and wait</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d42q17', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d42q17"><strong>Correct answer: B.</strong> FIS supports network latency and stress actions as first-class experiment types, and stop conditions bound the blast radius so the experiment aborts if production stability degrades.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q18.</strong> A company wants a single dashboard that shows, for a failing checkout request, which downstream call consumed the most time. Which service provides this directly?</p>
+          <div class="scenario-options" id="opts-d42q18">
+            <div class="scenario-option">A. CloudWatch metrics with high-resolution alarms</div>
+            <div class="scenario-option">B. AWS X-Ray, using subsegments and annotations to drill into the specific downstream call</div>
+            <div class="scenario-option">C. AWS Config conformance packs</div>
+            <div class="scenario-option">D. VPC Flow Logs</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d42q18', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d42q18"><strong>Correct answer: B.</strong> X-Ray subsegments break a trace into individual downstream calls, and annotations let you filter traces by business attributes — the mechanism for attributing latency to a specific call rather than a service.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q19.</strong> A compliance requirement states that backups must be retained for seven years and that no administrator may shorten that period. Which configuration satisfies this?</p>
+          <div class="scenario-options" id="opts-d42q19">
+            <div class="scenario-option">A. A lifecycle policy on the backup vault that administrators can edit</div>
+            <div class="scenario-option">B. AWS Backup Vault Lock in compliance mode, which makes the retention policy immutable even to the root user</div>
+            <div class="scenario-option">C. S3 Object Lock on a bucket that administrators own</div>
+            <div class="scenario-option">D. A tag-based retention policy enforced by convention</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d42q19', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d42q19"><strong>Correct answer: B.</strong> Vault Lock in compliance mode enforces WORM immutability on the retention policy itself, so it cannot be shortened or removed before expiry — the property that makes it suitable for regulatory retention.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q20.</strong> A team is choosing between Warm Standby and Multi-Site Active-Active for a workload with a two-minute RTO and a stated goal of minimizing cost. Which is correct and why?</p>
+          <div class="scenario-options" id="opts-d42q20">
+            <div class="scenario-option">A. Active-Active, because it has the lowest RTO</div>
+            <div class="scenario-option">B. Warm Standby, because a two-minute RTO is achievable with a scaled-down running stack at materially lower cost than full duplicate capacity</div>
+            <div class="scenario-option">C. Backup and Restore, because cost is the only constraint</div>
+            <div class="scenario-option">D. Neither; the RTO is unachievable without active-active</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d42q20', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d42q20"><strong>Correct answer: B.</strong> The cheapest pattern that satisfies the stated RTO is the correct answer; a two-minute RTO is within Warm Standby's band, and active-active would be over-provisioning against the cost constraint.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q21.</strong> An application's error rate spikes only during traffic peaks, and the team wants to be paged only when both latency and errors degrade together. What should they configure?</p>
+          <div class="scenario-options" id="opts-d42q21">
+            <div class="scenario-option">A. Two independent alarms with the same SNS topic</div>
+            <div class="scenario-option">B. A composite alarm combining the latency and error-rate alarms with AND logic</div>
+            <div class="scenario-option">C. A single alarm on CPU utilization</div>
+            <div class="scenario-option">D. An anomaly detection band on request count</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d42q21', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d42q21"><strong>Correct answer: B.</strong> Composite alarms express the AND/OR relationship between underlying alarm states, which is exactly the "both signals degraded together" condition the team wants to page on.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q22.</strong> A team needs to validate that their multi-AZ application survives the loss of an entire Availability Zone, and they want the exercise to abort automatically if customer-facing error rates climb. What should they use?</p>
+          <div class="scenario-options" id="opts-d42q22">
+            <div class="scenario-option">A. A manual failover performed by an on-call engineer</div>
+            <div class="scenario-option">B. An FIS experiment template with an AZ availability action and a stop condition tied to the error-rate alarm</div>
+            <div class="scenario-option">C. A CloudWatch dashboard review</div>
+            <div class="scenario-option">D. A Route 53 health check with a shorter interval</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d42q22', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d42q22"><strong>Correct answer: B.</strong> FIS provides AZ availability disruption as an action, and the stop condition tied to the error-rate alarm is what makes the experiment safe to run against production.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q23.</strong> A team's DR plan relies on restoring from backups, but they have never measured how long a restore actually takes. Which two actions best close this gap?</p>
+          <div class="scenario-options" id="opts-d42q23">
+            <div class="scenario-option">A. Increase backup frequency and add a second vault</div>
+            <div class="scenario-option">B. Run a restore test on a schedule and record the elapsed time against the committed RTO</div>
+            <div class="scenario-option">C. Add a composite alarm on backup job failures</div>
+            <div class="scenario-option">D. Enable cross-region copy and assume the restore time is unchanged</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d42q23', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d42q23"><strong>Correct answer: B.</strong> Restore duration is the dominant term in a Backup &amp; Restore RTO and is only knowable by measuring it; scheduled restore tests turn the RTO claim into a verified number.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q24.</strong> A workload runs active-active across two regions. Which combination of services is required to make the data layer consistent with that posture?</p>
+          <div class="scenario-options" id="opts-d42q24">
+            <div class="scenario-option">A. A single-region Aurora cluster with read replicas</div>
+            <div class="scenario-option">B. A multi-region-write-capable data service such as DynamoDB Global Tables, or Aurora Global Database with a deliberate single-writer region and conflict-aware partitioning</div>
+            <div class="scenario-option">C. RDS Multi-AZ with a cross-region snapshot copy</div>
+            <div class="scenario-option">D. ElastiCache for Redis as the system of record</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d42q24', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d42q24"><strong>Correct answer: B.</strong> Active-active compute requires a data layer that can accept writes in more than one region; DynamoDB Global Tables does this natively with last-writer-wins, while Aurora Global Database requires you to keep writes in one region or partition the write paths.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q25.</strong> A team has a two-region active-passive design with Route 53 failover routing. During a real regional event, failover took far longer than expected because some clients kept hitting the failed region. What is the most likely cause and the best mitigation?</p>
+          <div class="scenario-options" id="opts-d42q25">
+            <div class="scenario-option">A. The health check interval was too short; lengthen it</div>
+            <div class="scenario-option">B. Client-side DNS caching and TTL behavior delayed the switch; front the endpoints with Global Accelerator anycast IPs, or use ARC routing controls for a deterministic control-plane decision</div>
+            <div class="scenario-option">C. The standby region lacked capacity; add more instances</div>
+            <div class="scenario-option">D. The failover record was misconfigured; switch to simple routing</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d42q25', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d42q25"><strong>Correct answer: B.</strong> DNS-based failover is bounded by resolver and client caching, which is exactly the failure mode Global Accelerator's anycast IPs and ARC's distributed routing controls are designed to remove.</div>
+        </div>
+      </section>
+      <section class="doc-section" id="preview">
+        <h2 class="section-heading">Preview — Day 43</h2>
+        <div class="card card-purple">
+          <p>Everything in this week assumed the workload was already running on AWS and the question was how to keep it running. The open question that Week 7 opens with is the one that comes before all of it: for a portfolio of workloads that are not on AWS yet, how do you decide what each one's move actually is? The 7 Rs — Retire, Retain, Rehost, Relocate, Repurchase, Replatform, Refactor — are the vocabulary for that decision, and the exam treats them as a classification problem with real consequences: a data center lease expiring in six months pushes most of a portfolio toward Rehost via MGN, while an application with unresolved licensing blockers is a Retain rather than a rushed migration. The trap is that the Rs sound like a maturity ladder, with Refactor at the top, when they are actually a set of trade-offs against deadline, cost, and technical debt. Day 43 also introduces Migration Hub as the tracking layer across tools, which matters because a portfolio migration is a program of work, not a single cutover.</p>
+        </div>
+      </section>
+      <section class="doc-section" id="sources">
+        <h2 class="section-heading">Sources</h2>
+        <div class="card">
+          <ul class="source-list">
+            <li><a href="https://docs.aws.amazon.com/r53recovery/latest/dg/what-is-route53-recovery.html" target="_blank">AWS docs — Route 53 Application Recovery Controller</a></li>
+            <li><a href="https://docs.aws.amazon.com/aws-backup/latest/devguide/whatisbackup.html" target="_blank">AWS docs — AWS Backup</a></li>
+            <li><a href="https://docs.aws.amazon.com/fis/latest/userguide/what-is-fis.html" target="_blank">AWS docs — AWS Fault Injection Service</a></li>
+            <li><a href="https://docs.aws.amazon.com/xray/latest/devguide/aws-xray.html" target="_blank">AWS docs — AWS X-Ray</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch_Synthetics_Canaries.html" target="_blank">AWS docs — CloudWatch Synthetics canaries</a></li>
+            <li><a href="https://docs.aws.amazon.com/wellarchitected/latest/reliability-pillar/welcome.html" target="_blank">AWS Well-Architected — Reliability Pillar</a></li>
+          </ul>
+        </div>
       </section>
       <div class="day-nav">
         <a href="day-041.html">&larr; Day 41: Well-Architected Operational Excellence Pillar</a>

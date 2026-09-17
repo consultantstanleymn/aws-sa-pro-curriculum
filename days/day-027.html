@@ -104,37 +104,354 @@
         <span class="pill pill-green">Phase 2: Compute, Containers &amp; Global Databases</span>
       </div>
       <h1 class="hero-title">Amazon ElastiCache — Redis vs Memcached Architectures</h1>
-      <div class="reading-meta">&#128337; ~3 min read &middot; 3 services covered</div>
+      <div class="reading-meta">&#128337; ~58 min read &middot; 3 services covered</div>
       <div class="services-grid">
         <span class="service-tag">ElastiCache for Redis</span>
         <span class="service-tag">ElastiCache for Memcached</span>
         <span class="service-tag">Global Datastore</span>
       </div>
       <div id="tracker"></div>
-      <section class="doc-section">
-        <h2 class="section-heading">Today's Concept</h2>
+
+      <section class="doc-section" id="recap">
+        <h2 class="section-heading">Recap: Day 26</h2>
         <div class="card card-accent">
-          <p>Redis supports replication, persistence, pub/sub, and cluster mode sharding, plus Global Datastore for cross-region replication — choose it whenever HA, durability, or complex data structures matter. Memcached is purely a simple, multi-threaded, non-persistent cache for horizontally scaled, stateless caching with no replication.</p>
-        </div>
-        <h3 class="sub-heading">Hands-on Lab / Practical Action (45 min)</h3>
-        <div class="card">
-          <p>Compare ElastiCache Redis cluster mode (sharded, replicated) against Memcached for a session-store use case requiring failover.</p>
+          <p>Day 26 mapped the S3 storage-class ladder — Standard, Intelligent-Tiering, Standard-IA, One Zone-IA, and the three Glacier tiers — and the lifecycle transition rules that move objects down that ladder automatically as they age. The takeaway was that storage classes trade cost against retrieval latency and availability, that lifecycle rules automate the transitions and expirations, and that CRR and SRR replicate objects asynchronously for DR or data residency. The interesting part of that lesson was not the price list; it was the realization that durability and availability are separate axes. One Zone-IA is cheap because it gives up AZ-level durability, while Glacier Deep Archive is cheap because it gives up retrieval speed — and neither trade is reversible after the fact.</p>
+          <p>Today sits at the same lifecycle stage but addresses a different concern. S3 is durable storage for data you must keep; ElastiCache is volatile storage for data you can afford to lose, deployed specifically so that you do not have to read it from a durable store on every request. The design questions are inverted. With S3 you ask how long to keep an object and how fast you might need it back. With ElastiCache you ask how much of the working set fits in memory, what happens to a request when a node disappears, and whether the cache is allowed to be empty. That last question is the one that separates Redis from Memcached, and it is where most exam scenarios land.</p>
         </div>
       </section>
-      <section class="doc-section">
-        <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
-        
-      <div class="scenario-card">
-        <p class="scenario-question"><strong>Q1.</strong> A session store must survive a node failure without losing data and support automatic failover. Which caching engine and configuration fits?</p>
-        <div class="scenario-options" id="opts-d27q0">
-            <div class="scenario-option">A. Memcached with auto discovery</div>
+
+      <section class="doc-section" id="why-on-exam">
+        <h2 class="section-heading">1. Why This Is on the Exam</h2>
+        <p>ElastiCache appears on SAP-C02 in two distinct shapes. The first is a straightforward performance question: a relational database is saturating under read load, the workload is read-heavy with a small hot working set, and the correct answer is to put an in-memory cache in front of it rather than scale the database vertically or add read replicas. The second shape is harder and more common at the professional level — a scenario that describes a cache and then adds a constraint that eliminates one of the two engines. The constraint is almost never about raw throughput. It is about whether the cached data must survive a node failure, whether the application needs data structures beyond simple key-value, whether the cache must span regions, or whether the client library can tolerate a node disappearing from the cluster.</p>
+        <p>This maps to Domain 2, Design for New Solutions, and to a lesser extent Domain 4, Continuous Improvement for Existing Solutions. The exam expects you to know that ElastiCache is a managed deployment of Redis or Memcached, that the two engines are not interchangeable, and that the choice is driven by durability and feature requirements rather than by performance. It also expects you to recognize the cache-aside pattern in a scenario description and to know that a cache is not a system of record. A surprising number of distractors propose using ElastiCache as the primary data store for a workload that cannot tolerate data loss; that answer is always wrong, and recognizing it quickly is worth real time on the exam.</p>
+        <p>The third reason this topic is tested is that it forces a decision about failure semantics. A cache that loses its contents on failover is fine for a product catalog and catastrophic for a session store that holds authentication state. The exam will describe the workload's tolerance for cache loss in prose — "users must not be logged out during a failover," "the application can rebuild the cache from the database" — and expect you to translate that prose into an engine choice. Reading for that sentence is the skill being tested, more than any specific configuration parameter.</p>
+      </section>
+
+      <section class="doc-section" id="mechanism">
+        <h2 class="section-heading">2. How the Two Engines Actually Work</h2>
+        <p>Redis is a single-threaded, in-memory data structure server. That single-threaded execution model is not a limitation to work around; it is the reason Redis can offer atomic operations on complex types without locking. Every command executes to completion before the next one begins, so an INCR, a list push, or a sorted-set range query is atomic by construction. Redis stores values as typed structures — strings, hashes, lists, sets, sorted sets, bitmaps, HyperLogLogs, and streams — and exposes commands that operate on those structures server-side. A sorted set used as a leaderboard, for example, is updated and queried entirely inside Redis, which is why the pattern is so much cheaper than pulling the whole set into the application and sorting it there.</p>
+        <p>Memcached is a multi-threaded, in-memory key-value store with a deliberately minimal command set: get, set, add, replace, append, prepend, incr, decr, and a handful of statistics and flush operations. Values are opaque byte blobs. There is no server-side logic, no persistence, and no replication. Memcached scales by adding nodes and letting the client library shard keys across them via consistent hashing. Each node is independent; there is no cluster membership protocol, no gossip, and no concept of a primary. This makes Memcached extremely simple to operate and extremely predictable under load, because there is no cross-node coordination to go wrong.</p>
+        <p>The architectural consequence is that Redis can be made durable and highly available while Memcached cannot. Redis supports asynchronous replication to one or more replicas, optional AOF and RDB persistence to disk, automatic failover via a primary-replica topology, and cluster mode for horizontal sharding with replicas per shard. Memcached supports none of these. When a Memcached node fails, the keys it held are gone, and the client library rehashes the remaining keyspace across the surviving nodes — which means a large fraction of keys miss simultaneously and the backing database absorbs a spike. That thundering-herd behavior is the single most important operational difference between the two engines, and it is the reason a session store with a failover requirement can never be Memcached.</p>
+      </section>
+
+      <section class="doc-section" id="decision-boundary">
+        <h2 class="section-heading">3. The Core Decision Boundary</h2>
+        <p>Every ElastiCache scenario reduces to one question: can the application tolerate losing the entire cache contents at any moment, without a user-visible failure? If the answer is yes, Memcached is a legitimate and often cheaper choice. If the answer is no — because the cache holds session state, because a cold cache would overwhelm the database, or because the cached data is expensive to recompute — then Redis is the only option, and the remaining decisions are about how much durability and availability to buy.</p>
+        <p>The second-order question, once Redis is chosen, is whether the workload needs cluster mode. A single-shard Redis replication group with one primary and one or two replicas gives you failover and a single logical keyspace, but all writes go to one node and the dataset must fit in that node's memory. Cluster mode shards the keyspace across up to 500 shards, each with its own primary and replicas, which raises both the memory ceiling and the write throughput ceiling. The cost is that multi-key operations across hash slots are restricted, and the client must be cluster-aware. The exam tends to test this boundary with a scenario that mentions a dataset larger than a single node's memory or a write rate that one primary cannot absorb.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Requirement in the scenario</th><th>Redis</th><th>Memcached</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Cache may be lost without user impact</td><td>Works, but over-provisioned</td><td>Correct choice</td></tr>
+              <tr><td>Session state must survive node failure</td><td>Correct choice (replicas + failover)</td><td>Not possible</td></tr>
+              <tr><td>Sorted sets, lists, pub/sub, streams</td><td>Native</td><td>Not supported</td></tr>
+              <tr><td>Multi-threaded scaling on a single node</td><td>Single-threaded per shard</td><td>Native multi-threading</td></tr>
+              <tr><td>Cross-region replication</td><td>Global Datastore</td><td>Not supported</td></tr>
+              <tr><td>Persistence to disk</td><td>AOF / RDB snapshots</td><td>None</td></tr>
+              <tr><td>Horizontal sharding</td><td>Cluster mode, up to 500 shards</td><td>Client-side consistent hashing</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="doc-section" id="config-tradeoffs">
+        <h2 class="section-heading">4. Configuration Modes and Their Tradeoffs</h2>
+        <p>Redis on ElastiCache is deployed as a replication group, and the first decision is whether that group is cluster-mode disabled or cluster-mode enabled. With cluster mode disabled, you get exactly one shard. You can still have replicas — a primary plus up to five read replicas in the same group — and you still get automatic failover, Multi-AZ, and a single endpoint that never changes. This is the right configuration for the majority of caching workloads, because most caches are small enough to fit in one node's memory and the operational simplicity is worth a great deal. The ceiling is the node's memory and the single primary's write throughput.</p>
+        <p>Cluster mode enabled partitions the keyspace into 16,384 hash slots distributed across shards. Each shard is itself a replication group with its own primary and replicas, so you get both horizontal scale and per-shard failover. The tradeoff is that keys in different hash slots cannot participate in the same multi-key command, and transactions and Lua scripts that touch multiple keys must use hash tags to force those keys into the same slot. Client libraries must be cluster-aware. This is the configuration to reach for when the dataset exceeds a single node's memory, when write throughput must exceed what one primary can absorb, or when the scenario explicitly mentions hundreds of gigabytes of cached data.</p>
+        <p>Memcached has no equivalent topology decisions because it has no topology. You create a cluster of nodes, and the client library distributes keys across them. There is no primary, no replica, no failover, and no endpoint that survives a node replacement. Auto Discovery lets clients learn about added or removed nodes without a redeploy, which softens the operational pain of scaling, but it does not change the failure semantics. When a node is lost, its keys are lost, and the client rehashes. The configuration knobs that matter are node count and node size, and the only real design decision is how much headroom to leave so that a single node loss does not push the surviving nodes past their memory limit.</p>
+        <p>For Redis, the remaining knobs are persistence and eviction. Persistence is optional and off by default in the sense that a cache is expected to be rebuildable; enabling AOF or RDB snapshots costs write throughput and storage but shortens the cold-start window after a full cluster replacement. Eviction policy determines what happens when memory fills: <code>volatile-lru</code> and <code>allkeys-lru</code> are the common choices, and the difference is whether keys without a TTL are eligible for eviction. Choosing <code>noeviction</code> on a cache is almost always a mistake, because writes begin failing instead of the cache gracefully shedding cold data.</p>
+      </section>
+
+      <section class="doc-section" id="sizing-limits">
+        <h2 class="section-heading">5. Sizing, Limits and Quotas</h2>
+        <p>Sizing an ElastiCache deployment starts with the working set, not the total dataset. The question is how much data must be resident in memory to keep the hit rate above whatever threshold the application needs, and that number is usually far smaller than the total data volume. A cache holding the hot 10% of a catalog can serve the overwhelming majority of reads. Once the working set is known, add headroom for the eviction policy to operate — running a cache at 95% memory utilization means constant eviction churn and a hit rate that degrades unpredictably.</p>
+        <p>The limits that matter for exam reasoning are the topology ceilings. A Redis replication group with cluster mode disabled supports one shard with up to five read replicas. With cluster mode enabled, a cluster supports up to 500 shards, and each shard can have its own replicas. Memcached clusters support up to 20 nodes per cluster, which is a hard ceiling that occasionally appears in scenarios describing very large caches. Both engines support node types ranging from small burstable instances up to memory-optimized families, and the largest node types are what you reach for when a single shard must hold a very large working set.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Dimension</th><th>Redis (cluster mode disabled)</th><th>Redis (cluster mode enabled)</th><th>Memcached</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Shards per cluster</td><td>1</td><td>Up to 500</td><td>N/A (independent nodes)</td></tr>
+              <tr><td>Replicas per shard</td><td>Up to 5</td><td>Up to 5</td><td>None</td></tr>
+              <tr><td>Nodes per cluster</td><td>Up to 6</td><td>Up to 500 shards &times; replicas</td><td>Up to 20</td></tr>
+              <tr><td>Automatic failover</td><td>Yes (Multi-AZ)</td><td>Yes, per shard</td><td>No</td></tr>
+              <tr><td>Cross-region replication</td><td>Global Datastore</td><td>Global Datastore</td><td>No</td></tr>
+              <tr><td>Persistence</td><td>AOF / RDB</td><td>AOF / RDB</td><td>None</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>Two quotas are worth remembering because they shape architecture rather than just cost. First, scaling a cluster-mode-disabled Redis group vertically requires a node type change, which is an in-place operation with a brief failover; scaling a cluster-mode-enabled group horizontally is an online resharding operation that moves hash slots between shards. Second, Memcached's 20-node ceiling means that a workload needing more than 20 nodes of cache capacity must either use larger nodes or move to Redis cluster mode. Scenarios that describe a cache growing past a fixed node count are usually pointing at that ceiling.</p>
+      </section>
+
+      <section class="doc-section" id="failure-modes">
+        <h2 class="section-heading">6. Failure Modes and What They Look Like in Production</h2>
+        <p>The most common production failure is not a node dying; it is the cache being cold. A deployment, a node replacement, or a failover that lands on a replica with stale or empty data produces a sudden drop in hit rate, and the backing database absorbs the full read load. The symptom is a database CPU spike correlated with a cache event, and the first diagnostic move is to check the cache hit rate metric alongside database read throughput on the same time axis. If they move together, the cache is the cause and the database is the victim.</p>
+        <p>The second failure mode is memory pressure leading to eviction churn. When a cache runs near its memory limit, the eviction policy starts removing keys faster than the workload's access pattern can tolerate, and the hit rate collapses even though the cache is technically healthy. The metrics to watch are <code>Evictions</code>, <code>CurrItems</code>, and <code>BytesUsedForCache</code>. A rising eviction count with a flat item count means the working set no longer fits, and the fix is either a larger node or a smaller TTL, not more nodes.</p>
+        <p>The third failure mode is specific to Memcached and is the one exam scenarios are built around. When a Memcached node is lost, the client library rehashes the keyspace across the surviving nodes. Every key that was on the lost node now misses, and every key that moved to a different node also misses because the client is looking in the wrong place. The result is a simultaneous miss storm across a large fraction of the keyspace, which is far worse than the proportional loss you might expect. Redis avoids this because a replica takes over the same hash slots, so the keyspace mapping does not change. This is the concrete mechanism behind the abstract statement that Redis survives node failure and Memcached does not.</p>
+        <p>The fourth failure mode is connection exhaustion. Both engines have a maximum number of client connections per node, and a fleet of application instances that each open a connection pool can exhaust it during a scale-out event. The symptom is connection errors from the client library while the cache itself reports healthy CPU and memory. The fix is connection pooling on the client side, and the metric to alarm on is <code>CurrConnections</code> approaching the node's limit.</p>
+      </section>
+
+      <section class="doc-section" id="sre-angle">
+        <h2 class="section-heading">7. The Operational and SRE Angle</h2>
+        <p>A cache is a latency optimization with a failure mode that is worse than not having it, because the backing store is sized for the cached path and not for the uncached one. That asymmetry is the core SRE concern. If the database can absorb full uncached load, the cache is a pure optimization and its failure is a performance incident. If it cannot, the cache is a load-bearing component and its failure is an availability incident. Deciding which of those two you have built is the first thing to establish, because it determines whether the cache needs Multi-AZ, replicas, and alarms, or whether a single node is genuinely sufficient.</p>
+        <p>The metrics worth alarming on are hit rate, eviction rate, memory utilization, current connections, and replication lag for Redis. Hit rate is the leading indicator: a sustained drop below the application's tolerance threshold is the earliest signal that something has changed, whether that is a cold cache, a working-set growth, or a bad deployment that changed key patterns. Eviction rate is the capacity signal. Replication lag matters because a failover to a replica that is far behind means losing recent writes, which for a session store means logging users out.</p>
+        <p>The runbook shape follows from the failure modes. For a cold cache, the runbook is to confirm the cache event, then decide whether to warm the cache deliberately or let it warm organically while protecting the database — often by temporarily reducing application concurrency or enabling a request-level circuit breaker. For memory pressure, the runbook is to identify the largest key families and either raise the node size or shorten TTLs. For a Memcached node loss, the runbook is to expect a miss storm and to have a database-side protection mechanism ready, because there is no cache-side fix. For Redis failover, the runbook is to verify the new primary, confirm replication is re-established, and check whether the application reconnected cleanly.</p>
+      </section>
+
+      <section class="doc-section" id="gotchas">
+        <h2 class="section-heading">8. Edge Cases and Exam Gotchas</h2>
+        <p>The single most reliable gotcha is the assumption that ElastiCache is a database. It is not. It has no query language, no transactions across arbitrary keys, no schema, and no durability guarantee unless you explicitly enable persistence — and even then, persistence is a recovery aid, not a system of record. Any scenario that describes data that must not be lost and proposes ElastiCache as the store is wrong, regardless of how the rest of the architecture is described.</p>
+        <p>The second gotcha is the belief that Redis is always the right answer. Redis is the right answer whenever durability, replication, or data structures matter, but a scenario describing a simple, horizontally scaled, stateless cache where a node loss is acceptable is describing Memcached, and choosing Redis there is over-engineering. The exam does test this direction, not just the Redis-is-better direction.</p>
+        <p>The third gotcha is cluster mode. Enabling cluster mode changes the client contract: multi-key operations must use hash tags, and the client library must be cluster-aware. A scenario that describes an application using multi-key transactions and a cache that fits comfortably in one node is describing cluster mode disabled, even if the dataset is large in absolute terms. The trigger for cluster mode is a working set that exceeds one node's memory or a write rate that one primary cannot absorb, not total data volume.</p>
+        <p>The fourth gotcha is Global Datastore. It provides cross-region replication for Redis, and it is the answer when a scenario requires a cache to be available in a second region with low-latency local reads. It is not a DR mechanism for the cache in the sense that it guarantees zero data loss; it is a replication feature with asynchronous propagation. The fifth gotcha is that Memcached's Auto Discovery solves node discovery, not node failure. It lets clients learn about topology changes without a redeploy, but it does not preserve data when a node is lost, and scenarios sometimes conflate the two.</p>
+      </section>
+
+      <section class="doc-section" id="vs-comparison">
+        <h2 class="section-heading">9. ElastiCache vs. the Services It Gets Confused With</h2>
+        <p>ElastiCache is most often confused with DynamoDB Accelerator, with self-managed Redis on EC2, and with the database it is caching. DAX is the closest analogue and the most common distractor: it is an in-memory cache, but it is purpose-built for DynamoDB and speaks the DynamoDB API, so it only helps when the backing store is DynamoDB. If the scenario's backing store is Aurora or RDS, DAX is not applicable and ElastiCache is the answer. If the backing store is DynamoDB and the workload is read-heavy on hot items, DAX is the answer and ElastiCache would require application-level cache logic that DAX provides transparently.</p>
+        <p>Self-managed Redis on EC2 is the other common distractor. It offers the same engine and therefore the same feature set, but it moves patching, failover orchestration, backup, and monitoring onto the team. The exam generally prefers the managed service unless the scenario explicitly requires a Redis version, module, or configuration that ElastiCache does not support. That is a real constraint — ElastiCache does not support arbitrary Redis modules — but it is stated explicitly when it is the deciding factor.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Option</th><th>Backing store</th><th>Pick it when…</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>ElastiCache for Redis</td><td>Any (Aurora, RDS, DynamoDB, custom)</td><td>You need replication, failover, data structures, pub/sub, or cross-region replication</td></tr>
+              <tr><td>ElastiCache for Memcached</td><td>Any</td><td>The cache is simple key-value, horizontally scaled, and node loss is tolerable</td></tr>
+              <tr><td>DAX</td><td>DynamoDB only</td><td>The backing store is DynamoDB and you want transparent, API-compatible caching</td></tr>
+              <tr><td>Self-managed Redis on EC2</td><td>Any</td><td>You need a Redis module or version ElastiCache does not offer</td></tr>
+              <tr><td>Read replicas (RDS/Aurora)</td><td>Relational</td><td>The read load is broad rather than hot-key, and staleness is acceptable</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The rule to carry into the exam is short. Choose Redis when the cache must survive failure, when the application needs server-side data structures, or when the cache must span regions. Choose Memcached when the cache is a pure, disposable, horizontally scaled key-value layer and the application can rebuild it. Choose DAX when the backing store is DynamoDB. Choose read replicas when the problem is read volume rather than hot-key latency, because a cache and a read replica solve different problems even though both reduce database load.</p>
+      </section>
+
+      <section class="doc-section" id="lab">
+        <h2 class="section-heading">Hands-On Lab: Session Store Failover, Redis vs. Memcached (60 min)</h2>
+        <div class="card card-green">
+          <p>The goal of this lab is to build the same session-store workload twice — once on Redis and once on Memcached — and then break each one deliberately, so that the difference in failure behavior is something you have observed rather than something you have read. Work in a sandbox account. Everything here is small enough to run inside the free-tier-adjacent node types, and the whole lab should cost a few dollars if you tear it down the same day.</p>
+          <p><strong>1. Establish the baseline workload.</strong> Deploy a small application — a container on ECS Fargate or a t3.small EC2 instance is sufficient — that exposes two endpoints: one that writes a session token to the cache with a 30-minute TTL, and one that reads it back and reports whether the read was a hit or a miss. Point it at a backing store that can also persist sessions, so you have a fallback path to compare against. Instrument the application to emit a hit/miss counter to CloudWatch.</p>
+          <p><strong>2. Build the Redis session store.</strong> Create an ElastiCache for Redis replication group with cluster mode disabled, one primary and one replica, Multi-AZ enabled, and automatic failover turned on. Note the primary endpoint. Configure the application to use it, then drive a steady read/write load with a simple loop or a load-testing tool for several minutes so that the cache is warm and the hit rate is stable.</p>
+          <p><strong>3. Force a Redis failover.</strong> Trigger a failover on the replication group — either through the console's failover action or by rebooting the primary with failover. Watch the CloudWatch metrics for the replication group: <code>CurrConnections</code>, <code>CacheHits</code>, <code>CacheMisses</code>, and the failover event in the ElastiCache event log. Record how long the application saw errors, whether the session tokens written before the failover were still readable afterward, and whether the client reconnected without a restart. This is the behavior you are buying when you choose Redis.</p>
+          <p><strong>4. Build the Memcached session store.</strong> Create an ElastiCache for Memcached cluster with three nodes and Auto Discovery enabled. Point the application at the cluster's discovery endpoint and repeat the same warm-up load. Confirm the hit rate stabilizes and that keys are distributed across all three nodes by checking the per-node <code>CurrItems</code> metric.</p>
+          <p><strong>5. Kill a Memcached node.</strong> Terminate one of the three nodes and watch what happens. The client library will rehash the keyspace across the two survivors. Record the hit-rate drop, the corresponding spike in backing-store reads, and how long the cache takes to re-warm. Compare that miss storm against the Redis failover you measured in step 3. The difference is the entire argument for choosing one engine over the other.</p>
+          <p><strong>6. Test the eviction boundary.</strong> On the Redis group, set the eviction policy to <code>allkeys-lru</code> and drive writes until <code>BytesUsedForCache</code> approaches the node's memory limit. Watch <code>Evictions</code> climb and the hit rate degrade. Then change the policy to <code>noeviction</code> and observe that writes begin failing instead. This is the tradeoff between shedding cold data and rejecting new writes, and it is worth seeing once.</p>
+          <p><strong>7. Tear down and write up.</strong> Delete both clusters, the application, and any load-testing resources. Write a short comparison table with the numbers you measured: failover duration, hit-rate drop, recovery time, and error count for each engine. Keep it — the numbers are more persuasive than the prose when you are justifying an engine choice in a design review.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="quiz">
+        <h2 class="section-heading">Scenario Question Drills (15 questions)</h2>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q1.</strong> A session store must survive a node failure without losing data and support automatic failover. Which caching engine and configuration fits?</p>
+          <div class="scenario-options" id="opts-d27q1">
+            <div class="scenario-option">A. Memcached with Auto Discovery enabled</div>
             <div class="scenario-option">B. Redis with cluster mode enabled and replicas per shard</div>
             <div class="scenario-option">C. Memcached with multiple nodes</div>
             <div class="scenario-option">D. Redis without replicas</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d27q1', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d27q1"><strong>Correct answer: B.</strong> Only Redis supports replication and automatic failover; Memcached has no replication, so a node failure means data loss for the keys it held. Redis without replicas also cannot fail over.</div>
         </div>
-        <button class="scenario-reveal-btn" onclick="revealAnswer('d27q0', 1)">Reveal Answer</button>
-        <div class="scenario-explanation" id="exp-d27q0"><strong>Correct answer: B.</strong> Only Redis supports replication and automatic failover; Memcached has no replication and node failure means data loss for those keys.</div>
-      </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q2.</strong> A product catalog cache holds the hot 5% of a 400 GB catalog. The application can rebuild the cache from Aurora in under a minute and users see no error during a rebuild. Cost is the primary constraint. Which engine should you choose?</p>
+          <div class="scenario-options" id="opts-d27q2">
+            <div class="scenario-option">A. Redis with cluster mode enabled and three shards</div>
+            <div class="scenario-option">B. Memcached, because the cache is disposable and horizontally scaled</div>
+            <div class="scenario-option">C. DAX, because it is API-compatible</div>
+            <div class="scenario-option">D. Aurora read replicas instead of a cache</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d27q2', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d27q2"><strong>Correct answer: B.</strong> The scenario explicitly states the cache is rebuildable with no user impact, which is the definition of a disposable cache. Memcached is the cheaper, simpler fit; Redis would be over-engineering.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q3.</strong> A gaming leaderboard must be updated and queried atomically, returning the top 100 players by score in a single call. Which ElastiCache configuration fits?</p>
+          <div class="scenario-options" id="opts-d27q3">
+            <div class="scenario-option">A. Memcached with client-side sorting of all scores</div>
+            <div class="scenario-option">B. Redis using a sorted set</div>
+            <div class="scenario-option">C. Redis using a plain string per player</div>
+            <div class="scenario-option">D. Memcached with a separate sorted index maintained by the application</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d27q3', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d27q3"><strong>Correct answer: B.</strong> Redis sorted sets support atomic score updates and server-side range queries, which is exactly the leaderboard pattern. Memcached has no server-side data structures or ordering.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q4.</strong> A cache must hold 900 GB of working set and absorb 400,000 writes per second. A single Redis node type tops out well below both. What should you configure?</p>
+          <div class="scenario-options" id="opts-d27q4">
+            <div class="scenario-option">A. Redis with cluster mode disabled and the largest available node</div>
+            <div class="scenario-option">B. Redis with cluster mode enabled, sharding the keyspace across many shards with replicas per shard</div>
+            <div class="scenario-option">C. Memcached with 20 nodes</div>
+            <div class="scenario-option">D. Two Redis replication groups with application-level routing</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d27q4', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d27q4"><strong>Correct answer: B.</strong> Cluster mode enabled shards the keyspace across up to 500 shards, raising both the memory ceiling and the write throughput ceiling, with per-shard replicas for failover.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q5.</strong> A Memcached cluster loses one of its three nodes. What is the expected application-visible behavior?</p>
+          <div class="scenario-options" id="opts-d27q5">
+            <div class="scenario-option">A. A replica takes over the lost node's keys with no misses</div>
+            <div class="scenario-option">B. Only the keys on the lost node miss; the rest are unaffected</div>
+            <div class="scenario-option">C. The client rehashes the keyspace across the surviving nodes, causing a simultaneous miss storm across a large fraction of keys</div>
+            <div class="scenario-option">D. The cluster enters read-only mode until the node is replaced</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d27q5', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d27q5"><strong>Correct answer: C.</strong> Because Memcached has no replication, the client library rehashes keys across the survivors. Keys that moved to a different node also miss, so the impact is far larger than the proportional loss of one node.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q6.</strong> A read-heavy application uses DynamoDB as its backing store and needs microsecond read latency on hot items with no application-level cache logic. What should you deploy?</p>
+          <div class="scenario-options" id="opts-d27q6">
+            <div class="scenario-option">A. ElastiCache for Redis with a cache-aside pattern</div>
+            <div class="scenario-option">B. ElastiCache for Memcached</div>
+            <div class="scenario-option">C. DynamoDB Accelerator (DAX)</div>
+            <div class="scenario-option">D. Aurora read replicas</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d27q6', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d27q6"><strong>Correct answer: C.</strong> DAX is API-compatible with DynamoDB and provides transparent read-through caching with no application changes. ElastiCache would require the application to implement cache-aside logic itself.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q7.</strong> A Redis cache is running at 96% memory utilization. Hit rate has dropped sharply over the past hour and <code>Evictions</code> is climbing steadily. What is the correct first response?</p>
+          <div class="scenario-options" id="opts-d27q7">
+            <div class="scenario-option">A. Add more read replicas to the replication group</div>
+            <div class="scenario-option">B. Increase the node size or reduce TTLs so the working set fits with headroom</div>
+            <div class="scenario-option">C. Change the eviction policy to <code>noeviction</code></div>
+            <div class="scenario-option">D. Enable AOF persistence</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d27q7', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d27q7"><strong>Correct answer: B.</strong> Rising evictions with a collapsing hit rate means the working set no longer fits. Replicas do not add memory, <code>noeviction</code> would make writes fail, and persistence does not address capacity.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q8.</strong> An application uses Redis multi-key transactions across several related keys. The dataset fits comfortably in a single node's memory. Which configuration should you choose?</p>
+          <div class="scenario-options" id="opts-d27q8">
+            <div class="scenario-option">A. Cluster mode enabled, because it scales better</div>
+            <div class="scenario-option">B. Cluster mode disabled, because multi-key operations across hash slots are restricted in cluster mode</div>
+            <div class="scenario-option">C. Memcached, because it supports multi-key operations natively</div>
+            <div class="scenario-option">D. Cluster mode enabled with hash tags on every key</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d27q8', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d27q8"><strong>Correct answer: B.</strong> Cluster mode restricts multi-key operations to keys in the same hash slot. Since the dataset fits in one node, cluster mode disabled preserves the application's transaction semantics with no downside.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q9.</strong> A globally distributed application needs its cache readable with low latency in a second region, with writes in the primary region propagating to the secondary. Which feature provides this?</p>
+          <div class="scenario-options" id="opts-d27q9">
+            <div class="scenario-option">A. Memcached Auto Discovery across regions</div>
+            <div class="scenario-option">B. ElastiCache Global Datastore for Redis</div>
+            <div class="scenario-option">C. S3 Cross-Region Replication of cache snapshots</div>
+            <div class="scenario-option">D. Route 53 latency-based routing to two independent caches</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d27q9', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d27q9"><strong>Correct answer: B.</strong> Global Datastore provides cross-region replication for ElastiCache for Redis, giving low-latency local reads in secondary regions. Memcached has no cross-region replication capability.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q10.</strong> A team wants to use a Redis module that ElastiCache does not support. What is the appropriate architecture?</p>
+          <div class="scenario-options" id="opts-d27q10">
+            <div class="scenario-option">A. Use ElastiCache anyway and accept the missing module</div>
+            <div class="scenario-option">B. Self-manage Redis on EC2 so the required module can be installed</div>
+            <div class="scenario-option">C. Switch to Memcached, which supports modules</div>
+            <div class="scenario-option">D. Use DAX instead</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d27q10', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d27q10"><strong>Correct answer: B.</strong> ElastiCache does not support arbitrary Redis modules. When a specific module is a hard requirement, self-managed Redis on EC2 is the only path, at the cost of taking on patching and failover orchestration.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q11.</strong> A cache is sized so that a single node loss would push the surviving Memcached nodes past their memory limit. What is the correct design change?</p>
+          <div class="scenario-options" id="opts-d27q11">
+            <div class="scenario-option">A. Enable Auto Discovery so clients rebalance faster</div>
+            <div class="scenario-option">B. Provision enough headroom on each node that the surviving nodes can absorb the rehashed keyspace</div>
+            <div class="scenario-option">C. Add a replica to each Memcached node</div>
+            <div class="scenario-option">D. Switch the eviction policy to <code>noeviction</code></div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d27q11', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d27q11"><strong>Correct answer: B.</strong> Memcached has no replication, so the only protection against a node loss is headroom. Auto Discovery speeds topology updates but does not create capacity, and Memcached has no replicas.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q12.</strong> A cache is deployed with <code>noeviction</code> and begins returning write errors as memory fills. What is the underlying problem?</p>
+          <div class="scenario-options" id="opts-d27q12">
+            <div class="scenario-option">A. The cache has too many replicas</div>
+            <div class="scenario-option">B. <code>noeviction</code> rejects new writes instead of shedding cold keys, which is almost always the wrong policy for a cache</div>
+            <div class="scenario-option">C. AOF persistence is disabled</div>
+            <div class="scenario-option">D. The client connection pool is exhausted</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d27q12', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d27q12"><strong>Correct answer: B.</strong> With <code>noeviction</code>, Redis returns errors on writes once memory is full rather than evicting cold data. For a cache, an LRU policy that sheds cold keys is nearly always the better behavior.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q13.</strong> After a Redis failover, users report being logged out even though the failover completed successfully. What is the most likely cause?</p>
+          <div class="scenario-options" id="opts-d27q13">
+            <div class="scenario-option">A. The replica had replication lag, so recent session writes had not propagated before promotion</div>
+            <div class="scenario-option">B. Redis does not support session storage</div>
+            <div class="scenario-option">C. The eviction policy removed the session keys</div>
+            <div class="scenario-option">D. The client library rehashed the keyspace</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d27q13', 0)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d27q13"><strong>Correct answer: A.</strong> Redis replication is asynchronous. A failover to a replica that was behind loses the writes that had not yet propagated, which for a session store means recent logins are gone. Monitoring replication lag is the mitigation.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q14.</strong> A workload needs a cache that supports publish/subscribe messaging between application instances in addition to key-value storage. Which engine fits?</p>
+          <div class="scenario-options" id="opts-d27q14">
+            <div class="scenario-option">A. Memcached, using its pub/sub commands</div>
+            <div class="scenario-option">B. Redis, which supports pub/sub natively</div>
+            <div class="scenario-option">C. Either engine, since pub/sub is a client-side pattern</div>
+            <div class="scenario-option">D. DAX, which supports pub/sub for DynamoDB</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d27q14', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d27q14"><strong>Correct answer: B.</strong> Redis supports pub/sub as a native feature. Memcached has no messaging capability, and DAX is a DynamoDB cache with no pub/sub.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q15.</strong> A scenario describes a cache that must not lose data, must be queryable by the application with complex filters, and must serve as the authoritative record for user profiles. What is wrong with proposing ElastiCache?</p>
+          <div class="scenario-options" id="opts-d27q15">
+            <div class="scenario-option">A. Nothing — Redis with AOF persistence satisfies all three requirements</div>
+            <div class="scenario-option">B. ElastiCache is a cache, not a system of record: it has no query language, no schema, and persistence is a recovery aid rather than a durability guarantee</div>
+            <div class="scenario-option">C. ElastiCache cannot store user profile data</div>
+            <div class="scenario-option">D. Only Memcached is unsuitable; Redis is fine</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d27q15', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d27q15"><strong>Correct answer: B.</strong> ElastiCache is a cache. It has no query language or schema, and even with persistence enabled it is not designed as a durable system of record. A scenario requiring an authoritative store needs a database.</div>
+        </div>
+      </section>
+
+      <section class="doc-section" id="preview">
+        <h2 class="section-heading">Peek into Tomorrow</h2>
+        <div class="card card-purple">
+          <p>Today's decision boundary was narrow and specific: given a caching requirement, choose Redis or Memcached. Tomorrow widens the frame considerably. The question becomes how to choose among an entire portfolio of data services — relational, key-value, document, cache, object — when a scenario describes latency, consistency, and scale requirements without naming a service. That is a harder problem, because the constraints in those scenarios are often in tension. A workload that needs single-digit-millisecond latency at unpredictable scale points at DynamoDB, but a workload that needs multi-region active writes points at DynamoDB Global Tables specifically, and a workload that needs relational semantics with cross-region reads points at Aurora Global Database instead. The two global replication features sound similar and behave very differently: one is multi-active with last-writer-wins conflict resolution, the other is single-writer with a promotable secondary.</p>
+          <p>The unresolved question today leaves open is where the cache fits in that matrix. A cache is not a data service in the same sense as the others — it is a layer in front of one — and the synthesis has to place it correctly rather than treating it as a peer. Tomorrow's scenario drills are built to expose exactly that confusion, along with the consistency-model tradeoffs that separate the relational and key-value families. If today's material felt like a narrow engine comparison, tomorrow is where it becomes a selection framework.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="sources">
+        <h2 class="section-heading">Sources</h2>
+        <div class="card">
+          <ul class="source-list">
+            <li><a href="https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/WhatIs.html" target="_blank">Amazon ElastiCache — What Is ElastiCache?</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/SelectEngine.html" target="_blank">Choosing Between Memcached and Redis</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/Replication.html" target="_blank">ElastiCache for Redis — Replication Groups and Failover</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/ClusterMode.html" target="_blank">ElastiCache for Redis — Cluster Mode</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/Redis-Global-Datastore.html" target="_blank">ElastiCache for Redis — Global Datastore</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/CacheNodes.html" target="_blank">ElastiCache — Cache Nodes and Node Types</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/CacheMetrics.html" target="_blank">ElastiCache — Monitoring with CloudWatch Metrics</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/BestPractices.html" target="_blank">ElastiCache — Best Practices</a></li>
+            <li><a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/DAX.html" target="_blank">Amazon DynamoDB Accelerator (DAX)</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/Strategies.html" target="_blank">ElastiCache — Caching Strategies</a></li>
+          </ul>
+        </div>
       </section>
       <div class="day-nav">
         <a href="day-026.html">&larr; Day 26: Amazon S3 Storage Classes, Lifecycle &amp; Replication</a>

@@ -104,37 +104,366 @@
         <span class="pill pill-green">Phase 2: Compute, Containers &amp; Global Databases</span>
       </div>
       <h1 class="hero-title">AWS Lambda Advanced — Concurrency, VPC Networking &amp; Event Source Mapping</h1>
-      <div class="reading-meta">&#128337; ~3 min read &middot; 3 services covered</div>
+      <div class="reading-meta">&#128337; ~58 min read &middot; 3 services covered</div>
       <div class="services-grid">
         <span class="service-tag">Lambda</span>
         <span class="service-tag">Reserved/Provisioned Concurrency</span>
         <span class="service-tag">Event Source Mapping</span>
       </div>
       <div id="tracker"></div>
-      <section class="doc-section">
-        <h2 class="section-heading">Today's Concept</h2>
+
+      <section class="doc-section" id="recap">
+        <h2 class="section-heading">Recap: From Traffic Shifting to Invocation Control</h2>
         <div class="card card-accent">
-          <p>Reserved concurrency caps (and guarantees) a function's max concurrent executions; provisioned concurrency pre-warms execution environments to eliminate cold starts. Event source mapping polls streaming/queue sources (Kinesis, DynamoDB Streams, SQS) and invokes Lambda in batches, with per-source concurrency and error-handling behavior (partial batch failures, DLQs).</p>
-        </div>
-        <h3 class="sub-heading">Hands-on Lab / Practical Action (45 min)</h3>
-        <div class="card">
-          <p>Configure provisioned concurrency for a latency-sensitive Lambda and reserved concurrency to protect a downstream RDS instance from connection exhaustion.</p>
+          <p>Day 18 ended on a deceptively simple idea: an Application Load Balancer can hold two target groups behind a single listener rule and split traffic between them by weight, which is what makes blue/green and canary releases a routing configuration rather than a deployment project. That same day noted, almost in passing, that an ALB target group can point at a Lambda function instead of an instance or container. That single sentence is where today picks up. Weighted target groups give you control over <em>which</em> version of a backend receives a request; they say nothing about how many copies of that backend are allowed to exist at once, how quickly a new copy can be brought into service, or what happens when the backend is a function that scales on demand rather than a fleet you sized yourself.</p>
+          <p>Today extends the elastic-capacity thread from the load-balancer layer down into the invocation layer. The ALB decided where traffic went; Lambda concurrency controls decide whether the function can absorb that traffic, whether it can absorb it without a cold-start penalty, and whether absorbing it will take down whatever sits behind it. The same canary that looked safe at the routing layer can still exhaust a database connection pool if the function behind the green target group scales without a ceiling.</p>
         </div>
       </section>
-      <section class="doc-section">
+
+      <section class="doc-section" id="why-on-exam">
+        <h2 class="section-heading">1. Why This Is on the Exam</h2>
+        <p>Lambda appears throughout the SAP-C02 blueprint, but the questions that separate a passing score from a failing one are almost never "what is Lambda." They are questions about a serverless component that behaves correctly in a diagram and badly in production: a function that scales to a thousand concurrent executions and takes a relational database down with it, a latency-sensitive API that meets its p99 target in a load test and misses it after every deployment, a stream consumer that silently stops processing because one malformed record poisoned a shard. Each of those is a concurrency, networking, or event-source-mapping question wearing a different costume.</p>
+        <p>The reason this material carries weight is that Lambda's scaling model is fundamentally different from every other compute service in the exam's scope. An Auto Scaling Group has a maximum size you set explicitly, and exceeding demand produces queueing at the load balancer, which is visible and bounded. Lambda has no such default ceiling per function — it scales until it hits the account-level concurrency limit, and the failure it produces when it gets there is throttling that surfaces as 429 responses from the invoke API rather than as a saturated instance. Architects who reason about Lambda as "EC2 that you don't manage" get the blast-radius questions wrong, because the blast radius of an unbounded function is whatever it can reach: a database, a downstream API, a third-party rate limit.</p>
+        <p>The exam also tests the boundary between the two ways a function gets invoked, because the operational consequences diverge sharply. Synchronous invocations — API Gateway, an ALB, a direct SDK call — propagate errors back to the caller and are governed by the caller's timeout. Asynchronous invocations — S3 events, EventBridge, SNS — are queued internally by Lambda, retried twice on failure, and can be routed to a dead-letter queue. Poll-based invocations through event source mapping — Kinesis, DynamoDB Streams, SQS, Kafka, MQ — are a third model entirely, where Lambda itself is the consumer and the concurrency semantics are tied to shards or queue depth rather than to incoming request rate. Most of the hard scenario questions live in that third model, because it is the one where a misconfiguration produces data loss or a stalled pipeline rather than a clean error.</p>
+        <p>Finally, the VPC question keeps reappearing in new forms. A function inside a VPC can reach private resources but loses direct internet access unless you provide a NAT path, and it consumes IP addresses from your subnets in proportion to its concurrency. That last point is the one candidates miss: a function with a reserved concurrency of 500 in a VPC needs enough address space for 500 elastic network interfaces, and a subnet sized for a handful of instances will run out. The exam frames this as a capacity-planning question, and the answer is usually about subnet sizing rather than about Lambda itself.</p>
+      </section>
+
+      <section class="doc-section" id="mechanism">
+        <h2 class="section-heading">2. How Concurrency Actually Works</h2>
+        <p>Every Lambda invocation runs inside an execution environment: a micro-VM provisioned with the function's runtime, its layers, and its code, with a writable <code>/tmp</code> directory and any global state the handler initializes. When an invocation arrives and an environment is already warm and not busy, Lambda reuses it. When no warm environment is available, Lambda creates a new one, and the caller waits while the runtime boots, the code is downloaded, and the handler's initialization code runs. That wait is the cold start, and its duration depends on runtime, package size, and whether the function attaches to a VPC.</p>
+        <p>Concurrency is simply the number of execution environments serving requests at the same moment. Lambda tracks it in three layers that are easy to conflate. Unreserved account concurrency is the shared pool — by default 1,000 concurrent executions across all functions in a region, adjustable upward through a Service Quotas request. Reserved concurrency carves a slice out of that pool and dedicates it to one function, which both guarantees that the function can always reach that level and caps it so it can never exceed it. Provisioned concurrency goes further and pre-initializes a specified number of environments so that invocations land on already-warm capacity with no cold start at all.</p>
+        <p>The distinction between reserved and provisioned concurrency is the single most commonly tested point in this section, and it is worth stating precisely. Reserved concurrency is a limit and a guarantee on how many environments may exist; it does not make them warm. Provisioned concurrency is a pre-warmed pool; it is billed for the time it is provisioned whether or not it is used, and it is configured on a published version or alias rather than on <code>$LATEST</code>. A function can have both: provisioned concurrency to eliminate cold starts for the baseline traffic, and reserved concurrency to cap the total so that a spike cannot run away.</p>
+        <p>When a function is invoked and no concurrency is available — because the reserved limit is reached, or because the account pool is exhausted — Lambda throttles the invocation. For synchronous callers this surfaces immediately as a <code>TooManyRequestsException</code>, and the caller decides what to do. For asynchronous invocations Lambda retries internally for up to six hours with exponential backoff before sending the event to a dead-letter queue or an on-failure destination. For poll-based sources the behavior is different again: Lambda stops polling that shard or queue partition and retries the batch, which means the backlog grows rather than the request failing. Three invocation models, three different throttle symptoms, and the exam expects you to know which one a scenario is describing.</p>
+        <p>Event source mapping is the mechanism that turns a pull-based source into Lambda invocations. Lambda runs a poller per shard (for Kinesis and DynamoDB Streams) or per queue (for SQS), reads a batch of records, and invokes the function once per batch. Because the poller is per shard, the maximum concurrency for a Kinesis-backed function is bounded by the shard count unless you enable parallelization factor, which allows multiple concurrent batches per shard while preserving ordering within a partition key. SQS has no such structural limit — Lambda scales the number of pollers with queue depth — which is why SQS is the usual answer when a scenario needs high-throughput fan-out without ordering guarantees.</p>
+      </section>
+
+      <section class="doc-section" id="decision-boundary">
+        <h2 class="section-heading">3. The Core Decision Boundary: Which Concurrency Control</h2>
+        <p>Nearly every concurrency scenario reduces to one question: is the problem that the function is too slow to start, or that it is too fast to stop? Those are different problems with different controls, and the exam deliberately writes scenarios that could be read either way until you find the sentence that disambiguates them. If the scenario mentions latency targets, p99, user-facing response time, or "the first request after a deployment is slow," it is a cold-start problem and the answer involves provisioned concurrency. If it mentions a downstream system being overwhelmed, connection pool exhaustion, throttling from a third-party API, or cost spikes from runaway scaling, it is a blast-radius problem and the answer involves reserved concurrency.</p>
+        <p>The trap is that both controls are described in the same vocabulary — "limit the function's concurrency" — and a scenario can contain both symptoms. When that happens, the correct answer is usually to apply both, and the exam rewards candidates who say so explicitly rather than picking the more familiar of the two. A latency-sensitive API that also writes to a relational database needs provisioned concurrency for the read path's responsiveness and reserved concurrency to bound the write path's connection count.</p>
+        <p>A second boundary sits underneath the first: whether the function should be in a VPC at all. A function that only talks to AWS APIs over public endpoints, or to DynamoDB and S3 through gateway endpoints, gains nothing from VPC attachment and pays for it in cold-start latency and ENI consumption. A function that must reach an RDS instance, an ElastiCache cluster, or an internal service with no public endpoint has no choice. The decision is not "is this function part of a VPC-based architecture" but "does this specific function's traffic need to traverse a private network path."</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Symptom in the scenario</th><th>Underlying problem</th><th>Control to reach for</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>p99 latency spikes after each deploy, then settles</td><td>Cold starts on new execution environments</td><td>Provisioned concurrency on a published alias</td></tr>
+              <tr><td>RDS connection count hits max during traffic peaks</td><td>Unbounded fan-out to a fixed-capacity backend</td><td>Reserved concurrency sized to the connection pool</td></tr>
+              <tr><td>Third-party API returns 429 during bursts</td><td>Downstream rate limit exceeded by parallel invocations</td><td>Reserved concurrency, or a queue in front of the function</td></tr>
+              <tr><td>Function cannot reach an RDS endpoint</td><td>Function is outside the VPC</td><td>VPC configuration with private subnets and a security group</td></tr>
+              <tr><td>Function in a VPC cannot reach a public API</td><td>No route to the internet from private subnets</td><td>NAT gateway, or a VPC endpoint for the target service</td></tr>
+              <tr><td>Subnet runs out of IP addresses as traffic grows</td><td>One ENI per concurrent execution in the VPC</td><td>Larger subnets, or fewer concurrent executions</td></tr>
+              <tr><td>Kinesis consumer falls behind and never catches up</td><td>Per-shard poller concurrency is the ceiling</td><td>More shards, or parallelization factor on the event source mapping</td></tr>
+              <tr><td>One bad record stops an entire shard</td><td>Batch failure retried indefinitely</td><td>Partial batch response, or a maximum retry count with an on-failure destination</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="doc-section" id="config-tradeoffs">
+        <h2 class="section-heading">4. Configuration Modes and Their Tradeoffs</h2>
+        <p>Reserved concurrency is the blunt instrument, and its bluntness is the point. Setting it to a value below the function's natural peak means the function will throttle rather than scale, which is exactly what you want when the thing behind it cannot absorb more load. The cost is that throttled synchronous invocations return errors to callers, so a reserved concurrency value that is too low converts a downstream capacity problem into a user-visible availability problem. The value should be derived from the downstream system's capacity, not from the function's own throughput: if the database can serve 200 connections and each invocation holds one, the ceiling is 200 minus whatever else uses that database.</p>
+        <p>Provisioned concurrency is the expensive instrument. You pay for the provisioned environments continuously, whether traffic arrives or not, and you pay for the invocations that use them on top of that. The tradeoff is straightforward: it converts an unpredictable tail latency into a predictable line item. The configuration detail that matters operationally is that provisioned concurrency is applied to a version or alias, and the alias is what your API Gateway integration or ALB target group should point at. That indirection is what makes it possible to shift provisioned capacity between versions during a deployment without changing the caller.</p>
+        <p>Event source mapping configuration is where the most consequential tradeoffs live, because the defaults are tuned for correctness rather than throughput. Batch size controls how many records a single invocation receives; a larger batch amortizes invocation overhead but means a single failure retries more work. The maximum retry count and maximum record age bound how long a poisoned batch can block a shard before Lambda gives up on it. The on-failure destination determines where discarded records go, and without one they are simply lost. For SQS specifically, the function can report partial batch failures so that only the failed messages return to the queue, which is the difference between one bad message costing one retry and one bad message costing the whole batch.</p>
+        <p>VPC configuration adds a set of tradeoffs that are easy to underestimate. Attaching a function to a VPC gives it access to private resources but removes its default route to the internet, so any call to a public AWS endpoint or third-party API must go through a NAT gateway or a VPC endpoint. Each concurrent execution consumes an ENI in the configured subnets, which means the function's effective concurrency ceiling is also bounded by available IP addresses. And the ENI attachment itself adds latency to cold starts, which is why a function that does not need private networking should not be attached to a VPC "just in case."</p>
+      </section>
+
+      <section class="doc-section" id="sizing-limits">
+        <h2 class="section-heading">5. Sizing, Limits and Quotas</h2>
+        <p>The numbers in this section are the ones that turn a plausible answer into a defensible one, and they are all documented in the Lambda quotas page and the concurrency documentation. The default account-level concurrency limit is 1,000 concurrent executions per region, shared across all functions in that account and region. That figure is a soft limit and can be raised through Service Quotas, but the raise is per-region and applies to the account, not to an individual function. Reserved concurrency is subtracted from that pool, so a function with 400 reserved leaves 600 for everything else in the account.</p>
+        <p>Provisioned concurrency has its own quota, separate from the unreserved pool, and it is also a soft limit that can be raised. The important operational number is not the quota but the cost model: provisioned concurrency is billed per GB-second of provisioned capacity, continuously, plus the normal invocation charges. That means the sizing question is not "how much do I need at peak" but "what is the smallest provisioned floor that keeps the latency-sensitive path warm," with the rest of the traffic served by on-demand concurrency behind it.</p>
+        <p>Event source mapping limits shape what a stream consumer can do. A Kinesis data stream's shard count sets the maximum number of concurrent pollers, so a function consuming a 4-shard stream tops out at 4 concurrent invocations unless parallelization factor is raised. DynamoDB Streams behaves the same way, with concurrency tied to the number of shards in the stream. SQS has no shard structure, so Lambda scales pollers with queue depth up to the function's concurrency limit, which makes SQS the right choice when throughput matters more than ordering. The maximum batch size and maximum batching window are configurable per event source mapping, and the batching window is what lets a low-traffic queue accumulate records into a single invocation rather than invoking once per message.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Setting</th><th>Default / typical value</th><th>What it controls</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Account concurrency limit</td><td>1,000 per region (soft)</td><td>Shared ceiling across all functions in the account</td></tr>
+              <tr><td>Reserved concurrency</td><td>Unset by default</td><td>Guaranteed floor and hard ceiling for one function</td></tr>
+              <tr><td>Provisioned concurrency</td><td>Unset by default</td><td>Pre-warmed environments on a version or alias</td></tr>
+              <tr><td>Kinesis / DynamoDB Streams concurrency</td><td>One poller per shard</td><td>Maximum concurrent batches from a stream</td></tr>
+              <tr><td>Parallelization factor</td><td>1</td><td>Concurrent batches per shard, ordering preserved per partition key</td></tr>
+              <tr><td>SQS poller scaling</td><td>Scales with queue depth</td><td>Throughput ceiling for queue-based consumers</td></tr>
+              <tr><td>Maximum batch size</td><td>Configurable per source</td><td>Records per invocation, and retry blast radius</td></tr>
+              <tr><td>Maximum batching window</td><td>Configurable per source</td><td>How long records accumulate before an invocation</td></tr>
+              <tr><td>VPC ENI consumption</td><td>One ENI per concurrent execution</td><td>Subnet IP address requirement</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="doc-section" id="failure-modes">
+        <h2 class="section-heading">6. Failure Modes and What They Look Like in Production</h2>
+        <p>The most common production failure is not a Lambda failure at all; it is a downstream failure caused by Lambda scaling correctly. The symptom is a database or API that becomes slow or unavailable precisely when traffic is highest, with connection errors or 429 responses appearing in the downstream system's logs rather than in Lambda's. The first diagnostic move is to compare the function's <code>ConcurrentExecutions</code> metric against the downstream system's connection count over the same window. If they track each other, the fix is a concurrency ceiling, not a Lambda tuning change.</p>
+        <p>The second failure mode is throttling, and its appearance depends entirely on the invocation model. Synchronous callers see <code>TooManyRequestsException</code> and, if the caller is API Gateway, a 429 to the end user. Asynchronous invocations do not fail visibly at all — they queue and retry, so the symptom is latency rather than errors, and the event may eventually land in a dead-letter queue after the retry window expires. Poll-based sources stop advancing, so the symptom is a growing iterator age on a Kinesis stream or an increasing <code>ApproximateAgeOfOldestMessage</code> on an SQS queue. Three different dashboards, one root cause.</p>
+        <p>Cold starts present as a latency distribution rather than a latency average. The p50 is fine and the p99 is terrible, and the tail is worse immediately after a deployment or after a period of low traffic when environments have been reclaimed. The metric to watch is the duration distribution, not the mean, and the diagnostic question is whether the slow invocations correlate with new execution environments. If they do, provisioned concurrency is the answer; if they correlate with a specific downstream call, the problem is elsewhere and provisioned concurrency will only make the slow path more expensive.</p>
+        <p>Event source mapping introduces two failure modes with no equivalent elsewhere. The first is the poisoned record: a single malformed message causes the batch to fail, the batch is retried, it fails again, and the shard stops advancing indefinitely. The second is the silent drop: a batch exceeds the maximum retry count or maximum record age, Lambda discards it, and without an on-failure destination the records are gone with no trace beyond a CloudWatch metric. Both are configuration problems, and both are invisible until someone notices that the pipeline has stopped producing output.</p>
+      </section>
+
+      <section class="doc-section" id="sre-angle">
+        <h2 class="section-heading">7. The Operational and SRE Angle</h2>
+        <p>The metrics that matter for a Lambda function are a small set, and the discipline is in knowing which one answers which question. <code>Invocations</code> and <code>Errors</code> give the basic health signal. <code>Duration</code> answers the latency question, but only if you look at percentiles rather than the average. <code>ConcurrentExecutions</code> is the one that explains downstream impact, because it is the number that determines how many simultaneous connections or API calls the function is making. <code>Throttles</code> tells you that a ceiling was hit, and the accompanying question is always whether the ceiling was the account pool or a reserved limit. For poll-based sources, <code>IteratorAge</code> on Kinesis and <code>ApproximateAgeOfOldestMessage</code> on SQS are the leading indicators that a consumer is falling behind, and they move before anything user-visible breaks.</p>
+        <p>Alarms should be built around the failure modes rather than around the metrics. A throttle alarm on a synchronous function is an availability alarm and should page. A throttle alarm on an asynchronous function is often expected behavior during a burst and should not page on its own. An iterator age alarm on a stream consumer is the closest thing to a data-freshness SLO and should page when it exceeds the business's tolerance for staleness. A concurrency alarm tied to the downstream system's capacity is a capacity-planning signal and belongs in a ticket queue rather than a pager rotation.</p>
+        <p>The runbook shape follows from the invocation model. For a synchronous function, the first step is to check whether throttling is happening and whether the reserved concurrency is the binding constraint; the second is to check the downstream dependency's health. For an asynchronous function, the first step is to check the dead-letter queue and the on-failure destination, because that is where failed events accumulate. For a poll-based consumer, the first step is to check iterator age and the event source mapping's error metrics, because a stalled shard is the failure that matters. Writing these as three separate runbooks rather than one generic "Lambda is broken" document is the difference between a five-minute recovery and an hour of guessing.</p>
+        <p>From an SLO perspective, the interesting question is what availability means for a function that is invoked asynchronously. The caller does not receive an error when the function fails; it receives an acknowledgement that the event was accepted. The user-visible SLO is therefore about eventual processing — the fraction of events processed within a time bound — rather than about invocation success. That reframing changes which metrics feed the SLO and which alarms are meaningful, and it is the kind of distinction the exam probes when it asks how to detect that an asynchronous pipeline has silently degraded.</p>
+      </section>
+
+      <section class="doc-section" id="gotchas">
+        <h2 class="section-heading">8. Edge Cases and Exam Gotchas</h2>
+        <p>Reserved concurrency set to zero disables the function entirely. This is occasionally the correct answer — a kill switch for a runaway function — but it is more often a distractor, and it is worth recognizing that the value is a hard stop rather than a throttle threshold. Relatedly, reserved concurrency is subtracted from the account pool, so reserving capacity for one function reduces what is available to every other function in the account. A scenario that reserves 900 of 1,000 for a single function has effectively starved everything else, and that is usually the intended wrong answer.</p>
+        <p>Provisioned concurrency cannot be applied to <code>$LATEST</code>. It attaches to a published version or an alias, and the alias is what callers should target. This matters for deployment scenarios: the standard pattern is to publish a new version, point an alias at it, and shift provisioned concurrency and traffic together, which is what makes a canary release of a Lambda function possible without a cold-start penalty on the new version. A scenario that describes applying provisioned concurrency to <code>$LATEST</code> is describing something that does not work.</p>
+        <p>VPC-attached functions do not get internet access by default, and the fix is not always a NAT gateway. If the function is calling S3 or DynamoDB, a gateway VPC endpoint is cheaper and faster than routing through NAT. If it is calling another AWS service with an interface endpoint, a PrivateLink endpoint keeps the traffic off the internet entirely. The exam frequently offers a NAT gateway as the only "correct-looking" option when a VPC endpoint is the better answer, and the disambiguator is which service the function is actually calling.</p>
+        <p>Event source mapping has a set of defaults that are wrong for high-volume streams. The default batch size and the default retry behavior mean that a single bad record can block a shard for the maximum record age, which can be hours. The mitigations are a maximum retry count with an on-failure destination, a maximum record age that bounds the damage, and — for SQS — a partial batch response so that only the failed messages are retried. A scenario that describes a stream consumer that "stopped processing after one bad message" is testing whether you know these three settings exist.</p>
+        <p>Finally, the concurrency limit is per region and per account, not per function and not global. A multi-region architecture has a separate 1,000-execution pool in each region, and a function that is throttled in one region is not throttled in another. This is occasionally the point of a multi-region scenario, and it is easy to miss when the scenario is framed around a single function's behavior.</p>
+      </section>
+
+      <section class="doc-section" id="vs-comparison">
+        <h2 class="section-heading">9. Lambda Concurrency vs. the Alternatives</h2>
+        <p>The comparison that matters most is between Lambda's scaling model and the scaling model of the container services covered earlier in this phase. An ECS service on Fargate scales by adjusting a desired task count, and the ceiling is explicit: you set the maximum number of tasks, and the service will not exceed it. Lambda's ceiling is implicit and account-wide, which means the same architectural intent — "do not let this backend overwhelm the database" — is expressed as a task count maximum in one model and as reserved concurrency in the other. Recognizing that these are the same control in different clothing is what lets you answer a scenario that mixes the two.</p>
+        <p>The second comparison is between the three invocation models themselves, because the exam often presents a scenario where the correct answer is to change the invocation model rather than to tune concurrency. A synchronous API call that needs retry semantics is better served by putting a queue in front of the function and making the invocation asynchronous, which converts a user-visible failure into a durable backlog. A poll-based consumer that needs higher throughput than its shard count allows is better served by adding shards or raising the parallelization factor than by raising concurrency, because concurrency is not the binding constraint.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Option</th><th>Scaling ceiling</th><th>Failure symptom when exceeded</th><th>Pick it when…</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Lambda, unreserved</td><td>Account concurrency pool</td><td>Throttling, model-dependent visibility</td><td>Traffic is spiky and the downstream can absorb the peak</td></tr>
+              <tr><td>Lambda, reserved concurrency</td><td>The reserved value</td><td>Throttling at the reserved ceiling</td><td>A downstream system has a hard capacity limit</td></tr>
+              <tr><td>Lambda, provisioned concurrency</td><td>Provisioned floor plus on-demand</td><td>Cold starts above the provisioned floor</td><td>Latency targets are strict and traffic has a predictable baseline</td></tr>
+              <tr><td>ECS on Fargate</td><td>Desired task count maximum</td><td>Queueing at the load balancer</td><td>You need long-running processes or explicit capacity control</td></tr>
+              <tr><td>SQS plus Lambda</td><td>Queue depth, bounded by concurrency</td><td>Growing message age, not errors</td><td>You need durability and retry without user-visible failure</td></tr>
+              <tr><td>Kinesis plus Lambda</td><td>Shard count times parallelization factor</td><td>Growing iterator age</td><td>You need ordered, replayable stream processing</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The rule of thumb that resolves most of these scenarios: if the constraint is the function's own responsiveness, use provisioned concurrency; if the constraint is something the function calls, use reserved concurrency or a queue; if the constraint is the source's structure, change the source. The exam rarely rewards tuning a knob that is not the binding constraint, and identifying which constraint is binding is most of the work.</p>
+      </section>
+
+      <section class="doc-section" id="lab">
+        <h2 class="section-heading">Hands-on Lab: Bounding a Function Without Breaking Its Latency</h2>
+        <div class="card card-green">
+          <p>This lab builds a function that is deliberately hostile to its own dependencies, then applies the two concurrency controls in the order a real team would: first bound the blast radius, then fix the latency. You will need an AWS account with permission to create Lambda functions, IAM roles, VPC resources, and CloudWatch alarms. Work in a single region and clean up at the end.</p>
+          <p><strong>1. Create the target of the blast radius.</strong> Launch a small RDS instance (or an Aurora Serverless v2 cluster) in a VPC with two private subnets. Note its maximum connection count for the instance class you chose — this number is the input to the reserved concurrency calculation later. Create a security group that allows traffic only from the Lambda function's security group.</p>
+          <p><strong>2. Build the function.</strong> Create a Lambda function in Node.js or Python that opens a database connection on each invocation, runs a trivial query, and holds the connection for a configurable number of milliseconds before closing it. Set the timeout to 30 seconds and the memory to 512 MB. Do not attach it to the VPC yet. Invoke it manually a few times and confirm it works against a publicly reachable test endpoint, or skip this step and go straight to the VPC configuration.</p>
+          <p><strong>3. Attach the function to the VPC.</strong> Configure the function with the two private subnets and the security group from step 1. Confirm that the function can now reach the database. Then attempt to call a public HTTPS endpoint from the function and observe the timeout — this is the missing NAT path, and it is worth seeing once so the failure is recognizable. Add a NAT gateway or, if you are calling S3 or DynamoDB, a gateway VPC endpoint, and confirm the call succeeds.</p>
+          <p><strong>4. Reproduce the failure.</strong> Generate load with a simple script that invokes the function concurrently — a few hundred parallel invocations is enough. Watch the database's connection count climb in its monitoring console while the function's <code>ConcurrentExecutions</code> metric climbs in CloudWatch. The database will begin rejecting connections, and the function's error rate will rise. Record the concurrency value at which the database started failing; that is your empirical ceiling.</p>
+          <p><strong>5. Apply reserved concurrency.</strong> Set the function's reserved concurrency to roughly 80% of the value you recorded, leaving headroom for other clients of the same database. Re-run the load test. The database should stay healthy, and the function should now show <code>Throttles</code> instead of errors. Confirm that the throttled invocations are visible in the metric and that the database's connection count plateaus rather than climbing.</p>
+          <p><strong>6. Measure the cold-start cost.</strong> With reserved concurrency in place, stop invoking the function for fifteen minutes so that its execution environments are reclaimed. Then invoke it once and record the duration. Compare that against the steady-state duration. The difference is the cold-start penalty, and it is the number that justifies or rules out provisioned concurrency.</p>
+          <p><strong>7. Add provisioned concurrency.</strong> Publish a version of the function, create an alias pointing at it, and configure provisioned concurrency on the alias equal to your expected baseline traffic. Point your load generator at the alias rather than at <code>$LATEST</code>. Repeat the cold-start measurement and confirm that the first invocation after an idle period is now fast. Note the provisioned concurrency charge appearing in Cost Explorer even when no traffic is flowing.</p>
+          <p><strong>8. Add the alarms.</strong> Create a CloudWatch alarm on <code>Throttles</code> with a threshold of zero for the synchronous path, and a second alarm on <code>ConcurrentExecutions</code> at 80% of the reserved value as an early-warning signal. Route the first to a notification channel and the second to a dashboard. The distinction between the two is the point of the exercise.</p>
+          <p><strong>9. Clean up.</strong> Delete the function, the alias, the RDS instance, the NAT gateway, and any VPC endpoints you created. Confirm that the provisioned concurrency charge has stopped.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="quiz">
         <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
-        
+
       <div class="scenario-card">
         <p class="scenario-question"><strong>Q1.</strong> A Lambda function reading from Kinesis is overwhelming a downstream RDS database with connections during traffic spikes. What limits this safely?</p>
-        <div class="scenario-options" id="opts-d19q0">
-            <div class="scenario-option">A. Increase Lambda timeout</div>
+        <div class="scenario-options" id="opts-d19q1">
+            <div class="scenario-option">A. Increase the Lambda timeout</div>
             <div class="scenario-option">B. Set reserved concurrency on the function to cap max concurrent executions</div>
             <div class="scenario-option">C. Increase the Kinesis shard count</div>
             <div class="scenario-option">D. Switch RDS to Multi-AZ</div>
         </div>
-        <button class="scenario-reveal-btn" onclick="revealAnswer('d19q0', 1)">Reveal Answer</button>
-        <div class="scenario-explanation" id="exp-d19q0"><strong>Correct answer: B.</strong> Reserved concurrency caps how many instances of the function can run simultaneously, directly bounding the number of concurrent downstream connections.</div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d19q1', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d19q1"><strong>Correct answer: B.</strong> Reserved concurrency caps how many instances of the function can run simultaneously, directly bounding the number of concurrent downstream connections. Increasing shard count would raise the ceiling further, and Multi-AZ addresses availability rather than connection pressure.</div>
       </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q2.</strong> A user-facing API backed by Lambda meets its p99 latency target under steady load, but every deployment is followed by several minutes of elevated tail latency. What is the most direct fix?</p>
+        <div class="scenario-options" id="opts-d19q2">
+            <div class="scenario-option">A. Increase the function's memory allocation</div>
+            <div class="scenario-option">B. Configure provisioned concurrency on a published alias and point the API integration at that alias</div>
+            <div class="scenario-option">C. Set reserved concurrency equal to the peak request rate</div>
+            <div class="scenario-option">D. Move the function out of the VPC</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d19q2', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d19q2"><strong>Correct answer: B.</strong> The symptom is cold starts on newly created execution environments after a deployment. Provisioned concurrency pre-warms environments, and it must be attached to a version or alias rather than to <code>$LATEST</code>.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q3.</strong> A function is attached to a VPC so it can reach an RDS instance, but it now times out when calling a third-party HTTPS API. What is the correct fix?</p>
+        <div class="scenario-options" id="opts-d19q3">
+            <div class="scenario-option">A. Increase the function's timeout</div>
+            <div class="scenario-option">B. Add a NAT gateway to the private subnets, or a VPC endpoint if the target is an AWS service</div>
+            <div class="scenario-option">C. Attach an Elastic IP to the function</div>
+            <div class="scenario-option">D. Move the function to a public subnet</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d19q3', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d19q3"><strong>Correct answer: B.</strong> A VPC-attached function has no route to the internet by default. A NAT gateway provides egress for third-party endpoints; a VPC endpoint is the cheaper and faster option when the target is an AWS service.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q4.</strong> An account has a default concurrency limit of 1,000. A team sets reserved concurrency of 900 on a single high-traffic function. What is the most likely consequence?</p>
+        <div class="scenario-options" id="opts-d19q4">
+            <div class="scenario-option">A. Nothing — reserved concurrency is separate from the account pool</div>
+            <div class="scenario-option">B. The remaining functions in the account share only 100 concurrent executions and may throttle</div>
+            <div class="scenario-option">C. The account limit is automatically raised to compensate</div>
+            <div class="scenario-option">D. The reserved function is limited to 900 but other functions are unaffected</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d19q4', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d19q4"><strong>Correct answer: B.</strong> Reserved concurrency is carved out of the shared account pool, so reserving 900 of 1,000 leaves only 100 for every other function in that region.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q5.</strong> A Kinesis-backed Lambda consumer is falling behind and the stream's iterator age keeps growing. The function's concurrency is well below its reserved limit. What should you change?</p>
+        <div class="scenario-options" id="opts-d19q5">
+            <div class="scenario-option">A. Raise the function's reserved concurrency</div>
+            <div class="scenario-option">B. Increase the number of shards or raise the event source mapping's parallelization factor</div>
+            <div class="scenario-option">C. Increase the function's memory</div>
+            <div class="scenario-option">D. Switch the event source from Kinesis to SQS</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d19q5', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d19q5"><strong>Correct answer: B.</strong> Kinesis concurrency is bounded by shard count, not by the function's concurrency limit. Raising reserved concurrency does nothing when the poller count is the binding constraint.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q6.</strong> A single malformed record in a Kinesis stream causes a Lambda consumer to stop advancing the shard indefinitely. What configuration prevents this?</p>
+        <div class="scenario-options" id="opts-d19q6">
+            <div class="scenario-option">A. Increase the batch size</div>
+            <div class="scenario-option">B. Set a maximum retry count and maximum record age with an on-failure destination</div>
+            <div class="scenario-option">C. Enable provisioned concurrency</div>
+            <div class="scenario-option">D. Add a dead-letter queue to the function's asynchronous invocation config</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d19q6', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d19q6"><strong>Correct answer: B.</strong> Bounding retries and record age lets Lambda discard the poisoned batch and continue, and the on-failure destination preserves the discarded records. The async invocation DLQ does not apply to poll-based sources.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q7.</strong> An SQS-triggered function occasionally fails on one message in a batch of ten, causing all ten messages to be retried. What reduces the retry blast radius?</p>
+        <div class="scenario-options" id="opts-d19q7">
+            <div class="scenario-option">A. Reduce the batch size to one</div>
+            <div class="scenario-option">B. Return a partial batch response so only the failed messages are retried</div>
+            <div class="scenario-option">C. Increase the visibility timeout</div>
+            <div class="scenario-option">D. Enable reserved concurrency</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d19q7', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d19q7"><strong>Correct answer: B.</strong> Partial batch responses let the function report which messages failed, so only those return to the queue. Reducing batch size to one works but destroys throughput.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q8.</strong> A function in a VPC with a reserved concurrency of 500 is deployed into two private subnets with a /28 CIDR block each. What problem should you anticipate?</p>
+        <div class="scenario-options" id="opts-d19q8">
+            <div class="scenario-option">A. The function cannot use reserved concurrency inside a VPC</div>
+            <div class="scenario-option">B. The subnets will run out of IP addresses because each concurrent execution consumes an ENI</div>
+            <div class="scenario-option">C. The function will be limited to 16 concurrent executions</div>
+            <div class="scenario-option">D. Nothing — Lambda ENIs do not consume subnet IP addresses</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d19q8', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d19q8"><strong>Correct answer: B.</strong> Each concurrent execution in a VPC requires an elastic network interface in the configured subnets, so the function's effective concurrency is also bounded by available IP addresses.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q9.</strong> A team wants to disable a runaway function immediately without deleting it. What is the fastest correct action?</p>
+        <div class="scenario-options" id="opts-d19q9">
+            <div class="scenario-option">A. Set the function's timeout to one second</div>
+            <div class="scenario-option">B. Set reserved concurrency to zero</div>
+            <div class="scenario-option">C. Remove the function's execution role</div>
+            <div class="scenario-option">D. Set provisioned concurrency to zero</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d19q9', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d19q9"><strong>Correct answer: B.</strong> Reserved concurrency of zero disables the function entirely, which is the documented kill-switch behavior. Setting provisioned concurrency to zero only removes pre-warmed capacity.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q10.</strong> An asynchronous function invoked by S3 events is failing intermittently. Where do the failed events end up if no destination is configured?</p>
+        <div class="scenario-options" id="opts-d19q10">
+            <div class="scenario-option">A. They are returned to the S3 caller as an error</div>
+            <div class="scenario-option">B. They are retried twice and then discarded, with no durable record</div>
+            <div class="scenario-option">C. They are automatically written to CloudWatch Logs</div>
+            <div class="scenario-option">D. They are queued indefinitely until the function recovers</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d19q10', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d19q10"><strong>Correct answer: B.</strong> Asynchronous invocations are retried twice by default and then discarded unless a dead-letter queue or on-failure destination is configured, which is why the destination is the first thing to check in an async failure investigation.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q11.</strong> A function calls DynamoDB and S3 from inside a VPC and currently routes that traffic through a NAT gateway. What change reduces cost and latency?</p>
+        <div class="scenario-options" id="opts-d19q11">
+            <div class="scenario-option">A. Move the function out of the VPC</div>
+            <div class="scenario-option">B. Add gateway VPC endpoints for S3 and DynamoDB</div>
+            <div class="scenario-option">C. Add an interface endpoint for each service</div>
+            <div class="scenario-option">D. Increase the function's memory to improve network throughput</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d19q11', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d19q11"><strong>Correct answer: B.</strong> Gateway endpoints for S3 and DynamoDB are free and keep that traffic off the NAT gateway, which is billed per gigabyte processed.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q12.</strong> Which metric is the leading indicator that an SQS-triggered consumer is falling behind?</p>
+        <div class="scenario-options" id="opts-d19q12">
+            <div class="scenario-option">A. Invocations</div>
+            <div class="scenario-option">B. ApproximateAgeOfOldestMessage</div>
+            <div class="scenario-option">C. Duration</div>
+            <div class="scenario-option">D. Errors</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d19q12', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d19q12"><strong>Correct answer: B.</strong> The age of the oldest message measures processing lag directly and rises before anything user-visible fails. Iterator age plays the same role for Kinesis.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q13.</strong> A team wants a canary release of a Lambda function where 10% of traffic goes to the new version and the new version has no cold-start penalty. What combination achieves this?</p>
+        <div class="scenario-options" id="opts-d19q13">
+            <div class="scenario-option">A. Publish a version and apply provisioned concurrency to <code>$LATEST</code></div>
+            <div class="scenario-option">B. Publish a version, create an alias, apply provisioned concurrency to the alias, and shift traffic between aliases</div>
+            <div class="scenario-option">C. Set reserved concurrency on the new version only</div>
+            <div class="scenario-option">D. Use an ALB weighted target group pointing at <code>$LATEST</code></div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d19q13', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d19q13"><strong>Correct answer: B.</strong> Provisioned concurrency cannot be applied to <code>$LATEST</code>; it attaches to a version or alias, and aliases are what make weighted traffic shifting between versions possible.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q14.</strong> A synchronous function is being throttled during peak traffic and the business cannot tolerate user-visible errors. What is the most appropriate architectural change?</p>
+        <div class="scenario-options" id="opts-d19q14">
+            <div class="scenario-option">A. Raise the function's reserved concurrency above the account limit</div>
+            <div class="scenario-option">B. Put a queue between the caller and the function and make the invocation asynchronous</div>
+            <div class="scenario-option">C. Increase the function's timeout so throttled requests can wait</div>
+            <div class="scenario-option">D. Enable provisioned concurrency equal to the peak request rate</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d19q14', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d19q14"><strong>Correct answer: B.</strong> Converting to an asynchronous, queue-backed invocation turns a user-visible throttle into a durable backlog that drains when capacity is available. Reserved concurrency cannot exceed the account pool, and provisioned concurrency sized to peak is expensive and still bounded.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q15.</strong> A multi-region architecture runs the same function in two regions. The function is throttling in the primary region. What is true about the secondary region?</p>
+        <div class="scenario-options" id="opts-d19q15">
+            <div class="scenario-option">A. It is also throttled because the concurrency limit is global</div>
+            <div class="scenario-option">B. It has its own account concurrency pool and is unaffected by the primary region's throttling</div>
+            <div class="scenario-option">C. It shares the primary region's reserved concurrency</div>
+            <div class="scenario-option">D. It is throttled only if the function uses the same IAM role</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d19q15', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d19q15"><strong>Correct answer: B.</strong> The account concurrency limit is per region, so each region has an independent pool. Throttling in one region does not consume or exhaust capacity in another.</div>
+      </div>
+      </section>
+
+      <section class="doc-section" id="preview">
+        <h2 class="section-heading">Peek into Tomorrow</h2>
+        <div class="card card-purple">
+          <p>Everything in this day assumed a single function doing a single thing, with concurrency as the only lever for controlling how much of it happens at once. That assumption breaks the moment a business process spans more than one step. A payment flow that reserves inventory, charges a card, and then notifies a fulfilment system is not one function; it is three, and the interesting questions are no longer about how many copies of each can run but about what happens when the second step succeeds and the third fails. Retrying the whole chain would charge the card twice. Not retrying it leaves the order in an inconsistent state. Lambda's own retry semantics — twice, then discard — are far too blunt for that problem, and reserved concurrency does nothing to help.</p>
+          <p>Tomorrow's material introduces the orchestration layer that sits above individual functions and takes responsibility for state between steps, including the distinction between a workflow that guarantees each step runs exactly once and one that trades that guarantee for throughput. The open question today leaves behind is what happens to the retry and error-handling logic you would otherwise write inside each function once something else owns the sequence — and whether the front door to that workflow should invoke a function at all, or talk to the backing service directly.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="sources">
+        <h2 class="section-heading">Sources</h2>
+        <div class="card">
+          <ul class="source-list">
+            <li><a href="https://docs.aws.amazon.com/lambda/latest/dg/lambda-concurrency.html" target="_blank" rel="noopener">AWS Lambda — Managing concurrency for a Lambda function</a></li>
+            <li><a href="https://docs.aws.amazon.com/lambda/latest/dg/provisioned-concurrency.html" target="_blank" rel="noopener">AWS Lambda — Configuring provisioned concurrency</a></li>
+            <li><a href="https://docs.aws.amazon.com/lambda/latest/dg/configuration-vpc.html" target="_blank" rel="noopener">AWS Lambda — Configuring a function to access resources in a VPC</a></li>
+            <li><a href="https://docs.aws.amazon.com/lambda/latest/dg/invocation-eventsourcemapping.html" target="_blank" rel="noopener">AWS Lambda — Event source mappings</a></li>
+            <li><a href="https://docs.aws.amazon.com/lambda/latest/dg/invocation-async.html" target="_blank" rel="noopener">AWS Lambda — Asynchronous invocation and destinations</a></li>
+            <li><a href="https://docs.aws.amazon.com/lambda/latest/dg/gettingstarted-limits.html" target="_blank" rel="noopener">AWS Lambda — Quotas and limits</a></li>
+            <li><a href="https://docs.aws.amazon.com/lambda/latest/operatorguide/scaling-concurrency.html" target="_blank" rel="noopener">AWS Lambda Operator Guide — Scaling and concurrency</a></li>
+            <li><a href="https://docs.aws.amazon.com/lambda/latest/dg/monitoring-metrics.html" target="_blank" rel="noopener">AWS Lambda — Monitoring function metrics with CloudWatch</a></li>
+            <li><a href="https://docs.aws.amazon.com/whitepapers/latest/serverless-architectures-lambda/welcome.html" target="_blank" rel="noopener">AWS Whitepaper — Serverless Architectures with AWS Lambda</a></li>
+          </ul>
+        </div>
       </section>
       <div class="day-nav">
         <a href="day-018.html">&larr; Day 18: Application Load Balancer — Advanced Routing &amp; Target Groups</a>

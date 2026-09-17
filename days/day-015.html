@@ -104,37 +104,359 @@
         <span class="pill pill-green">Phase 2: Compute, Containers &amp; Global Databases</span>
       </div>
       <h1 class="hero-title">Amazon ECS Fargate Architecture &amp; Task Definitions</h1>
-      <div class="reading-meta">&#128337; ~3 min read &middot; 3 services covered</div>
+      <div class="reading-meta">&#128337; ~58 min read &middot; 3 services covered</div>
       <div class="services-grid">
         <span class="service-tag">ECS</span>
         <span class="service-tag">Fargate</span>
         <span class="service-tag">Task Definitions</span>
       </div>
       <div id="tracker"></div>
-      <section class="doc-section">
-        <h2 class="section-heading">Today's Concept</h2>
+
+      <section class="doc-section" id="recap">
+        <h2 class="section-heading">Recap: From Network Plumbing to Compute Placement</h2>
         <div class="card card-accent">
-          <p>Fargate runs ECS (or EKS) tasks without managing EC2 instances — each task gets its own isolated compute allocation defined by a task definition (CPU/memory, container images, IAM task role, network mode). awsvpc networking gives each task its own ENI and security group.</p>
-        </div>
-        <h3 class="sub-heading">Hands-on Lab / Practical Action (45 min)</h3>
-        <div class="card">
-          <p>Configure an ALB path-based routing rule in front of an ECS Fargate service with a dedicated task IAM role scoped to least privilege.</p>
+          <p>Week 2 closed on a decision framework rather than a service: the networking lab exam asked you to choose between TGW, peering, and PrivateLink for a given reachability requirement, to justify a Direct Connect resiliency pattern against a stated RTO, and to place Route 53 Resolver endpoints correctly for hybrid DNS resolution. That cluster is one of the highest-weight areas on the exam, and the reason it is weighted so heavily is that connectivity decisions are expensive to reverse — a CIDR overlap discovered after a peering mesh is built, or a DNS forwarding rule that only works in one direction, is a multi-week remediation rather than a config change.</p>
+          <p>Today extends that same reasoning one layer up the stack. Once the network path exists — a shared VPC subnet, a TGW attachment, a PrivateLink endpoint — the next question is what actually runs at the far end of it, and how much of the host you are willing to own. Fargate is the answer that says "none of it," and the interesting part of the exam question is never whether Fargate is serverless; it is which of the task definition's fields encode the security and networking decisions you just spent two weeks learning to make. The awsvpc network mode is where those two threads meet: it is the mechanism that gives a container the same first-class network identity that an EC2 instance has always had.</p>
         </div>
       </section>
-      <section class="doc-section">
-        <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
-        
-      <div class="scenario-card">
-        <p class="scenario-question"><strong>Q1.</strong> Why does Fargate's awsvpc network mode assign each task its own ENI?</p>
-        <div class="scenario-options" id="opts-d15q0">
+
+      <section class="doc-section" id="why-on-exam">
+        <h2 class="section-heading">1. Why This Is on the Exam</h2>
+        <p>The SAP-C02 exam treats container compute as a placement decision, not a product tour. The scenario almost always arrives with a constraint attached — a team with no Kubernetes experience, a workload with unpredictable burst, a compliance requirement that no shared host may run two tenants' code, or a mandate to reduce the number of EC2 instances the platform team patches. Fargate is the option that satisfies several of those constraints simultaneously, and the exam expects you to know precisely which ones it satisfies and which it quietly does not.</p>
+        <p>The architectural problem Fargate solves is the split of responsibility in a container platform. Running containers on EC2 means you own the AMI lifecycle, the container runtime version, the agent, the instance sizing, the bin-packing of tasks onto hosts, and the capacity buffer that keeps a scale-out from failing while instances boot. None of that is application logic, and all of it is a source of incidents. Fargate removes the host from your inventory entirely: you declare CPU and memory at the task level, and AWS provisions an isolated compute allocation for that task. The trade is that you lose host-level control — no SSH, no custom AMI, no DaemonSets, no GPU, no persistent local storage beyond ephemeral task storage — and you pay a per-task premium over well-utilized EC2.</p>
+        <p>This maps most directly to Domain 2 (Design Resilient Architectures) and Domain 4 (Design Cost-Optimized Architectures), with a recurring appearance in Domain 3 (Design High-Performing Architectures) when the scenario is about scaling behavior. The resilient-architecture framing is usually about blast radius: a task that gets its own ENI and security group cannot be reached by a neighbor's misconfigured port mapping, and a task that dies takes only itself down. The cost framing is the inverse: Fargate is cheap at low and spiky utilization and expensive at sustained high utilization, so the exam wants you to notice whether the workload is steady-state or bursty before you pick it.</p>
+        <p>There is also a governance angle that shows up in multi-account scenarios. Because a Fargate task has no host, there is no long-lived compute resource for a workload team to patch, and no shared kernel for a noisy neighbor to exploit. For organizations that have just spent Phase 1 building account separation and SCP guardrails, Fargate is the compute primitive that keeps the isolation boundary at the task rather than at the instance — which is a much easier boundary to reason about in an audit.</p>
+      </section>
+
+      <section class="doc-section" id="mechanism">
+        <h2 class="section-heading">2. Mechanism: What Actually Happens When a Task Starts</h2>
+        <p>A task definition is a versioned, immutable blueprint. It declares one or more container definitions, each with an image, a command, port mappings, environment variables, secrets references, log configuration, health check, and resource requirements. At the task level it declares the CPU and memory for the whole task, the network mode, the execution role, the task role, and any volumes. When you register a new revision, the old revision remains addressable by ARN, which is what makes rollback a matter of pointing a service at a previous revision rather than rebuilding anything.</p>
+        <p>When the ECS scheduler places a task on Fargate, it does not find a host with spare capacity. It asks the Fargate capacity provider to provision a micro-VM dedicated to that task, sized to the CPU and memory in the task definition, and then starts the containers inside it. The task's containers share that micro-VM's network namespace and, in awsvpc mode, share a single elastic network interface that is attached to the subnets and security groups you specified. That ENI is the task's identity on the VPC: it has a private IP from the subnet CIDR, it appears in flow logs, and it is what a security group rule or a VPC endpoint policy evaluates against.</p>
+        <p>Two IAM roles are in play and they are routinely confused. The task execution role is used by the ECS agent itself — to pull the image from ECR, to fetch secrets from Secrets Manager or SSM Parameter Store, and to write logs to CloudWatch Logs. The task role is assumed by the application code inside the container, and it is the one that should be scoped to least privilege for whatever AWS APIs the workload calls. A task that can pull its image but cannot read the S3 bucket it needs is a task execution role that is fine and a task role that is missing a statement; the reverse produces a task that never starts.</p>
+        <p>Placement is governed by the service's desired count and its deployment configuration, not by a scheduler you tune. For a service with a load balancer attached, ECS registers the task's ENI and port with the target group, waits for the target to pass health checks, and only then counts the task toward the deployment's minimum healthy percent. That ordering is why a Fargate service can roll out without dropping requests even though every task is replaced: the new tasks are healthy before the old ones are drained. The service also owns the scaling relationship — an Application Auto Scaling target attached to the service adjusts desired count in response to CloudWatch metrics or a schedule, and each new desired count is a new set of micro-VMs.</p>
+      </section>
+
+      <section class="doc-section" id="decision-boundary">
+        <h2 class="section-heading">3. The Core Decision Boundary: Who Owns the Host</h2>
+        <p>Every Fargate scenario question reduces to one fork: does the workload require control over the host, or does it only require control over the container? If the answer is "only the container," Fargate is almost always correct, because it removes an entire class of operational work and an entire class of failure. If the answer is "the host," Fargate is disqualified outright and no amount of cost or simplicity argument recovers it — the exam is testing whether you recognize the disqualifying requirement before you start optimizing.</p>
+        <p>The disqualifying requirements are specific and worth memorizing as a set. DaemonSets and any per-node agent pattern are impossible because there is no node that persists across tasks. GPU workloads are unsupported. Privileged containers, host networking, and host port mapping are unavailable. Persistent local storage beyond the task's ephemeral volume is not available, so anything that needs a local cache that survives a task restart must move to EFS or a service. Custom AMIs, custom kernel parameters, and instance-level agents are gone. And the pricing model changes shape: you pay for the CPU and memory you reserve for the lifetime of the task, rounded up to the nearest supported combination, whether or not the container uses it.</p>
+        <p>The other side of the fork is subtler and is where most scenario questions actually live. Fargate is not automatically cheaper than EC2 just because there are no instances to manage. At low utilization — a service that idles most of the day, or a batch job that runs for minutes — Fargate wins decisively because you pay only while the task exists. At sustained high utilization, a well-packed EC2 Auto Scaling group with Savings Plans applied will beat Fargate on raw compute cost, and the exam will sometimes hand you a steady-state, high-utilization workload specifically to see whether you reflexively pick serverless.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Requirement in the scenario</th><th>Fargate</th><th>EC2 launch type</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>No instances to patch or right-size</td><td>Yes — no host in your inventory</td><td>No — you own AMI, agent, and sizing</td></tr>
+              <tr><td>Per-task network isolation</td><td>Yes — awsvpc is the only mode</td><td>Optional — awsvpc, bridge, or host</td></tr>
+              <tr><td>DaemonSet / per-node agent</td><td>Not possible</td><td>Supported</td></tr>
+              <tr><td>GPU or privileged containers</td><td>Not supported</td><td>Supported on GPU instance families</td></tr>
+              <tr><td>Persistent local storage</td><td>Ephemeral only; use EFS</td><td>Instance store or EBS volumes</td></tr>
+              <tr><td>Cost at sustained high utilization</td><td>Higher per vCPU-hour</td><td>Lower with Savings Plans and good bin-packing</td></tr>
+              <tr><td>Cost at spiky or low utilization</td><td>Lower — pay only while running</td><td>Higher — idle capacity still billed</td></tr>
+              <tr><td>Scale-out latency</td><td>Seconds to provision a micro-VM</td><td>Minutes if a new instance must boot</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="doc-section" id="config-tradeoffs">
+        <h2 class="section-heading">4. Configuration Modes and Their Tradeoffs</h2>
+        <p>The task definition's network mode is the first knob and, on Fargate, it is not really a choice: awsvpc is the only supported mode. That matters because it means every Fargate task consumes an IP address from the subnet it is placed in, and the subnet's available IP count becomes a hard ceiling on how many tasks can run there. A service that scales to 200 tasks across two subnets needs 100 free addresses in each, and a /24 that also hosts other resources will run out. This is the single most common capacity-planning mistake in Fargate designs, and it is invisible until a scale-out event fails with a resource initialization error.</p>
+        <p>CPU and memory are declared at the task level and must be a valid combination — Fargate does not accept arbitrary values, and the ratio of CPU to memory is constrained. The practical consequence is that you cannot fine-tune a task to exactly the resources it needs; you pick from a menu, and the menu's granularity means you often reserve more than the workload uses. Memory is the harder constraint to get right, because exceeding the task's memory limit kills the container with an out-of-memory exit rather than throttling it, so the failure is abrupt and the metric to watch is the memory utilization against the task limit, not the container's own reported usage.</p>
+        <p>The launch type and capacity provider strategy determine what happens when the service needs more tasks. With Fargate, the capacity provider is FARGATE or FARGATE_SPOT, and a strategy can weight between them — for example, a base of on-demand tasks that always exist plus a weighted share of Spot tasks for burst. Fargate Spot tasks can be reclaimed with a two-minute warning, delivered as a SIGTERM to the container, so a service that mixes them must handle graceful shutdown and must not be the only copy of a stateful process. The tradeoff is direct: Spot capacity is materially cheaper, and the price is that a fraction of your tasks will be interrupted on AWS's schedule rather than yours.</p>
+        <p>Logging and secrets are configured per container and are the fields most often left at defaults in a hurry. The awslogs driver ships stdout and stderr to a CloudWatch log group, and the log group must exist or the task fails to start — a detail that turns a missing log group into a deployment outage rather than a missing log. Secrets can be injected as environment variables from Secrets Manager or SSM Parameter Store, resolved by the task execution role at start time, which keeps credentials out of the image and out of the task definition's plaintext. The tradeoff is that the value is resolved once at task start, so a rotated secret requires a new task to take effect — which is fine for a rolling deployment and a problem for a long-lived task.</p>
+      </section>
+
+      <section class="doc-section" id="sizing-limits">
+        <h2 class="section-heading">5. Sizing, Limits and Quotas</h2>
+        <p>Fargate's sizing model is a fixed menu rather than a continuous range, and the numbers matter because they determine both cost and whether a workload fits at all. Task-level CPU is expressed in vCPU units and memory in GB, and only certain pairings are valid — the general shape is that each vCPU step permits a bounded range of memory, so a 0.25 vCPU task cannot be given 30 GB. The largest task sizes support multiple vCPUs and tens of gigabytes of memory, which is enough for most application containers but is a real ceiling for in-memory analytics or large JVM heaps.</p>
+        <p>Ephemeral storage is the limit that surprises people. Each Fargate task gets a small default amount of ephemeral storage for the container filesystem, and it can be increased up to a documented maximum at task-definition time. Anything written there is lost when the task stops, and anything that needs to be shared between containers in the same task or persisted across tasks must go to EFS or an external service. A container that writes a large temporary file — an image transform, a report generation, a database dump — will hit this limit and fail in a way that looks like a disk error inside the application rather than a platform limit.</p>
+        <p>Quotas operate at several layers and each one produces a different error. At the account and Region level there are limits on the number of tasks a service can run and on the rate at which you can register task definitions or call the ECS API. At the network level, the subnet's available IP addresses cap concurrent tasks in awsvpc mode. At the load balancer level, the target group has its own limits and the ALB has a limit on targets per target group. And at the Fargate capacity level, Spot capacity is not guaranteed — a FARGATE_SPOT-only service can fail to place tasks during a capacity event, which is exactly why the recommended pattern is a base of on-demand tasks with Spot as the burst layer.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Dimension</th><th>What to check</th><th>Failure symptom when exceeded</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Task CPU / memory pairing</td><td>Must be a supported combination</td><td>Task definition registration rejected</td></tr>
+              <tr><td>Ephemeral storage</td><td>Default is small; raise it explicitly if needed</td><td>Container exits with a disk/write error</td></tr>
+              <tr><td>Subnet IP addresses</td><td>One ENI per task in awsvpc mode</td><td>Resource initialization error on scale-out</td></tr>
+              <tr><td>Service task count</td><td>Account/Region service quota</td><td>Tasks stay in PENDING or fail to place</td></tr>
+              <tr><td>Fargate Spot capacity</td><td>Not guaranteed; use a base of on-demand</td><td>Placement failure during capacity events</td></tr>
+              <tr><td>ALB targets per target group</td><td>Load balancer quota</td><td>Registration failures during deployment</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="doc-section" id="failure-modes">
+        <h2 class="section-heading">6. Failure Modes and What They Look Like in Production</h2>
+        <p>The most common Fargate failure is a task that starts and immediately stops, and the diagnostic path is a fixed sequence. First, read the stopped task's reason and the container's exit code — a non-zero exit with a short runtime is almost always an application or configuration error, not a platform problem. Second, check the stopped reason for a platform-level message such as an out-of-memory kill or an inability to pull the image. Third, look at the CloudWatch log stream for the task, which exists only if the log configuration was correct and the log group existed. A task that stops with no log stream at all is usually a task execution role that cannot write logs, which is a different fix from an application crash.</p>
+        <p>Image pull failures are the second family and they cluster around permissions and networking. If the image is in ECR in another account, the task execution role needs permission to pull it and the repository needs a policy allowing that principal. If the task runs in a private subnet with no NAT gateway and no VPC endpoints for ECR and S3, the pull will time out — ECR image layers are stored in S3, so a private-subnet Fargate task needs both the ECR interface endpoints and the S3 gateway endpoint, or a NAT path. This is a classic exam scenario: a service that works in a public subnet and fails to start in a private one, with no application change.</p>
+        <p>Health-check failures present differently and are more insidious because the task is running fine. If the target group's health check path, port, or protocol does not match what the container actually serves, ECS will start tasks, fail to register them as healthy, and then roll the deployment back — repeatedly, in a loop, with the service never reaching steady state. The signal is a deployment circuit breaker trip or a service that oscillates between desired and running counts. The first diagnostic move is to check the target group's health check configuration against the container's actual listening port and path, and to confirm the security group on the task allows traffic from the load balancer's security group on that port.</p>
+        <p>Capacity and placement failures are the third family and they are the ones that look like the platform is broken when it is not. A scale-out that fails because the subnet has no free IPs, a FARGATE_SPOT service that cannot place tasks during a capacity event, or a service that hits an account-level task quota all present as tasks stuck in PENDING or a service that never reaches its desired count. The distinguishing feature is that nothing is crashing — the tasks that do run are healthy, and the gap is between desired and running. That gap, not the task logs, is where the investigation starts.</p>
+      </section>
+
+      <section class="doc-section" id="sre-angle">
+        <h2 class="section-heading">7. The Operational and SRE Angle</h2>
+        <p>Fargate changes the shape of the on-call runbook because the failure surface moves from the host to the task and the deployment. There is no instance to SSH into, no disk to fill, no kernel to patch, and no agent to restart — which removes a large fraction of traditional compute incidents. What remains is a smaller but sharper set: tasks that will not start, deployments that will not stabilize, and scaling that will not keep up. Each of those has a metric and an alarm, and the runbook for each is short enough to be genuinely useful at 3 a.m.</p>
+        <p>The metrics worth alarming on are the service-level ones rather than the task-level ones. Running task count versus desired count is the primary signal: a persistent gap means placement or health-check trouble, and it is the earliest indicator that a deployment is not converging. CPU and memory utilization at the service level tell you whether the scaling target is set sensibly, and memory utilization approaching the task limit is the leading indicator of an out-of-memory kill. On the load balancer side, target response time and the unhealthy host count catch the case where tasks are running but not serving. For a service behind an ALB, the combination of a rising unhealthy host count and a flat running task count is the signature of a health-check mismatch rather than a capacity problem.</p>
+        <p>Deployment safety is where Fargate's operational model pays off, and it is worth configuring deliberately. The deployment circuit breaker, with rollback enabled, makes a failed deployment self-healing: if the new tasks do not reach a healthy state, ECS rolls back to the previous task definition revision automatically instead of leaving the service in a half-deployed state. Combined with a minimum healthy percent that keeps capacity above the level the SLO requires, this turns a bad image push into a brief, self-correcting event rather than an incident. The tradeoff is that the circuit breaker needs a health check that actually reflects application health — a health check that returns 200 as soon as the process is listening will let a broken deployment through.</p>
+        <p>From an SLO perspective, the interesting property of Fargate is that scale-out is fast enough to be part of the availability story rather than a background concern. A task can be provisioned in seconds, so a service that scales on a leading indicator — queue depth, request rate, or a custom metric — can absorb a traffic step change without the multi-minute instance-boot lag that an EC2 Auto Scaling group has to plan around. That does not remove the need for headroom, because the scaling policy still has to fire and the new tasks still have to pass health checks, but it shortens the window in which a spike is visible to users. The corollary is that a scaling policy with a long evaluation period wastes the advantage; for latency-sensitive services, shorter periods with a lower threshold are usually the right trade.</p>
+      </section>
+
+      <section class="doc-section" id="gotchas">
+        <h2 class="section-heading">8. Edge Cases and Exam Gotchas</h2>
+        <p>The gotchas cluster around the boundary between what Fargate hides and what it does not. It hides the host, but it does not hide the network: a Fargate task still needs a subnet with free IPs, still needs a route to whatever it must reach, and still needs security group rules that permit that traffic. Scenarios that describe a task that cannot reach a database in another VPC are testing whether you remember that the task's ENI is subject to the same routing and security group rules as any other resource in that subnet — there is no special Fargate networking path.</p>
+        <p>The second cluster is about the two IAM roles. A task that fails to start because it cannot pull its image is a task execution role problem. A task that starts and then gets AccessDenied from an AWS API is a task role problem. A task that starts but produces no logs is usually a task execution role that lacks the log-write permission, or a log group that does not exist. The exam will describe the symptom and expect you to name the role, so it is worth being able to state the split in one sentence: execution role for the platform's actions on the task's behalf, task role for the application's actions.</p>
+        <p>The third cluster is about persistence and state. Fargate tasks are ephemeral by design, so any scenario that requires a container to keep data across restarts is pointing at EFS, S3, or a database — never at the task's local storage. A related trap is the session: a service that stores sessions in task memory will lose them on every deployment, and the fix is an external session store, which is exactly the ElastiCache material from Week 4. The exam likes this because it connects two domains with one scenario.</p>
+        <p>The fourth cluster is cost-shaped. Fargate pricing is per-second for the CPU and memory reserved, with a minimum billing duration, so a task that runs for a few seconds is billed for the minimum. A workload that spins up a task per request will pay for that minimum on every request, which is usually the point at which Lambda becomes the better answer. Conversely, a long-running task that idles at low CPU still pays for its full reservation, which is the point at which EC2 with a Savings Plan becomes the better answer. Recognizing which side of that line a scenario sits on is the whole game.</p>
+      </section>
+
+      <section class="doc-section" id="vs-comparison">
+        <h2 class="section-heading">9. Fargate vs. the Services It Gets Confused With</h2>
+        <p>Fargate is most often confused with three things: the EC2 launch type for the same orchestrator, Lambda, and EKS with Fargate profiles. The EC2 launch type comparison is about who owns the host and is covered above; the practical rule is that if the scenario mentions patching instances, custom AMIs, GPU, or sustained high utilization, you are on EC2, and if it mentions operational overhead, spiky load, or per-task isolation, you are on Fargate. The two can coexist in one cluster, and a mixed capacity provider strategy is a legitimate answer when a scenario wants a cheap baseline plus elastic burst.</p>
+        <p>The Lambda comparison is about execution model rather than packaging. Lambda is event-driven, has a hard maximum execution duration, and scales per invocation; Fargate runs a long-lived process that you scale by task count. A request-response workload with short, bursty invocations is Lambda's shape. A workload that holds a connection pool, runs a background loop, or needs a process that lives for hours is Fargate's shape. The exam sometimes offers both for a workload that could technically run on either, and the tiebreaker is usually the connection or the duration limit.</p>
+        <p>The EKS comparison is the one tomorrow's material covers in depth, but the boundary is worth stating now: Fargate is a capacity option for both ECS and EKS, and choosing EKS with Fargate profiles buys you Kubernetes' API and ecosystem at the cost of the Fargate limitations plus the operational weight of a Kubernetes control plane. If the team already runs Kubernetes, that trade is usually worth it; if they do not, ECS with Fargate is the shorter path to production.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Option</th><th>Pick it when…</th><th>Avoid it when…</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>ECS on Fargate</td><td>No host management, spiky load, per-task isolation, small platform team</td><td>GPU, DaemonSets, custom AMI, sustained high utilization</td></tr>
+              <tr><td>ECS on EC2</td><td>Steady high utilization, host-level control, GPU, cost-optimized with Savings Plans</td><td>Team cannot absorb AMI/agent/patching work</td></tr>
+              <tr><td>Lambda</td><td>Event-driven, short invocations, per-request scaling, no idle cost</td><td>Long-running processes, connection pools, &gt;15 min execution</td></tr>
+              <tr><td>EKS with Fargate profiles</td><td>Existing Kubernetes tooling and portability requirement</td><td>No Kubernetes experience; DaemonSets required</td></tr>
+              <tr><td>EKS with managed node groups</td><td>Kubernetes plus host-level control and DaemonSets</td><td>Team wants zero node management</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="doc-section" id="lab">
+        <h2 class="section-heading">Hands-on Lab: ALB Path Routing in Front of a Least-Privilege Fargate Service</h2>
+        <div class="card card-green">
+          <p><strong>Objective.</strong> Stand up an ECS Fargate service behind an Application Load Balancer, route to it by path, and give the task a dedicated IAM role scoped to exactly one S3 prefix. The point of the exercise is to feel where the two IAM roles diverge and to see the awsvpc ENI show up as a first-class network identity.</p>
+          <p><strong>Step 1 — Create the network and the log group.</strong> In a VPC with at least two private subnets in different Availability Zones, create a security group for the ALB that allows inbound HTTP from your own address range, and a separate security group for the tasks that allows inbound on the container port only from the ALB's security group. Create a CloudWatch log group named for the service before you register anything — a missing log group is a task-start failure, and creating it first removes that variable from the lab.</p>
+          <p><strong>Step 2 — Create the two roles.</strong> Create a task execution role with the AWS-managed policy for ECS task execution, which covers ECR pulls and log writes. Then create a task role with a single inline policy allowing <code>s3:GetObject</code> and <code>s3:ListBucket</code> on one bucket and one prefix, and nothing else. Note the difference in what each role is for; you will verify both in step 6.</p>
+          <p><strong>Step 3 — Register the task definition.</strong> Register a Fargate task definition with awsvpc network mode, a supported CPU/memory combination, the execution role, the task role, and one container definition using a small public image. Configure the awslogs driver against the log group from step 1, and map the container port. Confirm the task definition registers without a CPU/memory pairing error — if it rejects, you have picked an unsupported combination, which is itself the lesson.</p>
+          <p><strong>Step 4 — Create the target group and the ALB rules.</strong> Create an IP-type target group (Fargate tasks register by IP, not instance ID) with a health check path that the container actually serves. Create the ALB with a listener on port 80, a default rule that returns a fixed response, and a path-based rule for <code>/app/*</code> that forwards to the target group. The default rule returning a fixed response is deliberate: it lets you prove the path rule is doing the routing rather than everything falling through.</p>
+          <p><strong>Step 5 — Create the service and watch the deployment.</strong> Create the ECS service with the Fargate capacity provider, the desired count, the two private subnets, the task security group, and the load balancer configuration pointing at the target group. Watch the service events: you should see the task move from PROVISIONING to PENDING to RUNNING, then register with the target group, then pass health checks. If it loops, the events will name the reason — an image pull failure, a health check failure, or a placement failure — and each maps to a different fix.</p>
+          <p><strong>Step 6 — Verify the isolation and the roles.</strong> Confirm the task's ENI appears in the VPC with a private IP from the subnet, and that the security group on it permits only the ALB. Then exec into the container and call the S3 API against the permitted prefix (should succeed) and against a different bucket (should fail with AccessDenied). That failure is the task role working correctly. Finally, break the log group name in a new task definition revision and deploy it to see the task fail to start — the fastest way to internalize the execution role's scope.</p>
+          <p><strong>Step 7 — Clean up.</strong> Delete the service, the ALB, the target group, the task definition revisions, the log group, and the two roles. Leaving the service running is the most common way to accumulate a surprising bill from a lab.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="quiz">
+        <h2 class="section-heading">Scenario Question Drills</h2>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q1.</strong> Why does Fargate's awsvpc network mode assign each task its own ENI?</p>
+          <div class="scenario-options" id="opts-d15q1">
             <div class="scenario-option">A. To reduce cost</div>
             <div class="scenario-option">B. To give each task an isolated security group and IP, avoiding port-mapping conflicts of bridge mode</div>
-            <div class="scenario-option">C. It's required for CloudWatch Logs</div>
+            <div class="scenario-option">C. It is required for CloudWatch Logs</div>
             <div class="scenario-option">D. To enable Spot pricing</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d15q1', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d15q1"><strong>Correct answer: B.</strong> awsvpc mode gives every task first-class networking — its own ENI, private IP, and security group — enabling fine-grained per-task security instead of shared host-level rules.</div>
         </div>
-        <button class="scenario-reveal-btn" onclick="revealAnswer('d15q0', 1)">Reveal Answer</button>
-        <div class="scenario-explanation" id="exp-d15q0"><strong>Correct answer: B.</strong> awsvpc mode gives every task first-class networking — its own ENI, private IP, and security group — enabling fine-grained per-task security instead of shared host-level rules.</div>
-      </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q2.</strong> A Fargate service in a private subnet fails to start with an image pull timeout, but the same task definition works in a public subnet. What is the most likely cause?</p>
+          <div class="scenario-options" id="opts-d15q2">
+            <div class="scenario-option">A. The task role lacks ECR permissions</div>
+            <div class="scenario-option">B. The private subnet has no route to ECR and S3 — no NAT gateway and no VPC endpoints for both services</div>
+            <div class="scenario-option">C. Fargate cannot run in private subnets</div>
+            <div class="scenario-option">D. The ALB health check is misconfigured</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d15q2', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d15q2"><strong>Correct answer: B.</strong> ECR image layers are stored in S3, so a private-subnet task needs both the ECR interface endpoints and the S3 gateway endpoint, or a NAT path. The task execution role, not the task role, handles the pull.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q3.</strong> A workload requires a per-node log collection agent on every compute node. Which compute option is disqualified?</p>
+          <div class="scenario-options" id="opts-d15q3">
+            <div class="scenario-option">A. ECS on EC2</div>
+            <div class="scenario-option">B. ECS on Fargate</div>
+            <div class="scenario-option">C. EKS with managed node groups</div>
+            <div class="scenario-option">D. EC2 Auto Scaling group</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d15q3', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d15q3"><strong>Correct answer: B.</strong> Fargate has no persistent node, so DaemonSet-style per-node agents are impossible. Any option that gives you a node you own can run one.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q4.</strong> A task starts successfully but the application receives AccessDenied when calling S3. Which role needs to change?</p>
+          <div class="scenario-options" id="opts-d15q4">
+            <div class="scenario-option">A. The task execution role</div>
+            <div class="scenario-option">B. The task role</div>
+            <div class="scenario-option">C. The ECS service-linked role</div>
+            <div class="scenario-option">D. The ALB's IAM role</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d15q4', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d15q4"><strong>Correct answer: B.</strong> The task role is assumed by the application code inside the container. The execution role is used by the ECS agent for image pulls, secrets, and log writes.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q5.</strong> A service scales from 20 to 200 tasks during a daily peak, and scale-out starts failing with a resource initialization error. What is the most likely cause?</p>
+          <div class="scenario-options" id="opts-d15q5">
+            <div class="scenario-option">A. The task definition's CPU/memory pairing is invalid</div>
+            <div class="scenario-option">B. The subnets do not have enough free IP addresses for one ENI per task</div>
+            <div class="scenario-option">C. The Fargate Spot capacity is exhausted</div>
+            <div class="scenario-option">D. The CloudWatch log group is full</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d15q5', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d15q5"><strong>Correct answer: B.</strong> In awsvpc mode every task consumes a subnet IP. A subnet that cannot supply 200 addresses caps concurrent tasks regardless of service quota.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q6.</strong> A container writes a large temporary file during processing and exits with a disk-related error. What is the Fargate-specific explanation?</p>
+          <div class="scenario-options" id="opts-d15q6">
+            <div class="scenario-option">A. Fargate tasks have no writable filesystem</div>
+            <div class="scenario-option">B. The task's ephemeral storage limit was exceeded; it must be raised at task-definition time or the data moved to EFS/S3</div>
+            <div class="scenario-option">C. The EBS volume attached to the task is full</div>
+            <div class="scenario-option">D. The container needs a privileged flag</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d15q6', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d15q6"><strong>Correct answer: B.</strong> Each Fargate task gets a small default ephemeral volume that can be increased up to a documented maximum. There is no EBS volume to attach.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q7.</strong> A service is deployed with a new task definition and never reaches steady state; tasks start, fail health checks, and are replaced in a loop. What is the first thing to check?</p>
+          <div class="scenario-options" id="opts-d15q7">
+            <div class="scenario-option">A. The task role's S3 permissions</div>
+            <div class="scenario-option">B. The target group's health check path, port, and protocol against what the container actually serves</div>
+            <div class="scenario-option">C. The Fargate Spot interruption rate</div>
+            <div class="scenario-option">D. The VPC flow logs</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d15q7', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d15q7"><strong>Correct answer: B.</strong> A health-check mismatch produces exactly this loop: healthy-running tasks that never register, so the deployment never converges.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q8.</strong> A team wants a cheap baseline of always-on tasks plus elastic burst capacity that can tolerate interruption. What should the service use?</p>
+          <div class="scenario-options" id="opts-d15q8">
+            <div class="scenario-option">A. A FARGATE_SPOT-only capacity provider strategy</div>
+            <div class="scenario-option">B. A capacity provider strategy with a base of FARGATE on-demand tasks and a weighted share of FARGATE_SPOT</div>
+            <div class="scenario-option">C. An EC2 launch type with Spot Instances only</div>
+            <div class="scenario-option">D. A single large task instead of many small ones</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d15q8', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d15q8"><strong>Correct answer: B.</strong> A base of on-demand tasks guarantees a floor of capacity; the weighted Spot share absorbs burst at lower cost. A Spot-only service can fail to place tasks during capacity events.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q9.</strong> A task is killed with an out-of-memory exit even though the container's own reported memory usage looks moderate. Why?</p>
+          <div class="scenario-options" id="opts-d15q9">
+            <div class="scenario-option">A. Fargate throttles memory rather than killing tasks</div>
+            <div class="scenario-option">B. The task-level memory limit is the hard ceiling; exceeding it kills the container rather than throttling it</div>
+            <div class="scenario-option">C. The container needs a larger ephemeral volume</div>
+            <div class="scenario-option">D. The task role lacks CloudWatch permissions</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d15q9', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d15q9"><strong>Correct answer: B.</strong> Memory is a hard limit at the task level. The metric to watch is memory utilization against the task limit, not the container's self-reported usage.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q10.</strong> A workload runs a long-lived process that maintains a database connection pool and runs for many hours. Which compute option fits best?</p>
+          <div class="scenario-options" id="opts-d15q10">
+            <div class="scenario-option">A. Lambda with a long timeout</div>
+            <div class="scenario-option">B. ECS on Fargate with a long-running service</div>
+            <div class="scenario-option">C. API Gateway with a Lambda integration</div>
+            <div class="scenario-option">D. Step Functions Express workflow</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d15q10', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d15q10"><strong>Correct answer: B.</strong> Lambda has a hard maximum execution duration and scales per invocation, which is a poor fit for a persistent connection pool. Fargate runs a process that lives as long as the task does.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q11.</strong> A Fargate task starts but produces no log output in CloudWatch. What is the most likely cause?</p>
+          <div class="scenario-options" id="opts-d15q11">
+            <div class="scenario-option">A. The task role lacks logs:PutLogEvents</div>
+            <div class="scenario-option">B. The task execution role lacks log-write permission, or the configured log group does not exist</div>
+            <div class="scenario-option">C. Fargate does not support CloudWatch Logs</div>
+            <div class="scenario-option">D. The ALB is not forwarding logs</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d15q11', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d15q11"><strong>Correct answer: B.</strong> The awslogs driver is driven by the task execution role, and the log group must already exist. A missing log group is a task-start failure, not just a missing log.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q12.</strong> A service stores user sessions in task memory. After every deployment, users are logged out. What is the correct fix?</p>
+          <div class="scenario-options" id="opts-d15q12">
+            <div class="scenario-option">A. Increase the task's ephemeral storage</div>
+            <div class="scenario-option">B. Move session state to an external store such as ElastiCache or DynamoDB</div>
+            <div class="scenario-option">C. Enable sticky sessions on the ALB</div>
+            <div class="scenario-option">D. Reduce the deployment frequency</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d15q12', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d15q12"><strong>Correct answer: B.</strong> Fargate tasks are ephemeral by design; anything that must survive a task restart belongs in an external store. Sticky sessions only mask the problem until the task is replaced.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q13.</strong> A team wants a failed deployment to roll back automatically instead of leaving the service half-deployed. What should they configure?</p>
+          <div class="scenario-options" id="opts-d15q13">
+            <div class="scenario-option">A. A longer health check grace period</div>
+            <div class="scenario-option">B. The deployment circuit breaker with rollback enabled</div>
+            <div class="scenario-option">C. A higher minimum healthy percent</div>
+            <div class="scenario-option">D. A FARGATE_SPOT capacity provider</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d15q13', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d15q13"><strong>Correct answer: B.</strong> The circuit breaker detects a deployment that is not converging and rolls back to the previous task definition revision automatically. It depends on a health check that reflects real application health.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q14.</strong> A workload needs a GPU for inference. Which statement is correct?</p>
+          <div class="scenario-options" id="opts-d15q14">
+            <div class="scenario-option">A. Fargate supports GPU tasks on specific instance families</div>
+            <div class="scenario-option">B. Fargate does not support GPU; the workload must run on EC2 or EKS with GPU node groups</div>
+            <div class="scenario-option">C. Fargate supports GPU if the task is privileged</div>
+            <div class="scenario-option">D. GPU is available on Fargate Spot only</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d15q14', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d15q14"><strong>Correct answer: B.</strong> GPU, privileged containers, and host networking are all unavailable on Fargate. GPU workloads require a compute option where you own the host.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q15.</strong> A steady-state production service runs at consistently high CPU utilization around the clock. Cost is the primary constraint. What is the most likely correct choice?</p>
+          <div class="scenario-options" id="opts-d15q15">
+            <div class="scenario-option">A. ECS on Fargate, because there are no instances to manage</div>
+            <div class="scenario-option">B. ECS on EC2 with a well-packed Auto Scaling group and Savings Plans applied</div>
+            <div class="scenario-option">C. Lambda with provisioned concurrency</div>
+            <div class="scenario-option">D. Fargate Spot for the entire service</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d15q15', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d15q15"><strong>Correct answer: B.</strong> Fargate's per-task reservation premium is hard to justify at sustained high utilization. A well-packed EC2 fleet with Savings Plans is cheaper, and the operational overhead is the price of that saving.</div>
+        </div>
+      </section>
+
+      <section class="doc-section" id="preview">
+        <h2 class="section-heading">Peek into Tomorrow</h2>
+        <div class="card card-purple">
+          <p>Everything above assumed ECS as the orchestrator, which let us treat the task definition as the unit of truth and the service as the thing that keeps a desired count true. That assumption is doing a lot of quiet work, and it is worth asking what changes when the orchestrator is Kubernetes instead. The task definition has no direct equivalent — a Kubernetes manifest splits the same information across a Pod spec, a Deployment, a Service, and a ServiceAccount — and the IAM story changes shape entirely, because a pod does not assume a task role by default. The mechanism that bridges that gap is IRSA, and it is the kind of detail that a scenario question can hinge on without ever naming it.</p>
+          <p>The more interesting unresolved question is about capacity. Fargate profiles exist on EKS too, and they carry the same limitations we just catalogued — no DaemonSets, no host access, a per-pod premium — but on EKS those limitations collide with assumptions the Kubernetes ecosystem makes everywhere. Log collectors, service meshes, and node-level autoscalers all assume a node exists. So the real question tomorrow has to answer is not "Fargate or nodes" but "which parts of this cluster can tolerate having no node at all," and how a managed node group changes that answer by giving you an AWS-managed Auto Scaling group you still do not have to patch by hand.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="sources">
+        <h2 class="section-heading">Sources</h2>
+        <div class="card">
+          <ul class="source-list">
+            <li><a href="https://docs.aws.amazon.com/AmazonECS/latest/developerguide/AWS_Fargate.html" target="_blank">Amazon ECS Developer Guide — AWS Fargate</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_definitions.html" target="_blank">Amazon ECS Developer Guide — Task Definitions</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-networking.html" target="_blank">Amazon ECS Developer Guide — Task Networking (awsvpc mode)</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html" target="_blank">Amazon ECS Developer Guide — IAM Roles for Tasks</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonECS/latest/developerguide/fargate-task-storage.html" target="_blank">Amazon ECS Developer Guide — Fargate Task Ephemeral Storage</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonECS/latest/developerguide/deployment-type-ecs.html" target="_blank">Amazon ECS Developer Guide — Rolling Update Deployment and Circuit Breaker</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonECS/latest/developerguide/capacity-autoscaling.html" target="_blank">Amazon ECS Developer Guide — Service Auto Scaling</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonECS/latest/bestpracticesguide/security-iam.html" target="_blank">Amazon ECS Best Practices Guide — Security and IAM</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonECS/latest/developerguide/service-load-balancing.html" target="_blank">Amazon ECS Developer Guide — Service Load Balancing</a></li>
+            <li><a href="https://docs.aws.amazon.com/whitepapers/latest/aws-fault-isolation-boundaries/principal-design-areas.html" target="_blank">AWS Whitepaper — Fault Isolation Boundaries</a></li>
+          </ul>
+        </div>
       </section>
       <div class="day-nav">
         <a href="day-014.html">&larr; Day 14: Week 2 Synthesis &amp; Networking Lab Exam</a>

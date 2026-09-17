@@ -104,36 +104,371 @@
         <span class="pill pill-green">Phase 3: SRE Observability, Resilience &amp; DR</span>
       </div>
       <h1 class="hero-title">Designing Game Days &amp; Chaos Experiments</h1>
-      <div class="reading-meta">&#128337; ~3 min read &middot; 2 services covered</div>
+      <div class="reading-meta">&#128337; ~58 min read &middot; 2 services covered</div>
       <div class="services-grid">
         <span class="service-tag">AWS FIS</span>
         <span class="service-tag">Well-Architected Reliability</span>
       </div>
       <div id="tracker"></div>
-      <section class="doc-section">
-        <h2 class="section-heading">Today's Concept</h2>
+
+      <section class="doc-section" id="recap">
+        <h2 class="section-heading">Recap: From Experiment Templates to Exercises</h2>
         <div class="card card-accent">
-          <p>A Game Day is a scheduled exercise simulating a real failure (AZ outage, dependency failure, region loss) to validate that runbooks, alarms, and automated recovery actually work under realistic conditions — turning DR assumptions into tested facts.</p>
-        </div>
-        <h3 class="sub-heading">Hands-on Lab / Practical Action (45 min)</h3>
-        <div class="card">
-          <p>Design a Game Day script simulating full AZ failure for a 3-AZ application, defining success criteria (RTO/RPO targets) in advance.</p>
+          <p>Day 33 established the mechanics of AWS Fault Injection Service: experiment templates that declare an action, a target selection mode, and a blast-radius percentage, plus mandatory stop conditions tied to CloudWatch alarms that abort the run the moment production stability degrades. That lesson covered the primitives — EC2 and ECS task termination, CPU and network stress, and the AZ failover experiment that forces an RDS or Aurora failover — and treated each as an isolated capability you can invoke on demand.</p>
+          <p>Today extends that material rather than restating it. The primitives are the vocabulary; a Game Day is the sentence. An experiment template answers "what can I break and how do I stop it," while a Game Day answers "who is in the room, what are we trying to prove, what counts as success, and what do we change afterward." The distinction matters because the exam rarely asks you to recite an FIS action name. It asks you to recognize a scenario where a team has documented recovery procedures but has never validated them, and to select the practice that converts those assumptions into measured facts. That practice is the Game Day, and it is built on exactly the stop-condition discipline Day 33 described.</p>
         </div>
       </section>
-      <section class="doc-section">
+
+      <section class="doc-section" id="why-on-exam">
+        <h2 class="section-heading">1. Why Game Days Are on the Exam</h2>
+        <p>The SAP-C02 exam tests design judgment under constraint, and one of the most reliable constraints it uses is the gap between what an architecture claims and what it has actually been proven to do. A team can draw a three-AZ, multi-region diagram with automatic failover and still have a recovery time objective that exists only in a slide deck. The exam's resilience domain is built around that gap, and Game Days are the mechanism AWS documents for closing it. When a question describes a workload with a stated RTO, a documented runbook, and no evidence the runbook has ever been executed, the correct answer is almost always to test the recovery path rather than to add more redundancy.</p>
+        <p>This maps most directly to the Resilient Architectures domain, but it also touches Operational Excellence, because a Game Day is fundamentally an operations-as-code practice: the exercise is scripted, the success criteria are quantified in advance, and the output is a set of corrective actions rather than a vague sense that things went fine. The Well-Architected Reliability pillar names failure management as one of its four areas, and within failure management the guidance is explicit that recovery procedures must be tested, not merely written. A question that offers "increase backup frequency" or "add a second standby region" as an answer to an untested-runbook scenario is testing whether you understand that more infrastructure does not substitute for validated procedure.</p>
+        <p>There is a second, subtler exam angle. Game Days are the point where several earlier topics converge: the composite alarms from Day 29 determine whether the exercise produces signal or noise, the synthetic canaries from Day 30 determine whether you detect the failure from the customer's perspective, and the FIS stop conditions from Day 33 determine whether the exercise stays safe. A scenario that asks how to validate an SLO end to end is often really asking whether you would run a controlled failure and measure the detection and recovery path, rather than whether you would add another dashboard.</p>
+      </section>
+
+      <section class="doc-section" id="mechanism">
+        <h2 class="section-heading">2. How a Game Day Actually Runs</h2>
+        <p>A Game Day is a scheduled, time-boxed exercise in which a team deliberately introduces a realistic failure into a system and observes whether the documented detection and recovery mechanisms behave as designed. The word "scheduled" carries weight: unlike an ad hoc chaos experiment run by one engineer to see what happens, a Game Day has a defined start and end, named participants, a written hypothesis, and pre-agreed success criteria. The hypothesis is the part teams skip and the part that makes the exercise useful. "We believe that if we lose one Availability Zone, the Application Load Balancer will drain the affected targets within 60 seconds, the Auto Scaling Group will replace capacity in the surviving zones, and customer-facing error rate will stay below 0.5% for the duration" is a hypothesis. "Let's kill an AZ and see what happens" is not.</p>
+        <p>Mechanically, the exercise runs in four phases. In the planning phase the team selects a failure mode, writes the hypothesis, defines the success criteria as measurable thresholds, identifies the stop conditions that will abort the run, and notifies anyone whose systems might be affected. In the execution phase the failure is injected — typically through an FIS experiment template, though a Game Day can also be run by manually failing over a database or revoking a credential — while participants watch the same dashboards an on-call engineer would watch. In the observation phase the team records what actually happened against what was predicted: time to detection, time to first alarm, time to automated recovery, time to manual intervention if any, and the peak customer-visible impact. In the retrospective phase the deltas between prediction and reality become backlog items.</p>
+        <p>The critical structural property is that the failure injection is bounded by the same stop conditions that govern any FIS experiment. If the error-rate alarm breaches its threshold, the experiment halts automatically rather than waiting for a human to notice. This is what makes it defensible to run a Game Day against production, which is where the exercise has value. A Game Day run only in a staging environment validates the runbook against staging's topology, staging's data volume, and staging's traffic patterns — none of which match production. The exam consistently favors testing in production with bounded blast radius over testing in an environment that does not reproduce the failure mode.</p>
+      </section>
+
+      <section class="doc-section" id="decision-boundary">
+        <h2 class="section-heading">3. The Core Decision Boundary: What Are You Trying to Prove?</h2>
+        <p>Every Game Day design question reduces to a single fork: is the exercise validating a detection path, a recovery path, or a decision path? The three are different exercises with different failure modes, and conflating them produces an exercise that proves nothing. A detection exercise asks whether the monitoring stack notices the failure and pages the right person within the target window. A recovery exercise asks whether the automated or documented remediation actually restores service within the RTO. A decision exercise asks whether the humans in the loop make the right call — fail over or wait, escalate or absorb — under time pressure and incomplete information.</p>
+        <p>The fork matters because the success criteria are completely different. A detection exercise can succeed even if recovery is slow, as long as the alarm fired and the page reached the on-call engineer. A recovery exercise can succeed even if detection was late, as long as the system returned to health within the RTO. A decision exercise is the hardest to score because the "correct" call depends on information that may not have been available at the time, and the retrospective has to evaluate the decision against the information the responder actually had rather than against the outcome.</p>
+        <p>In practice most Game Days target recovery, because that is where the RTO claim lives and where the gap between documentation and reality is widest. But the exam will present scenarios where the real weakness is detection — a workload with excellent automated failover and no alarm that fires when it happens — and the correct answer is to exercise the detection path first. The table below maps the fork to its observable signals.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Exercise type</th><th>Primary question</th><th>Success signal</th><th>Common failure</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Detection</td><td>Did we notice, and did the right person get paged?</td><td>Alarm state change and page delivery within the target window</td><td>Alarm exists but routes to a queue nobody watches</td></tr>
+              <tr><td>Recovery</td><td>Did service return within the RTO?</td><td>Measured time from injection to healthy state</td><td>Runbook step references a console path that no longer exists</td></tr>
+              <tr><td>Decision</td><td>Did the responder choose the right action given available information?</td><td>Documented rationale matching the runbook's decision tree</td><td>Runbook has no decision tree, only a happy path</td></tr>
+              <tr><td>Degradation</td><td>Does the system shed load gracefully instead of failing hard?</td><td>Reduced functionality with no hard errors</td><td>No queue or backpressure, so the failure cascades</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="doc-section" id="config-tradeoffs">
+        <h2 class="section-heading">4. Scoping the Exercise: Blast Radius, Environment, and Timing</h2>
+        <p>The knobs that determine whether a Game Day is safe and useful are blast radius, environment, and timing, and each trades safety against fidelity. Blast radius is the fraction of the fleet or the number of targets the injection touches. A single-task termination proves that the scheduler replaces a task; it does not prove that the service survives losing a third of its capacity. A full AZ failure proves the latter but consumes real capacity and real customer impact. The right setting is the smallest blast radius that still exercises the mechanism you are testing — if the hypothesis is about AZ-level failover, you need AZ-level scope, and no smaller injection will validate it.</p>
+        <p>Environment is the second knob, and the tradeoff is stark. Staging is safe and reproducible but rarely reproduces production's data volume, traffic distribution, dependency graph, or configuration drift. Production is faithful but carries real risk, which is precisely why the stop conditions matter. The defensible position, and the one the exam rewards, is to run in production with a bounded blast radius and automated abort conditions, and to reserve staging for rehearsing the mechanics of the injection itself before the real exercise. Teams that only ever test in staging tend to discover during a real incident that the runbook's assumptions about production topology were never true.</p>
+        <p>Timing is the third knob and the one most often mishandled. Running a Game Day during peak traffic maximizes fidelity but also maximizes the cost of a mistake. Running it at 3 a.m. minimizes customer impact but also means the on-call engineer who would respond to a real incident is asleep, so the exercise tests the automated path only and says nothing about the human path. The common compromise is to run during business hours with the full response team present and available, accepting a small amount of customer-visible risk in exchange for testing the complete detection-to-recovery chain including the humans. The table below summarizes the tradeoffs.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Knob</th><th>Low setting</th><th>High setting</th><th>What it buys you</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Blast radius</td><td>One task or instance</td><td>Full AZ or region</td><td>Fidelity to the failure mode you claim to survive</td></tr>
+              <tr><td>Environment</td><td>Staging</td><td>Production</td><td>Real topology, data volume, and configuration drift</td></tr>
+              <tr><td>Timing</td><td>Off-hours</td><td>Peak business hours</td><td>Whether the human response path works, not just the automated one</td></tr>
+              <tr><td>Duration</td><td>Minutes</td><td>Hours</td><td>Whether slow-burn failures (connection pool exhaustion, disk fill) surface</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="doc-section" id="sizing-limits">
+        <h2 class="section-heading">5. Sizing the Exercise and the Numbers That Bound It</h2>
+        <p>Game Day sizing is really RTO and RPO arithmetic made concrete. If a workload's stated RTO is fifteen minutes, the exercise must be long enough to observe whether recovery completes inside that window, which means the observation period has to extend past the RTO rather than stopping the moment the injection ends. A common mistake is to declare success when the alarm clears, without measuring the full path from injection to steady-state health. The measurement that matters is wall-clock time from the moment the failure is introduced to the moment the service is serving normal traffic at normal error rates, and that number is what gets compared against the RTO.</p>
+        <p>The FIS experiment itself is bounded by its stop conditions, and those thresholds should be set tighter than the SLO breach point, not equal to it. If the service's error-rate SLO allows 1% errors over a five-minute window, the stop condition should trip well before that — the exercise is meant to reveal weakness, not to consume the error budget. Similarly, the blast radius percentage in the target selection should be the minimum that exercises the mechanism. FIS supports targeting by tag, by resource ID, and by percentage of a matched set, and the percentage mode is the one that makes an exercise reproducible across a fleet whose size changes between runs.</p>
+        <p>Duration is bounded by the failure mode. Fast failures — instance termination, task kill, AZ failover — complete their recovery within minutes and the exercise can be short. Slow failures — memory leaks, connection pool exhaustion, disk fill, certificate expiry — need the exercise to run long enough for the symptom to develop, which can mean hours. The table below lists the failure modes most commonly exercised and the observation window each requires.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Failure mode</th><th>Typical observation window</th><th>What you are measuring</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Single task or instance termination</td><td>Minutes</td><td>Scheduler replacement time and load balancer drain behavior</td></tr>
+              <tr><td>AZ failure (subnet or AZ-scoped injection)</td><td>10-30 minutes</td><td>Cross-AZ failover, capacity replacement, connection re-establishment</td></tr>
+              <tr><td>Database failover (Multi-AZ or Aurora)</td><td>Minutes</td><td>Endpoint DNS propagation and application reconnect logic</td></tr>
+              <tr><td>Dependency latency injection</td><td>15-60 minutes</td><td>Timeout configuration, retry storms, circuit breaker behavior</td></tr>
+              <tr><td>Resource exhaustion (disk, connections)</td><td>Hours</td><td>Whether alarms fire before the resource is fully consumed</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="doc-section" id="failure-modes">
+        <h2 class="section-heading">6. Failure Modes of the Exercise Itself</h2>
+        <p>The most common way a Game Day fails is that it proves nothing because the injection never actually reached the system under test. A target selection that matches zero resources, an IAM role that lacks permission to perform the action, or an experiment scoped to a tag that no longer exists all produce a run that reports success while nothing happened. The symptom is an exercise where every metric stayed flat and the retrospective concludes the system is resilient, when in fact the failure was never introduced. The first diagnostic move is always to confirm the injection landed: check the FIS experiment's action log and verify the target count is what you expected before interpreting any other signal.</p>
+        <p>The second failure mode is the opposite — the injection lands but the stop conditions do not fire when they should, because the alarm they reference is misconfigured, evaluating the wrong metric, or in INSUFFICIENT_DATA state. An alarm that has never had enough datapoints to leave INSUFFICIENT_DATA cannot trigger a stop condition, which means the safety net is absent precisely during the exercise that needs it. Before any Game Day, the stop-condition alarms should be verified as being in OK state with a healthy evaluation history, not merely present in the template.</p>
+        <p>The third failure mode is a recovery that works but for the wrong reason. If the service recovered because a human manually scaled the fleet rather than because the Auto Scaling Group did it, the exercise has validated the human, not the automation, and the runbook's claim about automated recovery is still unproven. Distinguishing these requires the observation phase to record who or what performed each recovery action, which is why the exercise should be run with the response team watching rather than silently. The table below maps symptoms to first diagnostic moves.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Symptom</th><th>Likely cause</th><th>First diagnostic move</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>All metrics flat during the exercise</td><td>Injection never reached a target</td><td>Check FIS action log and target resource count</td></tr>
+              <tr><td>Stop condition never tripped despite visible impact</td><td>Alarm in INSUFFICIENT_DATA or wrong metric</td><td>Inspect alarm state history and metric namespace</td></tr>
+              <tr><td>Recovery succeeded but no automation ran</td><td>Human intervention masked the gap</td><td>Review CloudTrail for manual API calls during the window</td></tr>
+              <tr><td>Recovery succeeded in staging, failed in production</td><td>Topology or data-volume divergence</td><td>Compare target group membership and connection counts</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="doc-section" id="sre-angle">
+        <h2 class="section-heading">7. The SRE Angle: Game Days as Error-Budget Spend</h2>
+        <p>From an SRE perspective a Game Day is a deliberate expenditure of error budget in exchange for information, and it should be budgeted and scheduled like any other planned risk. The exercise consumes some fraction of the service's allowed unreliability, and the return is a measured recovery time, a validated runbook, and a list of corrective actions. Framing it this way makes the go/no-go decision tractable: if the service has ample error budget remaining, the exercise is cheap; if the budget is nearly exhausted, the exercise should be deferred or run at a smaller blast radius, because the team cannot afford the additional unreliability on top of whatever is already consuming the budget.</p>
+        <p>The observability requirements for a Game Day are the same as for an incident, which is a useful forcing function. If the team cannot tell during the exercise whether the service is healthy, they will not be able to tell during a real incident either, and that discovery is itself a valuable output. The minimum instrumentation is a customer-facing availability signal (synthetic canary or load balancer error rate), a latency signal at the percentile that matters, a saturation signal for the constrained resource, and an alarm on each that is known to be in OK state before the exercise begins. Composite alarms are particularly useful here because they let the exercise's stop condition require correlated signals rather than tripping on a single noisy metric.</p>
+        <p>The runbook shape that emerges from a well-run Game Day is a decision tree rather than a checklist. The exercise reveals the branch points — at what error rate do we fail over, at what latency do we shed load, who has authority to declare the incident — and those branches get written down with the thresholds that were validated. The retrospective output is not "the system worked" but a set of specific deltas: the alarm fired four minutes later than predicted, the runbook's failover step referenced a console page that has moved, the connection pool needed a manual restart that no step mentioned. Each delta becomes a backlog item with an owner.</p>
+      </section>
+
+      <section class="doc-section" id="gotchas">
+        <h2 class="section-heading">8. Edge Cases and Exam Gotchas</h2>
+        <p>The single most-tested gotcha is the substitution trap: a scenario describes an untested recovery procedure and offers "increase backup frequency," "add a second standby region," or "enable Multi-AZ" as answers. None of these validate the procedure. More redundancy changes the recovery characteristics but does not prove the runbook works, and the exam expects you to select the answer that tests rather than the answer that adds. A related trap offers "run the exercise in a staging environment" as the safe choice; it is safer but it does not reproduce production's failure mode, and the exam generally prefers bounded production testing.</p>
+        <p>The second gotcha concerns stop conditions. A question may describe an FIS experiment with no stop condition, or with a stop condition referencing an alarm that has never fired, and ask what the risk is. The answer is that the experiment has no automated abort and will continue injecting failure regardless of impact, which is exactly the scenario Day 33's stop-condition discipline exists to prevent. A third gotcha is the difference between a Game Day and a chaos experiment run ad hoc: the Game Day's defining features are the pre-written hypothesis, the quantified success criteria, and the scheduled participation of the response team. An experiment without those is a test, not a Game Day, and the exam distinguishes them.</p>
+        <p>Finally, watch for scenarios that conflate the exercise with the remediation. A Game Day that reveals a gap does not fix the gap; the corrective actions do. An answer choice that says "run a Game Day to resolve the issue" is wrong if the issue is a known defect — the Game Day would only confirm what is already known. The exercise is for discovering unknown gaps and validating claimed capabilities, not for closing defects you have already identified.</p>
+      </section>
+
+      <section class="doc-section" id="vs-comparison">
+        <h2 class="section-heading">9. Game Days vs. the Practices They Get Confused With</h2>
+        <p>Game Days sit in a family of resilience practices that are easy to conflate: chaos experiments, load tests, disaster recovery drills, and penetration tests. The distinctions matter on the exam because each answers a different question and produces a different artifact. A chaos experiment is the injection mechanism — it answers "what happens if I break this." A Game Day wraps a chaos experiment in a hypothesis, a schedule, and a response team, and answers "does our documented recovery actually work." A load test answers "does the system hold up under expected and peak traffic," which is a capacity question rather than a failure question, though the two are often run together.</p>
+        <p>A DR drill is the closest relative and the most commonly confused. A DR drill exercises the failover to a standby region or environment and is typically a larger, less frequent, more disruptive event. A Game Day is usually scoped to a single failure mode within a single region and can be run far more often. The relationship is that Game Days build the muscle memory and validate the components that a DR drill then assembles into a full failover. A penetration test is unrelated in purpose — it probes for exploitable vulnerabilities rather than for recovery capability — and should not be substituted for resilience testing.</p>
+        <p>The practical rule is to pick the practice that matches the claim you need to validate. If the claim is "we recover from an AZ loss in under fifteen minutes," run a Game Day with an AZ-scoped injection. If the claim is "we can operate from our secondary region," run a DR drill. If the claim is "we handle Black Friday traffic," run a load test. The table below makes the selection explicit.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Practice</th><th>Question it answers</th><th>Typical frequency</th><th>Pick it when…</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Chaos experiment</td><td>What happens if I break this?</td><td>Continuous or on demand</td><td>You need to know the blast radius of a specific fault</td></tr>
+              <tr><td>Game Day</td><td>Does our documented recovery work?</td><td>Quarterly per critical service</td><td>A runbook or RTO claim has never been validated</td></tr>
+              <tr><td>DR drill</td><td>Can we operate from the standby region?</td><td>Annually or semi-annually</td><td>The claim is region-level failover, not component-level</td></tr>
+              <tr><td>Load test</td><td>Does it hold under peak traffic?</td><td>Before major launches</td><td>The risk is capacity, not failure recovery</td></tr>
+              <tr><td>Penetration test</td><td>Can an attacker exploit this?</td><td>Annually or after major change</td><td>The risk is security, not availability</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="doc-section" id="lab">
+        <h2 class="section-heading">Hands-On Lab: A Full AZ-Failure Game Day (60 min)</h2>
+        <div class="card card-green">
+          <p>In this lab you will design and document a complete Game Day exercise that simulates the loss of one Availability Zone for a three-AZ application, with success criteria defined before the exercise runs. The deliverable is a written Game Day plan plus the FIS experiment template that would execute it. You do not need to run the injection against a live production workload to complete the lab; the design artifacts are the point, and running it against a sandbox account is a bonus.</p>
+          <p><strong>Step 1 — Define the system under test.</strong> Choose or describe a three-AZ application with an Application Load Balancer, an Auto Scaling Group spanning all three AZs, and a Multi-AZ database. Write down the current stated RTO and RPO for this workload. If no RTO exists, that is your first finding: a Game Day cannot have success criteria without a target to measure against, so set a provisional RTO and note that it needs business sign-off.</p>
+          <p><strong>Step 2 — Write the hypothesis.</strong> State it as a falsifiable prediction with numbers. For example: "If we lose AZ-a entirely, the ALB will stop routing to targets in AZ-a within 30 seconds, the Auto Scaling Group will launch replacement capacity in AZ-b and AZ-c within 5 minutes, the database will fail over within 90 seconds, and customer-facing error rate will remain below 0.5% for the duration of the exercise." Every clause must be measurable from a dashboard you already have.</p>
+          <p><strong>Step 3 — Define success criteria and stop conditions separately.</strong> Success criteria are what you are trying to prove: recovery within the RTO, error rate under the threshold, no data loss beyond the RPO. Stop conditions are what aborts the exercise: error rate exceeding a hard ceiling, latency exceeding a hard ceiling, or any signal that the impact is escaping the intended blast radius. Set the stop conditions tighter than the success thresholds so the exercise aborts before it consumes the error budget.</p>
+          <p><strong>Step 4 — Build the FIS experiment template.</strong> Create an experiment template with an action that simulates AZ impairment — for example, network disruption scoped to the subnets in one AZ, or termination of the instances tagged with that AZ. Set the target selection to the resources in the chosen AZ only, and attach the stop conditions from Step 3 as CloudWatch alarm ARNs. Verify each referenced alarm is currently in OK state with a healthy evaluation history before proceeding.</p>
+          <p><strong>Step 5 — Define the observation plan.</strong> List the exact dashboards and metrics the team will watch, and assign one person to record timestamps: injection start, first alarm, page delivered, first automated recovery action, service healthy. Assign a second person to watch CloudTrail for manual API calls so you can distinguish automated recovery from human intervention.</p>
+          <p><strong>Step 6 — Write the retrospective template.</strong> Before running anything, create the document that will capture the deltas: predicted versus actual for each hypothesis clause, every runbook step that was wrong or missing, every alarm that fired late or not at all, and a list of corrective actions with owners. The exercise is only as valuable as this document.</p>
+          <p><strong>Step 7 — Dry run and then execute.</strong> Rehearse the injection mechanics in a sandbox account first to confirm the template targets the right resources and the stop conditions are wired correctly. Then schedule the production exercise during business hours with the response team present, notify stakeholders, and run it. Record everything. Do not skip the dry run; the most common Game Day failure is an injection that never landed.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="quiz">
         <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
-        
+
       <div class="scenario-card">
         <p class="scenario-question"><strong>Q1.</strong> A team has documented DR runbooks but has never tested them under simulated failure. What is the recommended next step before relying on them?</p>
-        <div class="scenario-options" id="opts-d34q0">
+        <div class="scenario-options" id="opts-d34q1">
             <div class="scenario-option">A. Trust the documentation as-is</div>
             <div class="scenario-option">B. Run a Game Day exercise using FIS to simulate the failure and validate the runbook and automated recovery actually work</div>
             <div class="scenario-option">C. Increase backup frequency only</div>
             <div class="scenario-option">D. Skip testing to avoid production risk</div>
         </div>
-        <button class="scenario-reveal-btn" onclick="revealAnswer('d34q0', 1)">Reveal Answer</button>
-        <div class="scenario-explanation" id="exp-d34q0"><strong>Correct answer: B.</strong> Untested runbooks are unverified assumptions; a Game Day exercises the real failure mode against real infrastructure to confirm RTO/RPO targets are actually achievable.</div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d34q1', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d34q1"><strong>Correct answer: B.</strong> Untested runbooks are unverified assumptions; a Game Day exercises the real failure mode against real infrastructure to confirm RTO/RPO targets are actually achievable.</div>
       </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q2.</strong> A Game Day is run and every dashboard stays flat for the full duration. The retrospective concludes the system is highly resilient. What is the most likely explanation?</p>
+        <div class="scenario-options" id="opts-d34q2">
+            <div class="scenario-option">A. The system genuinely has no weaknesses</div>
+            <div class="scenario-option">B. The injection never reached a target — the target selection matched zero resources or the IAM role lacked permission</div>
+            <div class="scenario-option">C. The dashboards are too detailed</div>
+            <div class="scenario-option">D. The exercise was too long</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d34q2', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d34q2"><strong>Correct answer: B.</strong> A flat-metric exercise almost always means the fault was never introduced. The first diagnostic move is to check the FIS action log and confirm the target resource count.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q3.</strong> An FIS experiment template used for a Game Day has no stop conditions configured. What is the risk?</p>
+        <div class="scenario-options" id="opts-d34q3">
+            <div class="scenario-option">A. The experiment will not start</div>
+            <div class="scenario-option">B. The experiment has no automated abort and will continue injecting failure regardless of impact</div>
+            <div class="scenario-option">C. The experiment will run in the wrong region</div>
+            <div class="scenario-option">D. CloudWatch will not record the metrics</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d34q3', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d34q3"><strong>Correct answer: B.</strong> Stop conditions are the automated safety net. Without them the injection continues until it is manually stopped or the duration expires, regardless of customer impact.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q4.</strong> A service's error-rate SLO allows 1% errors over five minutes. Where should the Game Day's stop-condition alarm threshold be set?</p>
+        <div class="scenario-options" id="opts-d34q4">
+            <div class="scenario-option">A. Exactly at 1%, matching the SLO</div>
+            <div class="scenario-option">B. Above 1%, so the exercise is not interrupted</div>
+            <div class="scenario-option">C. Tighter than 1%, so the exercise aborts before consuming the error budget</div>
+            <div class="scenario-option">D. Stop conditions should not be tied to error rate</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d34q4', 2)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d34q4"><strong>Correct answer: C.</strong> The exercise is meant to reveal weakness, not to spend the error budget. Stop conditions should trip well before the SLO breach point.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q5.</strong> During a Game Day the service recovers within the RTO, but CloudTrail shows an engineer manually scaled the Auto Scaling Group. What has the exercise actually validated?</p>
+        <div class="scenario-options" id="opts-d34q5">
+            <div class="scenario-option">A. That automated recovery works as documented</div>
+            <div class="scenario-option">B. That the human response path works, but the claim about automated recovery remains unproven</div>
+            <div class="scenario-option">C. Nothing at all</div>
+            <div class="scenario-option">D. That the RTO is too aggressive</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d34q5', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d34q5"><strong>Correct answer: B.</strong> Manual intervention masks the automation gap. Distinguishing the two requires watching CloudTrail for manual API calls during the exercise window.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q6.</strong> A team wants to validate that their monitoring detects an AZ failure and pages the correct on-call engineer within two minutes. Which exercise type are they running?</p>
+        <div class="scenario-options" id="opts-d34q6">
+            <div class="scenario-option">A. A recovery exercise</div>
+            <div class="scenario-option">B. A detection exercise</div>
+            <div class="scenario-option">C. A load test</div>
+            <div class="scenario-option">D. A penetration test</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d34q6', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d34q6"><strong>Correct answer: B.</strong> The success criterion is alarm firing and page delivery within a window, not service restoration. That is a detection exercise.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q7.</strong> A Game Day is run only in a staging environment because production is considered too risky. What is the primary limitation of this approach?</p>
+        <div class="scenario-options" id="opts-d34q7">
+            <div class="scenario-option">A. Staging costs more than production</div>
+            <div class="scenario-option">B. Staging rarely reproduces production's topology, data volume, traffic distribution, and configuration drift, so the runbook's production assumptions stay unvalidated</div>
+            <div class="scenario-option">C. FIS cannot run in staging</div>
+            <div class="scenario-option">D. There is no limitation; staging is always preferred</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d34q7', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d34q7"><strong>Correct answer: B.</strong> Staging is safe but not faithful. Bounded production testing with stop conditions is the practice that actually validates the recovery path.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q8.</strong> A stop-condition alarm referenced by an FIS experiment has never had enough datapoints to leave INSUFFICIENT_DATA. What is the consequence during a Game Day?</p>
+        <div class="scenario-options" id="opts-d34q8">
+            <div class="scenario-option">A. The alarm will fire more aggressively</div>
+            <div class="scenario-option">B. The alarm cannot trigger the stop condition, so the safety net is effectively absent</div>
+            <div class="scenario-option">C. FIS will substitute a default alarm</div>
+            <div class="scenario-option">D. The experiment will not start</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d34q8', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d34q8"><strong>Correct answer: B.</strong> An alarm in INSUFFICIENT_DATA cannot transition to ALARM, so it cannot abort the experiment. Verify stop-condition alarms are in OK state with a healthy history before running.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q9.</strong> A workload's stated RTO is fifteen minutes. How long should the Game Day's observation period run?</p>
+        <div class="scenario-options" id="opts-d34q9">
+            <div class="scenario-option">A. Until the injection ends</div>
+            <div class="scenario-option">B. Until the first alarm clears</div>
+            <div class="scenario-option">C. Past the RTO, measuring wall-clock time from injection to steady-state health</div>
+            <div class="scenario-option">D. Exactly fifteen minutes</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d34q9', 2)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d34q9"><strong>Correct answer: C.</strong> The measurement that matters is injection-to-steady-state, and the observation window must extend past the RTO to determine whether recovery actually completed inside it.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q10.</strong> Which practice answers the question "can we operate from our standby region?"</p>
+        <div class="scenario-options" id="opts-d34q10">
+            <div class="scenario-option">A. A Game Day scoped to a single AZ</div>
+            <div class="scenario-option">B. A DR drill</div>
+            <div class="scenario-option">C. A load test</div>
+            <div class="scenario-option">D. A penetration test</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d34q10', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d34q10"><strong>Correct answer: B.</strong> Region-level failover is a DR drill. Game Days validate component-level recovery within a region; DR drills assemble those components into a full regional failover.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q11.</strong> A team's error budget is nearly exhausted for the quarter. What is the appropriate response to a scheduled Game Day?</p>
+        <div class="scenario-options" id="opts-d34q11">
+            <div class="scenario-option">A. Run it at full blast radius as planned</div>
+            <div class="scenario-option">B. Defer it or run it at a smaller blast radius, since the team cannot afford additional unreliability on top of existing consumption</div>
+            <div class="scenario-option">C. Cancel Game Days permanently</div>
+            <div class="scenario-option">D. Increase the SLO to create more budget</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d34q11', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d34q11"><strong>Correct answer: B.</strong> A Game Day is a deliberate spend of error budget. When the budget is nearly gone, reduce the blast radius or defer rather than adding more planned unreliability.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q12.</strong> A Game Day reveals that the runbook's failover step references a console page that no longer exists. What is the correct next action?</p>
+        <div class="scenario-options" id="opts-d34q12">
+            <div class="scenario-option">A. Run the Game Day again immediately</div>
+            <div class="scenario-option">B. Record it as a corrective action with an owner and update the runbook</div>
+            <div class="scenario-option">C. Remove the step from the runbook without replacement</div>
+            <div class="scenario-option">D. Conclude the system is not resilient</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d34q12', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d34q12"><strong>Correct answer: B.</strong> The retrospective output is a set of specific deltas with owners. A stale runbook step is exactly the kind of finding a Game Day exists to surface.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q13.</strong> Which combination best describes the defining features that distinguish a Game Day from an ad hoc chaos experiment?</p>
+        <div class="scenario-options" id="opts-d34q13">
+            <div class="scenario-option">A. A larger blast radius and longer duration</div>
+            <div class="scenario-option">B. A pre-written falsifiable hypothesis, quantified success criteria, and scheduled participation of the response team</div>
+            <div class="scenario-option">C. Use of a specific FIS action type</div>
+            <div class="scenario-option">D. Running only in production</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d34q13', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d34q13"><strong>Correct answer: B.</strong> The hypothesis, the quantified criteria, and the scheduled team participation are what make it a Game Day rather than a test.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q14.</strong> A team already knows their connection pool configuration is defective and will exhaust under load. They propose running a Game Day to "resolve" the issue. What is wrong with this plan?</p>
+        <div class="scenario-options" id="opts-d34q14">
+            <div class="scenario-option">A. Nothing; Game Days fix defects</div>
+            <div class="scenario-option">B. A Game Day would only confirm a known defect; the exercise is for discovering unknown gaps and validating claimed capabilities, not for closing defects already identified</div>
+            <div class="scenario-option">C. Game Days cannot inject connection exhaustion</div>
+            <div class="scenario-option">D. The blast radius would be too small</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d34q14', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d34q14"><strong>Correct answer: B.</strong> The exercise validates and discovers; it does not remediate. A known defect should be fixed directly, then validated by a Game Day afterward.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q15.</strong> A Game Day is scheduled at 3 a.m. to minimize customer impact. What capability does this timing choice fail to exercise?</p>
+        <div class="scenario-options" id="opts-d34q15">
+            <div class="scenario-option">A. The automated recovery path</div>
+            <div class="scenario-option">B. The human response path, since the on-call engineer who would respond to a real incident is asleep</div>
+            <div class="scenario-option">C. The database failover mechanism</div>
+            <div class="scenario-option">D. The load balancer health checks</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d34q15', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d34q15"><strong>Correct answer: B.</strong> Off-hours timing tests only the automated path. Running during business hours with the response team present is what validates the complete detection-to-recovery chain including the humans.</div>
+      </div>
+      </section>
+
+      <section class="doc-section" id="preview">
+        <h2 class="section-heading">Peek into Tomorrow</h2>
+        <div class="card card-purple">
+          <p>Everything in today's exercise assumed a failure you could recover from within a single region: lose an AZ, watch the surviving zones absorb the load, confirm the RTO. That assumption is comfortable, and it is also the one most likely to be wrong in the scenarios the exam cares about most. The open question a Game Day cannot answer is what happens when the failure is not a component but the region itself, and the business cannot tolerate a failover window at all — not fifteen minutes, not five, not even the ninety seconds a database promotion takes.</p>
+          <p>Answering that question forces a different architecture, not a better runbook. If two regions must serve live traffic simultaneously, then both are writing to the same logical dataset, and the moment two writers touch the same item you need a conflict resolution rule that the application can live with. It also changes how traffic is steered: DNS-based failover inherits client caching delays that a Game Day would never surface, which is why the next lesson looks at Global Accelerator's anycast IPs and Route 53 geoproximity routing as network-layer alternatives. The uncomfortable part is that active-active does not eliminate the failure modes you tested today — it multiplies them, because now every failure exists in two places at once and the replication path between them is itself a dependency.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="sources">
+        <h2 class="section-heading">Sources</h2>
+        <div class="card">
+          <ul class="source-list">
+            <li><a href="https://docs.aws.amazon.com/fis/latest/userguide/what-is.html" target="_blank" rel="noopener">AWS Fault Injection Service — User Guide</a></li>
+            <li><a href="https://docs.aws.amazon.com/fis/latest/userguide/stop-conditions.html" target="_blank" rel="noopener">AWS FIS — Stop Conditions</a></li>
+            <li><a href="https://docs.aws.amazon.com/wellarchitected/latest/reliability-pillar/welcome.html" target="_blank" rel="noopener">AWS Well-Architected Framework — Reliability Pillar</a></li>
+            <li><a href="https://docs.aws.amazon.com/wellarchitected/latest/reliability-pillar/test-reliability.html" target="_blank" rel="noopener">Reliability Pillar — Test Reliability (Game Days)</a></li>
+            <li><a href="https://docs.aws.amazon.com/wellarchitected/latest/operational-excellence-pillar/welcome.html" target="_blank" rel="noopener">AWS Well-Architected Framework — Operational Excellence Pillar</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/AlarmThatSendsEmail.html" target="_blank" rel="noopener">Amazon CloudWatch — Using Alarms</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CompositeAlarms.html" target="_blank" rel="noopener">Amazon CloudWatch — Composite Alarms</a></li>
+            <li><a href="https://aws.amazon.com/blogs/mt/aws-fault-injection-simulator-run-game-days/" target="_blank" rel="noopener">AWS Cloud Operations Blog — Running Game Days with AWS FIS</a></li>
+          </ul>
+        </div>
       </section>
       <div class="day-nav">
         <a href="day-033.html">&larr; Day 33: AWS Fault Injection Service (FIS) — Chaos Engineering Fundamentals</a>

@@ -104,38 +104,351 @@
         <span class="pill pill-green">Phase 3: SRE Observability, Resilience &amp; DR</span>
       </div>
       <h1 class="hero-title">Multi-Region Active-Active Architectures</h1>
-      <div class="reading-meta">&#128337; ~3 min read &middot; 3 services covered</div>
+      <div class="reading-meta">&#128337; ~58 min read &middot; 3 services covered</div>
       <div class="services-grid">
         <span class="service-tag">Global Accelerator</span>
         <span class="service-tag">DynamoDB Global Tables</span>
         <span class="service-tag">Aurora Global Database (Multi-writer)</span>
       </div>
       <div id="tracker"></div>
-      <section class="doc-section">
-        <h2 class="section-heading">Today's Concept</h2>
+
+      <section class="doc-section" id="recap">
+        <h2 class="section-heading">Recap: From Tested Runbooks to Live Multi-Region Traffic</h2>
         <div class="card card-accent">
-          <p>Active-active serves live traffic from 2+ regions simultaneously, requiring multi-region data replication with conflict resolution (DynamoDB Global Tables, or careful partitioning), and global traffic steering via Route 53 latency/geoproximity routing or Global Accelerator's anycast IPs for fast failover at the network layer.</p>
-        </div>
-        <h3 class="sub-heading">Hands-on Lab / Practical Action (45 min)</h3>
-        <div class="card">
-          <p>Design an active-active architecture using Global Accelerator for traffic steering and DynamoDB Global Tables for data, reasoning through conflict resolution.</p>
+          <p>Day 34 framed the scheduled Game Day as the mechanism that converts DR assumptions into tested facts: you simulate an AZ outage or a region loss exercise, and you find out whether the runbook validation you wrote on paper survives contact with a real failure. That exercise is deliberately scoped to a single failure domain at a time, and its output is a set of validated recovery procedures with measured RTO. Today extends that work rather than repeating it. Once you have proven that a region can be evacuated and that the runbook holds, the obvious next question is whether you have to evacuate at all — whether both regions can serve live traffic simultaneously so that losing one is a capacity event rather than a recovery event.</p>
+          <p>That shift changes the failure model in a way the Game Day format does not prepare you for. A region loss exercise assumes a single authoritative copy of the data and a controlled promotion. Active-active assumes two or more regions accepting writes at the same time, which means the hard problem is no longer failover mechanics but conflict resolution, replication lag, and traffic steering that does not depend on DNS caching behavior. The runbook you validated yesterday still matters, but it becomes a degraded-mode procedure rather than the primary recovery path.</p>
         </div>
       </section>
-      <section class="doc-section">
+
+      <section class="doc-section" id="why-on-exam">
+        <h2 class="section-heading">1. Why This Is on the Exam</h2>
+        <p>Active-active is the top of the availability ladder, and SAP-C02 treats it as the answer to a specific class of scenario rather than a general best practice. The exam's resilient architectures domain repeatedly presents a workload with a stated RTO and RPO that are both effectively zero — a trading platform, a global consumer application, a payment authorization path — and then asks which architecture satisfies it. The distractor set is almost always a well-designed active-passive pattern: Multi-AZ with a cross-region read replica, a warm standby with Route 53 failover, or a pilot light. Each of those is a correct answer to a different question, and the exam is testing whether you can tell which question is being asked.</p>
+        <p>The reason active-active is hard to fake is that it is not a single service decision. It is a bundle of three independent decisions that must all be made consistently: how traffic reaches the right region, how data is replicated and reconciled across regions, and how the application behaves when the two regions disagree. Getting the traffic layer right while leaving a single-writer database in place produces an architecture that looks active-active on a whiteboard and fails the first time a region is lost, because the surviving region can read but cannot write. The exam is built to catch exactly that inconsistency, which is why the scenario questions tend to describe the data layer in detail and the traffic layer almost in passing.</p>
+        <p>There is also a cost dimension the exam expects you to reason about explicitly. Active-active is the most expensive point on the DR spectrum because you are paying for full production capacity in at least two regions at all times, plus cross-region data transfer, plus the operational overhead of a multi-region deployment pipeline. A scenario that says cost is the primary constraint and RTO is measured in minutes is not asking for active-active; it is asking you to recognize that the requirement does not justify the spend. The skill being tested is matching the architecture to the stated RTO/RPO rather than defaulting to the most resilient option available.</p>
+      </section>
+
+      <section class="doc-section" id="mechanism">
+        <h2 class="section-heading">2. How Active-Active Actually Works</h2>
+        <p>An active-active architecture has three layers that must each be multi-region, and it is worth walking them in order because the failure modes compound from the bottom up. At the traffic layer, clients need to reach a healthy region without depending on a DNS answer that may be cached far longer than your health check interval. At the data layer, every region that serves writes needs a local copy of the data that it can write to without coordinating with the other region on the request path. At the application layer, the code has to be written so that two concurrent writes to the same logical record produce a deterministic, acceptable outcome rather than a corrupted one.</p>
+        <p>The traffic layer is where most designs quietly break. Route 53 health checks and failover routing work, but the client's resolver caches the answer for the record's TTL, and some resolvers and operating systems ignore short TTLs entirely. That means a Route 53-only failover can take minutes to propagate to every client even though the health check itself detected the failure in seconds. AWS Global Accelerator sidesteps this by giving you two static anycast IP addresses that never change. Clients connect to the anycast address, the AWS edge network accepts the connection at the nearest point of presence, and Global Accelerator routes it over the AWS backbone to a healthy endpoint group. Because the client never re-resolves anything, failover happens at the network layer in seconds and is invisible to the application.</p>
+        <p>The data layer is where the real engineering lives. DynamoDB Global Tables replicate a table across regions with a multi-active, last-writer-wins conflict resolution model, so every replica accepts writes and the service reconciles divergent versions by comparing timestamps. Aurora Global Database in its multi-writer configuration allows write forwarding from secondary regions to the primary writer, which is a different model: the secondary region accepts the write and forwards it to the primary, so there is still a single authoritative writer and the conflict problem is avoided at the cost of cross-region write latency. Choosing between these two is the central data decision in any active-active design, and it is driven by whether the workload can tolerate last-writer-wins semantics.</p>
+        <p>Finally, the application layer has to be designed for the possibility that the same logical entity is being modified in two regions at once. The standard technique is to partition the write space so that conflicts cannot occur in the first place — route all writes for a given customer, tenant, or shard to a single home region, and use the other region for reads and for failover. This is sometimes called a "cell" or "sharded active-active" design, and it is what most production active-active systems actually do, because it converts an unsolvable distributed-systems problem into a routing problem.</p>
+      </section>
+
+      <section class="doc-section" id="decision-boundary">
+        <h2 class="section-heading">3. The Core Decision Boundary: Conflict Model</h2>
+        <p>Every active-active scenario reduces to one question: what happens when two regions write to the same record at the same time? The answer determines which data service you can use, and the data service determines how much of the application you have to rewrite. There are three viable answers, and they are not interchangeable.</p>
+        <p>The first is to accept last-writer-wins and design around it. DynamoDB Global Tables gives you this for free, and it is the right choice when the data is naturally convergent — session state, user preferences, counters that tolerate approximate values, or any record where the most recent write is genuinely the correct one. The second is to avoid concurrent writes entirely by partitioning the write space, which works with any data store including Aurora and even a relational database, and is the most common production pattern. The third is to use a database that provides a stronger cross-region consistency model, which in AWS practice means accepting the write-forwarding latency of Aurora Global Database multi-writer or moving to a purpose-built globally distributed database.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Conflict model</th><th>Data service</th><th>Write latency</th><th>Application change</th><th>Use when</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Last-writer-wins</td><td>DynamoDB Global Tables</td><td>Local (single-digit ms)</td><td>Low — accept convergence</td><td>Data is convergent or conflicts are tolerable</td></tr>
+              <tr><td>Write forwarding to a single writer</td><td>Aurora Global Database (multi-writer)</td><td>Cross-region round trip</td><td>Low — but latency-sensitive writes suffer</td><td>Relational model required, write volume is modest</td></tr>
+              <tr><td>Partitioned write ownership</td><td>Any store, including single-writer</td><td>Local for the owning region</td><td>High — routing layer required</td><td>Conflicts are unacceptable and the key space can be sharded</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The exam pattern here is that the scenario will describe the data semantics in a sentence or two and expect you to infer the model. "Users can update their profile from any region and the most recent update should win" is last-writer-wins. "Financial transactions must never be applied twice or out of order" is partitioned ownership or a single writer. "The application is a relational schema with foreign keys and the team cannot rewrite it" points at Aurora Global Database and forces you to accept the write-forwarding latency as the price of the relational model.</p>
+      </section>
+
+      <section class="doc-section" id="config-tradeoffs">
+        <h2 class="section-heading">4. Traffic Steering Options and Their Tradeoffs</h2>
+        <p>Once the data model is settled, the traffic layer offers several mechanisms that differ mainly in how quickly they react to a regional failure and how much control they give you over the split. The important distinction is between DNS-based steering, which is subject to resolver caching, and network-layer steering, which is not.</p>
+        <p>Route 53 latency-based routing sends each client to the region with the lowest measured network latency from that client's resolver. It is simple, it requires no additional infrastructure, and it is the right answer when the workload is read-heavy and a few minutes of degraded routing during a regional failure is acceptable. Route 53 geoproximity routing adds a bias parameter that lets you shift traffic toward or away from a region without changing the underlying geography, which is useful for gradually draining a region during a planned maintenance event. Both of these are DNS answers, so both inherit the TTL problem.</p>
+        <p>Global Accelerator operates at the network layer instead. It provisions two static anycast IP addresses, and clients connect to those addresses permanently. The AWS edge network accepts the TCP connection at the nearest point of presence and forwards it over the AWS global backbone to the endpoint group you have configured. Health checks on the endpoint group remove unhealthy endpoints, and because the client's connection is terminated at the edge rather than resolved through DNS, failover is measured in seconds and does not depend on any client-side caching behavior. The tradeoff is that Global Accelerator is an additional cost and it only fronts TCP/UDP endpoints — it is not a content cache, so it does not reduce origin load the way CloudFront does.</p>
+        <p>CloudFront is sometimes proposed as the traffic-steering answer, and it is worth being precise about why it usually is not. CloudFront is a content delivery network: it caches responses at edge locations and can be configured with origin groups for failover, but its failover is between origins within a distribution, and its caching behavior means that a regional failure may be masked by cached content rather than actually failed over. It is a good complement to active-active — serving static assets and cacheable API responses from the edge reduces the load that reaches either region — but it is not a substitute for Global Accelerator or Route 53 as the steering mechanism for dynamic, write-bearing traffic.</p>
+      </section>
+
+      <section class="doc-section" id="sizing-limits">
+        <h2 class="section-heading">5. Sizing, Limits and Quotas</h2>
+        <p>The numbers that matter in an active-active design are the ones that bound replication lag, failover time, and the cost of running full capacity twice. These are the figures worth committing to memory, and each is documented in the AWS service documentation linked in the sources below.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Dimension</th><th>Value</th><th>Why it matters</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Global Accelerator anycast IPs</td><td>2 static IP addresses per accelerator</td><td>Clients never re-resolve, so failover is not TTL-bound</td></tr>
+              <tr><td>Global Accelerator endpoint groups</td><td>One per region, with health checks</td><td>Traffic dials let you weight regions without DNS changes</td></tr>
+              <tr><td>DynamoDB Global Tables replication</td><td>Typically under one second across regions</td><td>Bounds the staleness window for last-writer-wins reads</td></tr>
+              <tr><td>Aurora Global Database replication lag</td><td>Typically under one second</td><td>Secondary-region reads are near-current but not synchronous</td></tr>
+              <tr><td>Aurora Global Database promotion</td><td>Secondary promotable in under a minute</td><td>Sets the floor on RTO for the write-forwarding model</td></tr>
+              <tr><td>DynamoDB item size</td><td>400 KB maximum</td><td>Constrains what can be stored in a single replicated record</td></tr>
+              <tr><td>Cross-region data transfer</td><td>Billed per GB in each direction</td><td>Replication traffic is a recurring cost, not a one-time one</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The cost model deserves its own sentence because it is the most common reason an active-active design gets rejected in review. You are paying for full production capacity in two regions, which roughly doubles compute and database spend, and you are paying for cross-region replication traffic continuously. For a write-heavy workload, the replication traffic can be a meaningful fraction of the total bill. The exam will sometimes present a scenario where the stated RTO is a few minutes and the budget is constrained, and the correct answer is to recognize that warm standby satisfies the RTO at a fraction of the cost — active-active is only justified when the RTO is genuinely near zero.</p>
+      </section>
+
+      <section class="doc-section" id="failure-modes">
+        <h2 class="section-heading">6. Failure Modes and What They Look Like in Production</h2>
+        <p>Active-active systems fail in ways that are harder to diagnose than single-region systems, because the failure is often partial and asymmetric. The most common symptom is elevated latency in one region without any error rate increase, which usually means replication lag has grown and reads in the secondary region are returning stale data that the application then has to reconcile. The first diagnostic move is to check the replication metrics for the data layer — DynamoDB's replication latency metric or Aurora's AuroraGlobalDBReplicationLag — before looking at the application at all.</p>
+        <p>The second common failure is a write storm in one region that saturates the replication path. Because replication is asynchronous, a burst of writes in region A does not slow down region A; it slows down how quickly region B sees those writes. If the application in region B reads its own writes, users in region B will see their own updates disappear and reappear, which is the classic read-your-writes violation. The fix is either to route reads for a given user to the region that owns their writes, or to use a session-consistent read path, and the diagnostic signal is a spike in replication lag correlated with a spike in write throughput in the other region.</p>
+        <p>The third failure is the one that catches teams by surprise: a regional failure that does not actually fail over. Global Accelerator health checks are configured per endpoint group, and if the health check is pointed at a load balancer that is still returning 200s while the application behind it is broken, the accelerator will keep sending traffic to a region that cannot serve it. This is why the health check should target a deep health endpoint that exercises the application's dependencies, not just the load balancer's own health check. The symptom is a regional outage that produces no failover at all, and the first diagnostic move is to test the health check endpoint manually from outside the region.</p>
+        <p>Finally, there is the split-brain scenario that partitioned ownership is designed to prevent. If the routing layer that assigns write ownership fails or is misconfigured, two regions can both believe they own the same shard, and both will accept writes. With DynamoDB Global Tables this resolves to last-writer-wins and you lose data silently. With a relational store it can produce constraint violations or duplicate records. The mitigation is to make the ownership assignment itself highly available and to alarm on any write that arrives at a region that does not own the shard.</p>
+      </section>
+
+      <section class="doc-section" id="sre-angle">
+        <h2 class="section-heading">7. The Operational and SRE Angle</h2>
+        <p>Operating an active-active system means monitoring three things that do not exist in a single-region deployment: replication lag, per-region traffic split, and the health of the steering layer itself. Replication lag is the leading indicator for almost every data-consistency problem, and it should have an alarm with a threshold well below the point at which the application's read-your-writes guarantee breaks. For DynamoDB Global Tables, that is the replication latency metric; for Aurora Global Database, it is the cross-region replication lag metric. Both should be alarmed per region pair, not aggregated, because a problem in one direction is invisible in a global average.</p>
+        <p>Traffic split is the second signal. Global Accelerator exposes traffic dials and per-endpoint-group metrics, and the expected steady state is a split that matches your capacity plan. A sudden shift in the split — all traffic landing in one region — is either a health check failure or a routing misconfiguration, and either way it means the other region is now carrying double its designed load. The alarm should fire on the split deviating from the expected range, not just on a region going to zero, because a partial shift is often the early symptom of a health check that is flapping.</p>
+        <p>The third signal is the steering layer's own health. Global Accelerator is a managed service with a high availability SLA, but the health checks you configure are yours, and a health check that is too shallow will fail to detect a real regional problem while a health check that is too aggressive will cause flapping and unnecessary failover. The runbook shape for an active-active system is therefore different from a failover runbook: instead of a sequence of promotion steps, it is a decision tree that starts with "is the traffic split correct?" and branches into "if not, is the health check wrong or is the region actually unhealthy?" The Game Day exercise from yesterday is the right way to validate that decision tree, and it should be run against a single region at a time so that the steering behavior is observable in isolation.</p>
+      </section>
+
+      <section class="doc-section" id="gotchas">
+        <h2 class="section-heading">8. Edge Cases and Exam Gotchas</h2>
+        <p>The gotchas in this topic cluster around the gap between what an architecture diagram shows and what the services actually do. The first and most heavily tested is that Global Tables uses last-writer-wins conflict resolution, which means concurrent writes to the same item in two regions do not merge — one of them is simply discarded. Any scenario that requires both writes to be preserved is not a Global Tables scenario, no matter how the rest of the requirements read.</p>
+        <p>The second gotcha is that Aurora Global Database multi-writer is not the same as multi-region writes with local latency. Secondary regions forward writes to the primary writer, so a write issued in the secondary region pays a cross-region round trip. A scenario that says "writes must complete in single-digit milliseconds in every region" is not satisfiable with Aurora Global Database, and the correct answer is either DynamoDB Global Tables or a partitioned design where each region owns its own shard.</p>
+        <p>The third is the DNS caching problem, which the exam tests by describing a requirement for "immediate" or "sub-second" failover. Route 53 failover routing cannot guarantee that, because the client's resolver controls the cache. Global Accelerator can, because the client's connection is terminated at the AWS edge and the routing decision happens inside the AWS network. If the scenario emphasizes speed of failover independent of client behavior, Global Accelerator is the answer.</p>
+        <p>The fourth is that active-active does not eliminate the need for a DR plan — it changes what the DR plan is for. In an active-active system, the failure you are planning for is not a region loss but a correlated failure across regions: a bad deployment pushed to both regions, a data corruption event replicated everywhere, or a control-plane failure that affects the steering layer. The exam occasionally presents this as a follow-up question, and the answer is usually that you need the same backup and point-in-time recovery discipline you would have in a single-region system, because replication faithfully copies corruption.</p>
+      </section>
+
+      <section class="doc-section" id="vs-comparison">
+        <h2 class="section-heading">9. Active-Active vs. the Patterns It Gets Confused With</h2>
+        <p>The exam's distractor set for active-active scenarios is drawn from the other points on the DR spectrum, and the way to keep them straight is to anchor on the RTO/RPO requirement and the cost constraint rather than on the service names. The table below is the decision boundary in its most compressed form.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Pattern</th><th>Traffic</th><th>Data</th><th>Typical RTO</th><th>Pick when</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Multi-Site Active-Active</td><td>Served from 2+ regions simultaneously</td><td>Multi-region writes with conflict resolution</td><td>Near zero</td><td>RTO/RPO are effectively zero and cost is not the primary constraint</td></tr>
+              <tr><td>Warm Standby</td><td>Failover via Route 53 or Global Accelerator</td><td>Replicated, scaled-down replica running</td><td>Minutes</td><td>RTO is minutes and you want to avoid full duplicate capacity cost</td></tr>
+              <tr><td>Pilot Light</td><td>Failover, then scale up</td><td>Core data replicated, minimal compute</td><td>Tens of minutes</td><td>RTO is tens of minutes and standing cost must be minimized</td></tr>
+              <tr><td>Backup &amp; Restore</td><td>Rebuild in the recovery region</td><td>Backups only</td><td>Hours to days</td><td>RTO is measured in hours and cost is the dominant constraint</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The rule of thumb is that active-active is the only pattern where both regions serve live traffic in steady state. Every other pattern has a designated primary and a designated recovery region, and the difference between them is how much of the recovery region is already running. If a scenario describes a standby region that is running but not receiving traffic, it is warm standby, not active-active, even if the data is replicated in both directions. If it describes a region that is running at reduced capacity and scales up on failover, it is pilot light. The exam will often describe the data replication in a way that sounds active-active — bidirectional replication, low lag — while the traffic description makes clear that only one region is serving. Read the traffic sentence first.</p>
+      </section>
+
+      <section class="doc-section" id="lab">
+        <h2 class="section-heading">Hands-On Lab: Designing an Active-Active Architecture (60 min)</h2>
+        <div class="card card-green">
+          <p>This lab walks through the design decisions for an active-active deployment of a global read-heavy application with a small write path, using Global Accelerator for steering and DynamoDB Global Tables for data. The goal is not to deploy anything but to produce a written design that survives the conflict-resolution questions the exam will ask.</p>
+          <p><strong>Step 1 — State the requirements explicitly.</strong> Write down the RTO and RPO targets, the read and write volume per region, and the data semantics for the write path. For this lab, assume an RTO of under 30 seconds, an RPO of under one second, and a write path where the most recent update to a user profile should win. That last sentence is the one that determines the data service, so write it down before choosing anything.</p>
+          <p><strong>Step 2 — Choose the data layer and justify it.</strong> Given last-writer-wins semantics, DynamoDB Global Tables is the correct choice. Write a short paragraph explaining why Aurora Global Database would be wrong here: it would introduce cross-region write latency for a workload that does not need a relational model, and it would not improve the conflict semantics because the application has already declared that the most recent write wins.</p>
+          <p><strong>Step 3 — Design the traffic layer.</strong> Configure a Global Accelerator with two endpoint groups, one per region, each pointing at a regional Application Load Balancer. Set the traffic dials to a 50/50 split and configure health checks against a deep health endpoint on each ALB that exercises the application's dependency on DynamoDB. Document why the health check must be deep: a shallow check against the ALB's own health endpoint will not detect a regional application failure.</p>
+          <p><strong>Step 4 — Reason through conflict resolution.</strong> For each write path in the application, decide whether last-writer-wins is acceptable. For the user profile update, it is. For any counter or aggregate, decide whether approximate values are acceptable; if not, redesign that path to route writes for a given user to a single home region. Write down the routing rule that implements the home-region assignment.</p>
+          <p><strong>Step 5 — Define the monitoring.</strong> List the alarms you would create: DynamoDB replication latency per region pair, Global Accelerator traffic split deviation from the expected range, per-region ALB error rate, and a synthetic canary that exercises the write path from both regions. For each alarm, write the first diagnostic step the on-call engineer should take.</p>
+          <p><strong>Step 6 — Write the degraded-mode runbook.</strong> Describe what happens when one region is lost. The traffic layer should shift automatically via Global Accelerator health checks; the surviving region now carries double the read load, so the runbook should include a step to verify that the surviving region's capacity can absorb it. Note that no data promotion is required, which is the operational advantage of active-active over every other pattern.</p>
+          <p><strong>Step 7 — Cost the design.</strong> Estimate the steady-state cost as roughly double the single-region compute and database spend, plus cross-region replication traffic. Compare that against a warm standby design that meets the same RTO and write a one-paragraph justification for why active-active is or is not warranted given the stated RTO of 30 seconds.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="quiz">
         <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
-        
-      <div class="scenario-card">
-        <p class="scenario-question"><strong>Q1.</strong> An active-active app needs sub-second failover at the network layer when a region's health checks fail, independent of DNS TTL/caching issues.</p>
-        <div class="scenario-options" id="opts-d35q0">
-            <div class="scenario-option">A. Route 53 latency-based routing alone</div>
-            <div class="scenario-option">B. AWS Global Accelerator, which uses static anycast IPs and reroutes at the AWS network edge instantly</div>
-            <div class="scenario-option">C. CloudFront alone</div>
-            <div class="scenario-option">D. A single-region NLB</div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q1.</strong> An active-active application must fail over between regions in under 30 seconds, and the team has observed that some clients cache DNS answers for several minutes despite short TTLs. Which traffic-steering mechanism meets the requirement?</p>
+          <div class="scenario-options" id="opts-d35q1">
+            <div class="scenario-option">A. Route 53 latency-based routing with a 30-second TTL</div>
+            <div class="scenario-option">B. AWS Global Accelerator with static anycast IPs and per-region endpoint groups</div>
+            <div class="scenario-option">C. Route 53 failover routing with health checks</div>
+            <div class="scenario-option">D. A CloudFront distribution with an origin group</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d35q1', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d35q1"><strong>Correct answer: B.</strong> Global Accelerator terminates client connections at the AWS edge and routes over the AWS backbone, so failover does not depend on client-side DNS caching. Route 53 options are all subject to resolver caching regardless of TTL.</div>
         </div>
-        <button class="scenario-reveal-btn" onclick="revealAnswer('d35q0', 1)">Reveal Answer</button>
-        <div class="scenario-explanation" id="exp-d35q0"><strong>Correct answer: B.</strong> Global Accelerator uses anycast IPs and AWS's global network for near-instant failover, avoiding client-side DNS caching delays inherent to Route 53-only failover.</div>
-      </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q2.</strong> A global application stores user profile data in DynamoDB and needs every region to accept writes with single-digit-millisecond latency. Two users update the same profile from different regions within the same second. What does DynamoDB Global Tables do?</p>
+          <div class="scenario-options" id="opts-d35q2">
+            <div class="scenario-option">A. Rejects the second write with a conditional check failure</div>
+            <div class="scenario-option">B. Merges both writes field by field</div>
+            <div class="scenario-option">C. Applies last-writer-wins conflict resolution, discarding one of the writes</div>
+            <div class="scenario-option">D. Blocks both writes until a coordinator resolves the conflict</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d35q2', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d35q2"><strong>Correct answer: C.</strong> Global Tables uses last-writer-wins conflict resolution based on timestamps. Concurrent writes to the same item do not merge; one version is discarded.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q3.</strong> A financial application requires that a transaction is never applied twice and that writes complete in single-digit milliseconds in every region. Which data architecture fits?</p>
+          <div class="scenario-options" id="opts-d35q3">
+            <div class="scenario-option">A. Aurora Global Database with multi-writer enabled</div>
+            <div class="scenario-option">B. DynamoDB Global Tables with last-writer-wins</div>
+            <div class="scenario-option">C. A partitioned design where each region owns a shard of the key space and writes are routed to the owning region</div>
+            <div class="scenario-option">D. A single-region Aurora cluster with cross-region read replicas</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d35q3', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d35q3"><strong>Correct answer: C.</strong> Partitioned write ownership avoids conflicts entirely and keeps writes local to the owning region. Aurora multi-writer forwards writes cross-region, and last-writer-wins cannot guarantee a transaction is applied exactly once.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q4.</strong> A team enables Aurora Global Database multi-writer so that both regions can accept writes. Users in the secondary region report that write operations take noticeably longer than reads. Why?</p>
+          <div class="scenario-options" id="opts-d35q4">
+            <div class="scenario-option">A. The secondary region's storage layer is not replicated</div>
+            <div class="scenario-option">B. Writes in the secondary region are forwarded to the primary writer, incurring a cross-region round trip</div>
+            <div class="scenario-option">C. Multi-writer requires a global lock on every write</div>
+            <div class="scenario-option">D. The secondary region is throttled by DynamoDB capacity limits</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d35q4', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d35q4"><strong>Correct answer: B.</strong> Aurora Global Database multi-writer forwards writes from secondary regions to the primary writer, so write latency includes the cross-region round trip while reads are served locally.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q5.</strong> A regional outage occurs, but Global Accelerator continues sending traffic to the failed region. The load balancer in that region is still returning HTTP 200 on its health check endpoint. What is the most likely cause?</p>
+          <div class="scenario-options" id="opts-d35q5">
+            <div class="scenario-option">A. Global Accelerator health checks are disabled by default</div>
+            <div class="scenario-option">B. The health check is too shallow and does not exercise the application's dependencies</div>
+            <div class="scenario-option">C. The endpoint group is misconfigured with the wrong port</div>
+            <div class="scenario-option">D. Anycast IPs cannot be health-checked</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d35q5', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d35q5"><strong>Correct answer: B.</strong> A health check pointed at the load balancer's own health endpoint will pass even when the application behind it is broken. Deep health checks that exercise dependencies are required for reliable failover.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q6.</strong> An application uses DynamoDB Global Tables and users in region B report that their own updates briefly disappear and then reappear. What is the most likely explanation?</p>
+          <div class="scenario-options" id="opts-d35q6">
+            <div class="scenario-option">A. The table is in on-demand capacity mode</div>
+            <div class="scenario-option">B. Replication lag means region B is reading a stale replica of data written in region A, violating read-your-writes</div>
+            <div class="scenario-option">C. DAX is caching stale results</div>
+            <div class="scenario-option">D. The partition key has low cardinality</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d35q6', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d35q6"><strong>Correct answer: B.</strong> Global Tables replication is asynchronous, so a read in region B immediately after a write in region A can return the pre-write value. Routing reads to the region that owns the write, or using a session-consistent read path, resolves it.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q7.</strong> Which metric is the leading indicator of data-consistency problems in an active-active deployment using DynamoDB Global Tables?</p>
+          <div class="scenario-options" id="opts-d35q7">
+            <div class="scenario-option">A. Consumed write capacity units</div>
+            <div class="scenario-option">B. Replication latency between region pairs</div>
+            <div class="scenario-option">C. Number of items in the table</div>
+            <div class="scenario-option">D. Throttled requests on the table</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d35q7', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d35q7"><strong>Correct answer: B.</strong> Replication latency bounds the staleness window and is the earliest signal that read-your-writes guarantees are at risk. It should be alarmed per region pair, not aggregated.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q8.</strong> A workload has an RTO of 5 minutes and an RPO of 1 minute, and the business has stated that cost is the primary constraint. Which DR pattern should the architect recommend?</p>
+          <div class="scenario-options" id="opts-d35q8">
+            <div class="scenario-option">A. Multi-Site Active-Active</div>
+            <div class="scenario-option">B. Warm Standby</div>
+            <div class="scenario-option">C. Backup and Restore</div>
+            <div class="scenario-option">D. Pilot Light</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d35q8', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d35q8"><strong>Correct answer: B.</strong> A 5-minute RTO is satisfied by warm standby, which runs a scaled-down replica and avoids the full duplicate capacity cost of active-active. Active-active is only justified when the RTO is near zero.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q9.</strong> A team wants to gradually drain traffic away from a region during a planned maintenance window without changing DNS records. Which Global Accelerator feature supports this?</p>
+          <div class="scenario-options" id="opts-d35q9">
+            <div class="scenario-option">A. Endpoint group traffic dials</div>
+            <div class="scenario-option">B. Route 53 weighted routing</div>
+            <div class="scenario-option">C. CloudFront origin groups</div>
+            <div class="scenario-option">D. Network Load Balancer cross-zone balancing</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d35q9', 0)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d35q9"><strong>Correct answer: A.</strong> Traffic dials on an endpoint group let you shift the percentage of traffic sent to a region without touching DNS, which is the standard way to drain a region for maintenance.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q10.</strong> An active-active application is deployed in two regions. A bad configuration change is pushed to both regions simultaneously and corrupts data that is then replicated everywhere. What should the architect have in place?</p>
+          <div class="scenario-options" id="opts-d35q10">
+            <div class="scenario-option">A. Nothing — active-active eliminates the need for backups</div>
+            <div class="scenario-option">B. Point-in-time recovery and backup discipline, because replication faithfully copies corruption</div>
+            <div class="scenario-option">C. A third region for additional replication</div>
+            <div class="scenario-option">D. Stronger conflict resolution settings</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d35q10', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d35q10"><strong>Correct answer: B.</strong> Active-active protects against regional failure, not against correlated failures like bad deployments. Point-in-time recovery and backups are still required because replication propagates corruption to every region.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q11.</strong> Which statement correctly distinguishes Global Accelerator from CloudFront for active-active traffic steering?</p>
+          <div class="scenario-options" id="opts-d35q11">
+            <div class="scenario-option">A. Global Accelerator caches content at the edge; CloudFront does not</div>
+            <div class="scenario-option">B. Global Accelerator routes TCP/UDP traffic over the AWS backbone without caching; CloudFront caches HTTP content and can mask a regional failure with cached responses</div>
+            <div class="scenario-option">C. They are functionally identical for dynamic traffic</div>
+            <div class="scenario-option">D. CloudFront provides static anycast IPs; Global Accelerator does not</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d35q11', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d35q11"><strong>Correct answer: B.</strong> Global Accelerator is a network-layer accelerator with static anycast IPs and no caching. CloudFront is a CDN whose caching can mask a regional failure rather than fail over from it.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q12.</strong> A scenario describes bidirectional data replication with sub-second lag between two regions, but states that only one region receives production traffic while the other runs at reduced capacity and scales up on failover. Which pattern is this?</p>
+          <div class="scenario-options" id="opts-d35q12">
+            <div class="scenario-option">A. Multi-Site Active-Active</div>
+            <div class="scenario-option">B. Warm Standby</div>
+            <div class="scenario-option">C. Pilot Light</div>
+            <div class="scenario-option">D. Backup and Restore</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d35q12', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d35q12"><strong>Correct answer: B.</strong> The traffic sentence is decisive: only one region serves production traffic, so this is not active-active. A running scaled-down replica that scales up on failover is warm standby.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q13.</strong> An application uses a partitioned active-active design where each region owns a shard of the key space. What is the primary risk this design introduces?</p>
+          <div class="scenario-options" id="opts-d35q13">
+            <div class="scenario-option">A. Replication lag between regions</div>
+            <div class="scenario-option">B. The ownership assignment layer failing or being misconfigured, allowing two regions to accept writes for the same shard</div>
+            <div class="scenario-option">C. Higher storage costs</div>
+            <div class="scenario-option">D. Inability to use Global Accelerator</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d35q13', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d35q13"><strong>Correct answer: B.</strong> Partitioned ownership converts a conflict problem into a routing problem, but the routing layer itself becomes a critical dependency. If it fails, two regions can both believe they own the same shard.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q14.</strong> A team is designing an active-active system and wants to know the maximum size of a single replicated record in DynamoDB. What is the limit?</p>
+          <div class="scenario-options" id="opts-d35q14">
+            <div class="scenario-option">A. 64 KB</div>
+            <div class="scenario-option">B. 256 KB</div>
+            <div class="scenario-option">C. 400 KB</div>
+            <div class="scenario-option">D. 1 MB</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d35q14', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d35q14"><strong>Correct answer: C.</strong> DynamoDB items are limited to 400 KB, which constrains what can be stored in a single replicated record and is a common sizing consideration in active-active designs.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q15.</strong> An active-active deployment uses Global Accelerator with two endpoint groups. The on-call engineer receives an alarm that the traffic split has shifted from 50/50 to 95/5 without any change in total traffic. What is the first diagnostic step?</p>
+          <div class="scenario-options" id="opts-d35q15">
+            <div class="scenario-option">A. Immediately fail over the remaining region</div>
+            <div class="scenario-option">B. Check whether the health check for the low-traffic region is failing or flapping, and verify the region's actual health independently</div>
+            <div class="scenario-option">C. Increase the capacity of the high-traffic region</div>
+            <div class="scenario-option">D. Disable Global Accelerator and switch to Route 53</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d35q15', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d35q15"><strong>Correct answer: B.</strong> A partial shift in traffic split is usually a health check that is failing or flapping. The first step is to determine whether the region is genuinely unhealthy or the health check is wrong, before taking any failover action.</div>
+        </div>
       </section>
+
+      <section class="doc-section" id="preview">
+        <h2 class="section-heading">Peek into Tomorrow</h2>
+        <div class="card card-purple">
+          <p>Active-active is the most expensive point on the DR spectrum, and today's design exercise quietly assumed that the cost was acceptable. The open question it leaves is what you do when it is not. Most workloads do not have an RTO of thirty seconds, and the exam is full of scenarios where the stated RTO is minutes or tens of minutes and the budget is explicitly constrained. In those cases the architect's job is to find the cheapest pattern that still satisfies the requirement, and that means understanding the cost/RTO spectrum as a continuous tradeoff rather than a menu of four discrete options.</p>
+          <p>Tomorrow's material maps that spectrum explicitly: Backup &amp; Restore at the high-RTO end, Pilot Light with core data replicated and minimal standing infrastructure, Warm Standby with a scaled-down replica already running, and Multi-Site Active-Active at the low-RTO, high-cost end. The interesting design work is in the middle of that range, where the difference between pilot light and warm standby is a matter of how much you are willing to pay to shave minutes off the recovery time. The question to carry forward is where your own workload actually sits on that spectrum once you stop assuming that the most resilient answer is the right one.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="sources">
+        <h2 class="section-heading">Sources</h2>
+        <div class="card">
+          <ul class="source-list">
+            <li><a href="https://docs.aws.amazon.com/global-accelerator/latest/dg/what-is-global-accelerator.html" target="_blank" rel="noopener">AWS Global Accelerator Developer Guide — What Is AWS Global Accelerator?</a></li>
+            <li><a href="https://docs.aws.amazon.com/global-accelerator/latest/dg/about-endpoint-groups.html" target="_blank" rel="noopener">AWS Global Accelerator — Endpoint Groups, Traffic Dials and Health Checks</a></li>
+            <li><a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/GlobalTables.html" target="_blank" rel="noopener">Amazon DynamoDB Developer Guide — Global Tables</a></li>
+            <li><a href="https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/globaltables_HowItWorks.html" target="_blank" rel="noopener">Amazon DynamoDB — Global Tables: How It Works (Conflict Resolution)</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/aurora-global-database.html" target="_blank" rel="noopener">Amazon Aurora User Guide — Using Amazon Aurora Global Database</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/aurora-global-database-write-forwarding.html" target="_blank" rel="noopener">Amazon Aurora — Write Forwarding in Aurora Global Database</a></li>
+            <li><a href="https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/routing-policy.html" target="_blank" rel="noopener">Amazon Route 53 Developer Guide — Choosing a Routing Policy</a></li>
+            <li><a href="https://docs.aws.amazon.com/whitepapers/latest/disaster-recovery-workloads-on-aws/disaster-recovery-options-in-the-cloud.html" target="_blank" rel="noopener">AWS Whitepaper — Disaster Recovery Options in the Cloud</a></li>
+            <li><a href="https://docs.aws.amazon.com/wellarchitected/latest/reliability-pillar/welcome.html" target="_blank" rel="noopener">AWS Well-Architected Framework — Reliability Pillar</a></li>
+          </ul>
+        </div>
+      </section>
+
       <div class="day-nav">
         <a href="day-034.html">&larr; Day 34: Designing Game Days &amp; Chaos Experiments</a>
         <button class="btn btn-green" onclick="markComplete(35, 'day-036.html')">Mark Day 35 Complete &rarr;</button>

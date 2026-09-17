@@ -104,37 +104,350 @@
         <span class="pill pill-green">Phase 1: Multi-Account Governance &amp; Networking</span>
       </div>
       <h1 class="hero-title">AWS PrivateLink &amp; VPC Peering Comparison</h1>
-      <div class="reading-meta">&#128337; ~3 min read &middot; 3 services covered</div>
+      <div class="reading-meta">&#128337; ~58 min read &middot; 3 services covered</div>
       <div class="services-grid">
         <span class="service-tag">PrivateLink</span>
         <span class="service-tag">Interface Endpoints</span>
         <span class="service-tag">Gateway Endpoints</span>
       </div>
       <div id="tracker"></div>
-      <section class="doc-section">
-        <h2 class="section-heading">Today's Concept</h2>
+
+      <section class="doc-section" id="recap">
+        <h2 class="section-heading">Recap: Where Hybrid DNS Left Us</h2>
         <div class="card card-accent">
-          <p>PrivateLink exposes a service in one VPC/account to another via an ENI-backed Interface Endpoint, without VPC peering, route table changes, or overlapping-CIDR conflicts — ideal for exposing a single microservice across many consumer accounts. Gateway endpoints (S3, DynamoDB only) use route table entries instead of ENIs and are free.</p>
-        </div>
-        <h3 class="sub-heading">Hands-on Lab / Practical Action (45 min)</h3>
-        <div class="card">
-          <p>Expose an internal microservice across accounts via a PrivateLink endpoint service, avoiding VPC peering and IP overlap issues entirely.</p>
+          <p>Day 12 closed the loop on name resolution across the hybrid boundary. Route 53 Resolver inbound endpoints let on-prem resolvers query AWS private hosted zones, while outbound endpoints plus forwarding rules let AWS resources resolve on-prem names over Direct Connect or VPN. That gave us a complete DNS story: names resolve in both directions, and the transport underneath is whatever hybrid link we already built.</p>
+          <p>Today's topic contrasts with that in an important way. Resolver work is about making two networks that are already connected resolve each other's names — it assumes reachability exists and only fixes the naming layer on top of it. PrivateLink attacks the opposite end of the problem: it deliberately avoids building network reachability at all. There is no route table entry, no CIDR exchange, no peering relationship, and no DNS forwarding rule required to make it work. A consumer reaches a provider's service through an ENI that lives in the consumer's own subnet, and the two VPCs never learn about each other's address space. Where Resolver extends a shared network, PrivateLink refuses to create one.</p>
         </div>
       </section>
-      <section class="doc-section">
+
+      <section class="doc-section" id="why-on-exam">
+        <h2 class="section-heading">1. Why This Is on the Exam</h2>
+        <p>PrivateLink shows up on SAP-C02 because it is the answer to a class of scenario that no other connectivity primitive solves cleanly. The exam repeatedly presents a situation where two organizations, or two business units inside one organization, need to share exactly one service and nothing else. The consumer may be a partner company, a SaaS vendor's customer, or an internal team that must not be able to reach the provider's database, its management plane, or any other workload in that VPC. The requirement is almost always phrased as "expose only this API" or "the consumer must not have network-level access to our VPC."</p>
+        <p>The naive answers — VPC peering, Transit Gateway, or a VPN — all fail that requirement in the same way: they create bidirectional network reachability between the two address spaces. Once peering exists, the consumer can route to any IP in the provider's VPC that its security groups and NACLs permit, and the provider inherits the consumer's routing table as a potential path into its own network. Security groups become the only remaining control, and the exam is designed to make you notice that a single misconfigured rule is now the entire boundary. PrivateLink removes that class of risk structurally rather than configurationally.</p>
+        <p>The topic maps most directly to Domain 1, Design Solutions for Organizational Complexity, where cross-account and cross-organization connectivity decisions live. It also appears in Domain 2 scenarios about resilient architectures, because endpoint services have their own availability model, and in Domain 4 cost questions, because interface endpoints are billed hourly and per gigabyte while gateway endpoints are free. A candidate who can only recite "PrivateLink is more secure" will lose points on the cost and availability variants; the exam expects you to know when PrivateLink is the wrong answer because it is more expensive and more operationally involved than peering would have been.</p>
+      </section>
+
+      <section class="doc-section" id="mechanism">
+        <h2 class="section-heading">2. How PrivateLink Actually Works</h2>
+        <p>The mechanism is worth understanding at the packet level, because every exam distractor is built from a misunderstanding of one of these steps. On the provider side, you create a Network Load Balancer in front of your service and register it as an endpoint service. The NLB is not optional and not interchangeable with an ALB — PrivateLink requires a layer-4 load balancer because the service is exposed at the transport layer, and the consumer's traffic arrives as TCP to a specific port. You then grant permission to specific AWS principals, which can be account IDs, IAM roles, or entire Organizations. That allow-list is the access control plane, and it is evaluated before any packet can flow.</p>
+        <p>On the consumer side, someone creates an interface endpoint (also called a VPC endpoint of type Interface) in a subnet of their choosing. AWS provisions an elastic network interface in that subnet, with a private IP from the consumer's own CIDR range, and attaches a security group to it. The consumer's application connects to that ENI's IP address or, more commonly, to a Route 53 private hosted zone name that AWS creates automatically for the endpoint. The ENI is the only thing the consumer ever sees; the provider's IP addresses are never exposed and never routable from the consumer VPC.</p>
+        <p>Underneath, the traffic is carried by the AWS network fabric rather than by any route in either VPC's route table. This is the detail that makes overlapping CIDRs a non-issue: because no route is installed and no address is exchanged, the two VPCs can both use 10.0.0.0/16 without conflict. The ENI in the consumer subnet is a local address from the consumer's perspective, and the mapping from that ENI to the provider's NLB happens inside the AWS-managed PrivateLink data plane. Gateway endpoints work differently and are worth separating early: they are route-table entries with a prefix list as the destination, they exist only for S3 and DynamoDB, and they carry no hourly charge. They are not PrivateLink, even though the console groups them under the same "Endpoints" heading.</p>
+      </section>
+
+      <section class="doc-section" id="decision-boundary">
+        <h2 class="section-heading">3. The Core Decision Boundary</h2>
+        <p>Almost every PrivateLink scenario question reduces to one fork: does the requirement call for service-level exposure or network-level connectivity? If the consumer needs to reach exactly one service and nothing else, PrivateLink is the answer. If the consumer needs to reach many resources across the provider's VPC — a database, a cache, several internal APIs, a bastion — then you are describing network connectivity and PrivateLink is the wrong tool, because you would have to create a separate endpoint service for each thing you want to expose. That is the boundary, and the exam phrases it in terms of "only this service" versus "the whole VPC."</p>
+        <p>The second-order fork is about address space. If the two sides have overlapping CIDRs, or if either side cannot disclose its addressing to the other, peering and Transit Gateway are off the table entirely and PrivateLink becomes the only viable option regardless of how many services are involved. This is why the overlapping-CIDR scenario is such a common exam setup: it forces the answer without requiring you to weigh the service-level versus network-level tradeoff at all.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Requirement</th><th>PrivateLink</th><th>VPC Peering</th><th>Transit Gateway</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Expose one service to many consumers</td><td>Native fit</td><td>One peering per pair</td><td>Possible but over-scoped</td></tr>
+              <tr><td>Overlapping CIDRs</td><td>Supported</td><td>Not supported</td><td>Not supported</td></tr>
+              <tr><td>Bidirectional network reachability</td><td>Not provided</td><td>Provided</td><td>Provided</td></tr>
+              <tr><td>Route table changes required</td><td>None</td><td>Both sides</td><td>Both sides</td></tr>
+              <tr><td>Consumer count scaling</td><td>Thousands of principals</td><td>Quadratic peering count</td><td>Linear attachments</td></tr>
+              <tr><td>Cross-organization support</td><td>Yes, via principal allow-list</td><td>Yes, with manual accept</td><td>Yes, with RAM sharing</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="doc-section" id="config-tradeoffs">
+        <h2 class="section-heading">4. Configuration Modes and Their Tradeoffs</h2>
+        <p>The knobs on an interface endpoint are few, but each one has a cost. The first is which subnets the endpoint's ENIs are placed in. You can select one subnet per Availability Zone, and the endpoint is only as resilient as the set of AZs you choose. Selecting a single subnet gives you a single point of failure for the endpoint itself, independent of the provider's own redundancy. The standard pattern is one subnet per AZ across at least two, ideally three, AZs, which is also what the provider's NLB should be spanning. If the provider's NLB has targets in only two AZs and the consumer's endpoint has ENIs in three, the third ENI has nothing healthy behind it.</p>
+        <p>The second knob is private DNS. When you enable it, AWS creates a private hosted zone for the service's DNS name and points it at the endpoint's ENIs, so existing application code that calls the public service name resolves to the private endpoint without any code change. This is convenient and it is also a trap: enabling private DNS on an endpoint for a service you also use publicly will redirect all in-VPC traffic for that name to the endpoint, including traffic from resources that were never intended to use it. The exam likes this because it produces a symptom — a previously working public call now failing or being billed differently — that looks like a networking fault but is actually a DNS override.</p>
+        <p>The third knob is the endpoint policy, an IAM resource policy attached to the endpoint itself. It can restrict which principals can use the endpoint and which resources they can reach through it, which matters when the endpoint is shared across many accounts in an Organization. A permissive endpoint policy combined with a permissive provider allow-list is a common audit finding. The fourth consideration is the endpoint service's acceptance model: you can require manual acceptance of each connection request, or auto-accept within an Organization. Manual acceptance is the safer default for cross-organization exposure and the more operationally expensive one at scale.</p>
+      </section>
+
+      <section class="doc-section" id="sizing-limits">
+        <h2 class="section-heading">5. Sizing, Limits and Quotas</h2>
+        <p>The numbers that matter here are mostly about how many endpoints and connections you can have, and about the cost model, because the exam tests whether you know that interface endpoints are not free. Each interface endpoint is billed per AZ per hour, and data processing is billed per gigabyte in each direction. A service consumed by forty accounts across three AZs is one hundred and twenty endpoint-hours per hour of wall-clock time, before any traffic moves. That is the number that makes PrivateLink the wrong answer in a cost-optimization scenario where peering would have been acceptable.</p>
+        <p>On the provider side, the endpoint service is backed by a Network Load Balancer, and the NLB's own limits apply: you configure listeners and target groups as usual, and the service inherits the NLB's cross-zone load balancing setting. The number of endpoint services per NLB and the number of principals per service are both bounded, and the exam does not usually test the exact figures — it tests the shape of the constraint, which is that the provider side scales with the number of distinct services exposed, not with the number of consumers. Adding a thousand consumers to one endpoint service is a configuration change; adding a thousand services is a thousand NLBs.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Dimension</th><th>Behavior</th><th>Exam implication</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Billing unit</td><td>Per endpoint ENI per AZ per hour, plus per-GB processing</td><td>Not free; gateway endpoints are</td></tr>
+              <tr><td>AZ coverage</td><td>One ENI per selected subnet</td><td>Resilience is your choice, not automatic</td></tr>
+              <tr><td>Provider requirement</td><td>Network Load Balancer (layer 4)</td><td>ALB cannot back an endpoint service</td></tr>
+              <tr><td>Consumer scaling</td><td>Principal allow-list, not per-consumer infrastructure</td><td>Scales to many accounts cheaply</td></tr>
+              <tr><td>Gateway endpoints</td><td>S3 and DynamoDB only, route-table based, no hourly charge</td><td>Different mechanism, different cost</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="doc-section" id="failure-modes">
+        <h2 class="section-heading">6. Failure Modes and What They Look Like</h2>
+        <p>The most common production failure is an endpoint that exists in fewer AZs than the application uses. The symptom is intermittent: requests from instances in the uncovered AZ fail to connect while requests from other AZs succeed, and the failure rate tracks the load balancer's distribution across AZs rather than any application-level pattern. The first diagnostic move is to compare the endpoint's subnet selection against the consumer application's subnet spread, then against the provider NLB's enabled AZs. Three lists have to agree, and in practice they rarely do after a few months of drift.</p>
+        <p>The second failure mode is a security group mismatch. The endpoint's ENI has its own security group, which must allow inbound traffic from the consumer application on the service port. This is separate from the provider's NLB security group and separate from the application's own security group. A connection that times out rather than being refused usually means the endpoint ENI's security group is missing the inbound rule; a connection that is refused usually means the provider side is rejecting it, either because the principal is not on the allow-list or because the NLB has no healthy targets. Distinguishing timeout from refusal is the fastest way to bisect the problem.</p>
+        <p>The third is the private DNS override described earlier, which presents as a name resolving to an unexpected private address. The fourth is a stale connection request: a consumer creates an endpoint, the provider never accepts it, and the endpoint sits in a pending state indefinitely while the consumer's application reports connection failures. The endpoint's state is visible in the console and via the API, and checking it should be the first step whenever a newly created endpoint does not work. The fifth, less common but exam-relevant, is an NLB target group with no healthy targets in one AZ, which produces the same intermittent pattern as the AZ-coverage problem but originates on the provider side.</p>
+      </section>
+
+      <section class="doc-section" id="sre-angle">
+        <h2 class="section-heading">7. The Operational and SRE Angle</h2>
+        <p>From an SRE perspective, a PrivateLink endpoint is a dependency you own but do not control. The provider can change their NLB configuration, deregister targets, or rotate certificates without any change on your side, and your application will see the effect. That asymmetry argues for treating the endpoint as an external dependency in your SLO model: measure availability and latency at the endpoint boundary, not just at your own service, so that a provider-side degradation is attributed correctly rather than showing up as an unexplained error-rate spike in your own service.</p>
+        <p>The metrics worth alarming on are the endpoint ENI's packet and byte counters, which tell you whether traffic is flowing at all, and the provider's NLB metrics — ActiveFlowCount, HealthyHostCount, and the target-group level UnHealthyHostCount — which tell you whether the provider side is healthy. A composite alarm that fires only when your own error rate is elevated and the provider's healthy host count has dropped is far more actionable than either signal alone, because it distinguishes "our code is broken" from "our dependency is broken."</p>
+        <p>The runbook shape follows from the failure modes above. First, confirm the endpoint state is available rather than pending or rejected. Second, confirm the endpoint's AZ coverage matches the application's. Third, confirm the endpoint ENI security group allows the application's source on the service port. Fourth, check the provider's NLB for healthy targets. Only after those four checks should you look at the application itself. Writing that sequence down matters because the instinct under pressure is to start with the application, and the first four checks are cheap and eliminate most causes.</p>
+      </section>
+
+      <section class="doc-section" id="gotchas">
+        <h2 class="section-heading">8. Edge Cases and Exam Gotchas</h2>
+        <p>The single most-tested gotcha is that PrivateLink does not provide network-level access. Candidates who have internalized "PrivateLink is the secure option" will select it for scenarios that require reaching a database, a file share, or several services in the provider VPC, and that is wrong. The exam will often include a distractor that says "create a PrivateLink endpoint" in a scenario where the consumer genuinely needs broad access, and the correct answer is peering or Transit Gateway with tight security groups. Read the requirement for the word "only."</p>
+        <p>The second gotcha is the ALB-versus-NLB distinction. An endpoint service must be backed by a Network Load Balancer. If a scenario describes an existing Application Load Balancer and asks how to expose it via PrivateLink, the answer involves putting an NLB in front of it or using a different exposure mechanism — you cannot register an ALB as an endpoint service directly. This trips people because ALB is the more familiar load balancer and the scenario may not mention the layer-4 requirement explicitly.</p>
+        <p>The third is the gateway endpoint scope. Gateway endpoints exist only for S3 and DynamoDB, are free, and work by installing a prefix-list route in the subnet's route table. They do not use ENIs, they do not support every service, and they cannot be used from on-premises over a VPN or Direct Connect because the route only exists inside the VPC. A scenario that asks for private S3 access from an on-premises data center needs an interface endpoint, not a gateway endpoint, and that distinction is a recurring exam item. The fourth gotcha is that endpoint policies and provider allow-lists are separate controls that both have to permit the traffic; satisfying one does not satisfy the other.</p>
+      </section>
+
+      <section class="doc-section" id="vs-comparison">
+        <h2 class="section-heading">9. PrivateLink vs. the Services It Gets Confused With</h2>
+        <p>The comparison that matters most is against VPC peering, because both are described as "connecting two VPCs" and they are not the same operation at all. Peering merges two routing domains: after peering, each VPC has a route to the other's CIDR, and reachability is limited only by security groups and NACLs. PrivateLink creates a single service-level path and leaves the routing domains separate. The practical consequence is that peering is the right answer when you need general connectivity and the CIDRs do not overlap, and PrivateLink is the right answer when you need narrow connectivity or the CIDRs do overlap.</p>
+        <p>Against Transit Gateway, the distinction is about scale and scope. TGW is a hub for many VPCs and on-premises networks, and it is the correct answer when you are building a network topology rather than exposing a service. PrivateLink does not participate in your routing topology at all, which is precisely why it is immune to CIDR conflicts and why it cannot replace TGW for general connectivity. A useful rule: if the question is about topology, think TGW; if the question is about a single API boundary, think PrivateLink.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Choose</th><th>When</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>PrivateLink interface endpoint</td><td>One service, many consumers; overlapping CIDRs; no route changes permitted; cross-organization exposure</td></tr>
+              <tr><td>Gateway endpoint</td><td>Private access to S3 or DynamoDB from inside a VPC, cost-sensitive, no on-premises requirement</td></tr>
+              <tr><td>VPC peering</td><td>General bidirectional connectivity between two non-overlapping VPCs, small number of pairs</td></tr>
+              <tr><td>Transit Gateway</td><td>Hub-and-spoke topology, many VPCs, on-premises integration, centralized inspection</td></tr>
+              <tr><td>Route 53 Resolver endpoints</td><td>Name resolution across an already-connected hybrid network</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="doc-section" id="lab">
+        <h2 class="section-heading">Hands-on Lab: Exposing a Microservice Across Accounts (45 min)</h2>
+        <div class="card card-green">
+          <p>This lab builds a cross-account PrivateLink exposure end to end, deliberately using two VPCs with identical CIDR ranges so that the overlap constraint is demonstrated rather than described. You will need two AWS accounts in the same Organization, or two accounts with the ability to accept a connection request manually. Work through the steps in order; each one produces something the next step depends on.</p>
+          <ol>
+            <li>In the provider account, create a VPC with CIDR 10.0.0.0/16 and two private subnets in different Availability Zones. Launch a small EC2 instance running a simple HTTP service on port 8080, and confirm you can reach it from within the VPC.</li>
+            <li>Create a Network Load Balancer in the provider VPC, internet-facing or internal as your account permits, with one listener on port 8080 and a target group containing the instance. Confirm the target group reports the instance as healthy. Note that an Application Load Balancer will not work here — the endpoint service requires layer 4.</li>
+            <li>Create an endpoint service backed by that NLB. Record the service name, which has the form com.amazonaws.vpce.&lt;region&gt;.vpc-endpoint-svc-xxxxxxxx. Do not enable auto-accept yet; you want to observe the manual acceptance flow.</li>
+            <li>In the consumer account, create a VPC with the same CIDR, 10.0.0.0/16, and two private subnets in the same two AZs. This is the point of the exercise: the two VPCs are indistinguishable by address, and no peering or TGW attachment between them is possible.</li>
+            <li>Create an interface endpoint in the consumer VPC using the provider's service name. Select both subnets so the endpoint has an ENI in each AZ. Attach a security group that allows inbound TCP 8080 from the consumer VPC's CIDR.</li>
+            <li>Return to the provider account and accept the pending connection request. Observe that the endpoint in the consumer account moves from pending to available only after this step.</li>
+            <li>From an instance in the consumer VPC, connect to the endpoint's DNS name on port 8080 and confirm you receive the provider's response. Then attempt to reach the provider instance's private IP directly and confirm that it fails — this is the service-level boundary in action.</li>
+            <li>Break it deliberately. Remove the inbound rule from the endpoint ENI's security group and observe that connections now time out rather than being refused. Restore the rule, then deregister the NLB target and observe that connections are refused instead. Note the difference; it is the fastest diagnostic signal you have.</li>
+            <li>Finally, enable private DNS on the endpoint and observe that the service's DNS name now resolves to the endpoint's private addresses from inside the consumer VPC. Consider what would happen if the consumer also needed to reach the same service name over the public internet.</li>
+          </ol>
+          <p>Clean up by deleting the endpoint, the endpoint service, the NLB, and both VPCs. The lab's real output is the diagnostic intuition from step 8: timeout means the consumer-side security group, refusal means the provider side, and a pending endpoint means nobody accepted the request.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="quiz">
         <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
-        
-      <div class="scenario-card">
-        <p class="scenario-question"><strong>Q1.</strong> Two companies with overlapping CIDR ranges (both 10.0.0.0/16) need one to consume a specific API hosted in the other's VPC. What connectivity option works despite the overlap?</p>
-        <div class="scenario-options" id="opts-d13q0">
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q1.</strong> Two companies with overlapping CIDR ranges (both 10.0.0.0/16) need one to consume a specific API hosted in the other's VPC. What connectivity option works despite the overlap?</p>
+          <div class="scenario-options" id="opts-d13q1">
             <div class="scenario-option">A. VPC Peering</div>
             <div class="scenario-option">B. Transit Gateway peering</div>
             <div class="scenario-option">C. AWS PrivateLink (Interface Endpoint / Endpoint Service)</div>
             <div class="scenario-option">D. Direct Connect</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d13q1', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d13q1"><strong>Correct answer: C.</strong> PrivateLink only requires ENI-level connectivity in the consumer VPC and never merges route tables or CIDRs, so it works even with fully overlapping IP ranges — unlike peering or TGW.</div>
         </div>
-        <button class="scenario-reveal-btn" onclick="revealAnswer('d13q0', 2)">Reveal Answer</button>
-        <div class="scenario-explanation" id="exp-d13q0"><strong>Correct answer: C.</strong> PrivateLink only requires ENI-level connectivity in the consumer VPC and never merges route tables/CIDRs, so it works fine even with fully overlapping IP ranges — unlike peering or TGW.</div>
-      </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q2.</strong> A consumer application must reach a provider's database, cache, and three internal APIs. The provider wants to expose all of it with minimal configuration. What is the correct approach?</p>
+          <div class="scenario-options" id="opts-d13q2">
+            <div class="scenario-option">A. Create one PrivateLink endpoint service per resource</div>
+            <div class="scenario-option">B. Use VPC peering or Transit Gateway, since the requirement is network-level reachability rather than single-service exposure</div>
+            <div class="scenario-option">C. Create a single endpoint service and register all resources behind it</div>
+            <div class="scenario-option">D. Use a gateway endpoint for each resource</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d13q2', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d13q2"><strong>Correct answer: B.</strong> PrivateLink exposes one service per endpoint service; needing broad access to many resources is the signal that you want network-level connectivity instead.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q3.</strong> You are exposing an internal service via PrivateLink but the service currently sits behind an Application Load Balancer. What must change?</p>
+          <div class="scenario-options" id="opts-d13q3">
+            <div class="scenario-option">A. Nothing — register the ALB as the endpoint service directly</div>
+            <div class="scenario-option">B. Endpoint services require a Network Load Balancer, so an NLB must front the service (or the ALB must be replaced)</div>
+            <div class="scenario-option">C. Convert the ALB to a Gateway Load Balancer</div>
+            <div class="scenario-option">D. Enable cross-zone load balancing on the ALB</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d13q3', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d13q3"><strong>Correct answer: B.</strong> PrivateLink endpoint services are backed by layer-4 Network Load Balancers; an ALB cannot be registered as an endpoint service.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q4.</strong> An on-premises data center needs private access to S3 without traversing the public internet. Which endpoint type is required?</p>
+          <div class="scenario-options" id="opts-d13q4">
+            <div class="scenario-option">A. A gateway endpoint, because it is free</div>
+            <div class="scenario-option">B. An interface endpoint, because gateway endpoints only install routes inside the VPC and are not reachable from on-premises</div>
+            <div class="scenario-option">C. Either works identically</div>
+            <div class="scenario-option">D. A NAT gateway with an S3 bucket policy</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d13q4', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d13q4"><strong>Correct answer: B.</strong> Gateway endpoints work via a prefix-list route in the VPC route table, so they are only usable from inside the VPC. On-premises access requires an interface endpoint.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q5.</strong> A consumer's requests to a PrivateLink endpoint time out rather than being refused. Where should you look first?</p>
+          <div class="scenario-options" id="opts-d13q5">
+            <div class="scenario-option">A. The provider's NLB target health</div>
+            <div class="scenario-option">B. The endpoint ENI's security group inbound rules</div>
+            <div class="scenario-option">C. The endpoint policy</div>
+            <div class="scenario-option">D. The consumer application's code</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d13q5', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d13q5"><strong>Correct answer: B.</strong> A timeout indicates packets are being dropped before reaching the service, which points at the endpoint ENI's security group. A refusal would point at the provider side instead.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q6.</strong> A newly created interface endpoint has been in a pending state for an hour and the consumer's application cannot connect. What is the most likely cause?</p>
+          <div class="scenario-options" id="opts-d13q6">
+            <div class="scenario-option">A. The endpoint's security group is misconfigured</div>
+            <div class="scenario-option">B. The provider has not accepted the connection request</div>
+            <div class="scenario-option">C. The NLB has no healthy targets</div>
+            <div class="scenario-option">D. Private DNS is disabled</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d13q6', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d13q6"><strong>Correct answer: B.</strong> An endpoint stays pending until the provider accepts the connection request (unless auto-accept is configured for the Organization).</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q7.</strong> A service is consumed by 40 accounts, each with an interface endpoint in three AZs. What is the cost implication compared to VPC peering?</p>
+          <div class="scenario-options" id="opts-d13q7">
+            <div class="scenario-option">A. No difference — both are free</div>
+            <div class="scenario-option">B. Interface endpoints are billed per ENI per AZ per hour plus per-GB processing, so 120 endpoint-hours accrue per hour of wall-clock time</div>
+            <div class="scenario-option">C. PrivateLink is always cheaper because it avoids data transfer charges</div>
+            <div class="scenario-option">D. Only the provider pays</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d13q7', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d13q7"><strong>Correct answer: B.</strong> Each endpoint ENI is billed hourly per AZ plus data processing, so wide multi-account consumption multiplies the hourly charge — a real cost consideration versus peering.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q8.</strong> After enabling private DNS on an interface endpoint, an application that previously called the service's public endpoint starts failing. What happened?</p>
+          <div class="scenario-options" id="opts-d13q8">
+            <div class="scenario-option">A. The endpoint policy blocked the call</div>
+            <div class="scenario-option">B. Private DNS overrode the public name inside the VPC, redirecting all in-VPC traffic for that name to the endpoint</div>
+            <div class="scenario-option">C. The NLB lost its targets</div>
+            <div class="scenario-option">D. The security group was changed automatically</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d13q8', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d13q8"><strong>Correct answer: B.</strong> Enabling private DNS creates a private hosted zone that resolves the service name to the endpoint's ENIs for all resources in the VPC, including those that were using the public path.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q9.</strong> A consumer's application runs in three AZs but the interface endpoint was created in only one subnet. What symptom should you expect?</p>
+          <div class="scenario-options" id="opts-d13q9">
+            <div class="scenario-option">A. Total failure of all requests</div>
+            <div class="scenario-option">B. Intermittent failures correlated with which AZ the request originates from</div>
+            <div class="scenario-option">C. Higher latency but no failures</div>
+            <div class="scenario-option">D. No impact — the endpoint is regional</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d13q9', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d13q9"><strong>Correct answer: B.</strong> The endpoint only has an ENI in the selected subnet, so requests from other AZs have no local path and fail intermittently depending on routing and load distribution.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q10.</strong> Which statement about gateway endpoints is correct?</p>
+          <div class="scenario-options" id="opts-d13q10">
+            <div class="scenario-option">A. They use ENIs and are billed hourly</div>
+            <div class="scenario-option">B. They support all AWS services</div>
+            <div class="scenario-option">C. They support only S3 and DynamoDB, use route-table prefix lists, and carry no hourly charge</div>
+            <div class="scenario-option">D. They are the same mechanism as interface endpoints</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d13q10', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d13q10"><strong>Correct answer: C.</strong> Gateway endpoints are route-table based, limited to S3 and DynamoDB, and free — a fundamentally different mechanism from PrivateLink interface endpoints.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q11.</strong> A provider wants to expose a service to any account in their AWS Organization without manually accepting each request. What should they configure?</p>
+          <div class="scenario-options" id="opts-d13q11">
+            <div class="scenario-option">A. A permissive endpoint policy on the consumer side</div>
+            <div class="scenario-option">B. Auto-accept for the Organization on the endpoint service, with the Organization as an allowed principal</div>
+            <div class="scenario-option">C. Disable private DNS</div>
+            <div class="scenario-option">D. Use a gateway endpoint instead</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d13q11', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d13q11"><strong>Correct answer: B.</strong> Endpoint services can auto-accept connection requests from principals within the same Organization, removing the manual acceptance step at scale.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q12.</strong> A security review finds that a consumer can reach the provider's database after a PrivateLink endpoint was created. What is the most likely explanation?</p>
+          <div class="scenario-options" id="opts-d13q12">
+            <div class="scenario-option">A. PrivateLink inherently grants VPC-wide access</div>
+            <div class="scenario-option">B. A separate peering or TGW attachment exists, or the database is reachable through the exposed service itself</div>
+            <div class="scenario-option">C. The endpoint policy is too permissive</div>
+            <div class="scenario-option">D. Gateway endpoints were also created</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d13q12', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d13q12"><strong>Correct answer: B.</strong> PrivateLink alone cannot grant VPC-wide reachability; if the consumer can reach the database, another connectivity path exists or the exposed service proxies to it.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q13.</strong> Which combination of controls must both permit traffic through an interface endpoint?</p>
+          <div class="scenario-options" id="opts-d13q13">
+            <div class="scenario-option">A. The endpoint policy and the provider's principal allow-list</div>
+            <div class="scenario-option">B. The NACL and the route table</div>
+            <div class="scenario-option">C. The NLB listener and the target group</div>
+            <div class="scenario-option">D. Private DNS and the hosted zone</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d13q13', 0)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d13q13"><strong>Correct answer: A.</strong> The endpoint policy governs what the consumer's endpoint may be used for, and the provider's allow-list governs who may connect. Both must permit the traffic.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q14.</strong> A team needs to expose a service to a partner company in a different AWS Organization, and the partner must not be able to reach anything else in the provider VPC. What is the correct design?</p>
+          <div class="scenario-options" id="opts-d13q14">
+            <div class="scenario-option">A. VPC peering with restrictive security groups</div>
+            <div class="scenario-option">B. A PrivateLink endpoint service with the partner's account as an allowed principal and manual acceptance</div>
+            <div class="scenario-option">C. A Transit Gateway shared via RAM</div>
+            <div class="scenario-option">D. A site-to-site VPN between the two VPCs</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d13q14', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d13q14"><strong>Correct answer: B.</strong> PrivateLink gives service-level exposure with an explicit principal allow-list and no network-level reachability, which is exactly the isolation the partner requirement demands.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q15.</strong> A provider's NLB has healthy targets in only two AZs while the consumer's endpoint has ENIs in three. What is the consequence?</p>
+          <div class="scenario-options" id="opts-d13q15">
+            <div class="scenario-option">A. No consequence — the endpoint routes around unhealthy AZs automatically</div>
+            <div class="scenario-option">B. The third ENI has no healthy backend in its AZ, producing intermittent failures unless cross-zone load balancing or matching AZ coverage is configured</div>
+            <div class="scenario-option">C. The endpoint is rejected by the provider</div>
+            <div class="scenario-option">D. Private DNS stops resolving</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d13q15', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d13q15"><strong>Correct answer: B.</strong> AZ coverage on both sides must agree, or cross-zone load balancing must be enabled on the NLB, otherwise the extra endpoint ENI has no healthy path.</div>
+        </div>
+      </section>
+
+      <section class="doc-section" id="preview">
+        <h2 class="section-heading">Peek into Tomorrow</h2>
+        <div class="card card-purple">
+          <p>We now have four separate connectivity primitives in hand — Transit Gateway, VPC peering, PrivateLink, and the hybrid DNS layer that sits on top of Direct Connect. Each one was introduced in isolation, with its own decision boundary and its own failure modes, and each one looked like the obvious answer in the scenario that introduced it. That is exactly the problem. On the real exam, the scenario does not announce which primitive it wants; it describes a business constraint and expects you to derive the answer, and the constraints are frequently in tension. A requirement for strict isolation pushes toward PrivateLink, a requirement for broad access pushes toward TGW, and a requirement to avoid CIDR conflicts eliminates peering entirely — but what happens when a single scenario contains two of those constraints at once?</p>
+          <p>Tomorrow consolidates the whole of Week 2 into a single decision framework, and the open question it has to answer is how these primitives compose rather than compete. Direct Connect resiliency is the sharpest version of that: a single connection is never the right answer, but the correct redundancy pattern depends on whether the second path is another DX connection, a VPN backup, or a different DX location entirely, and each choice has a different cost and a different failure profile. The networking lab exam will force those tradeoffs into explicit choices, which is why this cluster carries so much weight on the exam.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="sources">
+        <h2 class="section-heading">Sources</h2>
+        <div class="card">
+          <ul class="source-list">
+            <li><a href="https://docs.aws.amazon.com/vpc/latest/privatelink/what-is-privatelink.html" target="_blank">AWS PrivateLink — What is AWS PrivateLink?</a></li>
+            <li><a href="https://docs.aws.amazon.com/vpc/latest/privatelink/create-endpoint-service.html" target="_blank">Create a service powered by AWS PrivateLink</a></li>
+            <li><a href="https://docs.aws.amazon.com/vpc/latest/privatelink/interface-endpoints.html" target="_blank">Access AWS services through AWS PrivateLink (interface endpoints)</a></li>
+            <li><a href="https://docs.aws.amazon.com/vpc/latest/privatelink/gateway-endpoints.html" target="_blank">Gateway endpoints for Amazon S3 and DynamoDB</a></li>
+            <li><a href="https://docs.aws.amazon.com/vpc/latest/privatelink/privatelink-access-resources.html" target="_blank">Access resources through an endpoint service</a></li>
+            <li><a href="https://docs.aws.amazon.com/vpc/latest/peering/what-is-vpc-peering.html" target="_blank">What is VPC peering?</a></li>
+            <li><a href="https://docs.aws.amazon.com/vpc/latest/tgw/what-is-transit-gateway.html" target="_blank">What is a transit gateway?</a></li>
+            <li><a href="https://docs.aws.amazon.com/whitepapers/latest/building-scalable-secure-multi-vpc-network-infrastructure/aws-privatelink.html" target="_blank">Building a scalable and secure multi-VPC network infrastructure — AWS PrivateLink</a></li>
+          </ul>
+        </div>
       </section>
       <div class="day-nav">
         <a href="day-012.html">&larr; Day 12: AWS Route 53 Resolver (Hybrid DNS)</a>

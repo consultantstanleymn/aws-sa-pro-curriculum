@@ -104,38 +104,365 @@
         <span class="pill pill-green">Phase 2: Compute, Containers &amp; Global Databases</span>
       </div>
       <h1 class="hero-title">Auto Scaling Groups — Lifecycle Hooks &amp; Warm Pools</h1>
-      <div class="reading-meta">&#128337; ~3 min read &middot; 3 services covered</div>
+      <div class="reading-meta">&#128337; ~58 min read &middot; 3 services covered</div>
       <div class="services-grid">
         <span class="service-tag">EC2 Auto Scaling</span>
         <span class="service-tag">Lifecycle Hooks</span>
         <span class="service-tag">Warm Pools</span>
       </div>
       <div id="tracker"></div>
-      <section class="doc-section">
-        <h2 class="section-heading">Today's Concept</h2>
+
+      <section class="doc-section" id="recap">
+        <h2 class="section-heading">Recap: Where We Left Off</h2>
         <div class="card card-accent">
-          <p>Lifecycle hooks pause an instance in Pending:Wait or Terminating:Wait so you can run bootstrap/drain scripts (e.g. deregister from a load balancer, flush logs) before it enters service or terminates. Warm pools keep pre-initialized, stopped instances ready to scale out fast without full boot/bootstrap latency.</p>
-        </div>
-        <h3 class="sub-heading">Hands-on Lab / Practical Action (45 min)</h3>
-        <div class="card">
-          <p>Configure a lifecycle hook on instance termination that drains in-flight connections and uploads final logs to S3 before the instance is terminated.</p>
+          <p>Day 16 established that EKS runs the Kubernetes control plane as a managed service while worker capacity comes from self-managed nodes, managed node groups, or Fargate profiles — and that Fargate loses DaemonSets and costs more per pod. The detail worth carrying forward is that managed node groups are, underneath the Kubernetes abstraction, AWS-managed Auto Scaling Groups. That is not a throwaway implementation note. It means the scaling primitives we are about to examine are the same primitives that govern node-group capacity in an EKS cluster, and the same primitives that govern a plain fleet of EC2 instances behind an ALB. Today extends that thread directly: the control plane abstraction from yesterday sits on top of a capacity engine that has its own lifecycle semantics, and those semantics are where most real-world scaling incidents actually originate.</p>
+          <p>Yesterday's framing was about choosing a compute abstraction. Today's framing is about what happens at the seams of that abstraction — the moments when an instance is neither fully absent nor fully in service. Those seams are where bootstrap latency, connection draining, and pre-warming decisions live, and they are the difference between a fleet that scales smoothly and one that oscillates under load.</p>
         </div>
       </section>
-      <section class="doc-section">
-        <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
-        
-      <div class="scenario-card">
-        <p class="scenario-question"><strong>Q1.</strong> An application takes 4 minutes to bootstrap before it can serve traffic, causing scale-out to lag demand spikes. What reduces this latency?</p>
-        <div class="scenario-options" id="opts-d17q0">
+
+      <section class="doc-section" id="why-on-exam">
+        <h2 class="section-heading">1. Why This Is on the Exam</h2>
+        <p>Auto Scaling Groups are the load-bearing wall of almost every resilient EC2-based architecture on the SAP-C02 exam. The exam does not ask you to recite the ASG API. It asks you to reason about capacity, availability, and cost under constraints — and the ASG is the object that most of those constraints are expressed through. When a scenario says "the application must maintain at least three healthy instances across two Availability Zones," that is an ASG configuration. When it says "scale-out must complete within ninety seconds of a traffic spike," that is a warm pool question. When it says "in-flight requests must not be dropped during scale-in," that is a lifecycle hook question. The service itself is simple; the scenarios built on top of it are not.</p>
+        <p>The exam domain mapping is worth being explicit about. ASG mechanics show up most heavily in Domain 2 (Design Resilient Architectures) because they are the primary mechanism for maintaining availability during instance failure and AZ impairment. They also appear in Domain 4 (Design Cost-Optimized Architectures) because the difference between a well-tuned ASG and a poorly-tuned one is often the difference between paying for idle capacity and paying for exactly what you need. And they appear in Domain 1 (Design Solutions for Organizational Complexity) in the context of multi-account, multi-VPC fleets where scaling policy interacts with shared networking. The recurring exam pattern is a scenario that describes a symptom — slow scale-out, dropped connections, thrashing between min and max — and asks you to identify the specific ASG feature that addresses it.</p>
+        <p>The reason this topic rewards careful study is that the failure modes are non-obvious. A team that has never operated a production ASG will configure min, max, and a target-tracking policy, watch it work in a load test, and ship it. The problems only appear under real conditions: a slow-booting application that cannot keep up with a fast traffic ramp, a scale-in event that terminates instances mid-request, a warm pool that silently drifts out of date. Each of those has a specific, examinable remedy, and each remedy has a cost. The exam is testing whether you know which remedy applies to which symptom.</p>
+      </section>
+
+      <section class="doc-section" id="mechanism">
+        <h2 class="section-heading">2. How an Auto Scaling Group Actually Works</h2>
+        <p>An Auto Scaling Group is a declarative capacity controller. You tell it a desired capacity, a minimum, and a maximum, and it continuously reconciles the actual number of healthy instances against the desired number. The reconciliation loop is not a simple counter. It is a state machine that tracks each instance through a defined lifecycle, and the transitions between states are where the interesting behavior lives. An instance is not simply "launched" or "terminated" — it moves through Pending, InService, Terminating, and Terminated, with optional wait states inserted at the boundaries.</p>
+        <p>The lifecycle states matter because the ASG's health checks and scaling decisions operate on the InService population, not on the total instance count. When you launch a new instance, it enters Pending and the ASG waits for it to pass its health checks before counting it toward desired capacity. If you have configured an ELB health check, the instance must also pass the load balancer's health check before it is considered healthy. This is why a slow-booting application causes scale-out to lag: the ASG has launched the instance, but it is not yet contributing capacity, and the scaling policy may fire again before the first instance is ready. The result is over-provisioning during the ramp and a corresponding over-correction during scale-in.</p>
+        <p>Lifecycle hooks are the mechanism for inserting custom logic into those transitions. A launch hook pauses an instance in Pending:Wait after it has been launched but before it enters InService. A termination hook pauses an instance in Terminating:Wait after it has been removed from service but before it is actually terminated. In both cases, the ASG waits for you to call CompleteLifecycleAction, or for the heartbeat timeout to expire, before proceeding. The hook is not a script runner — it is a pause button. You are responsible for running whatever logic you need, typically via an SNS notification, an EventBridge rule, or a direct call from an instance-side agent, and then signaling completion.</p>
+        <p>Warm pools are a separate mechanism that addresses a different problem. A warm pool is a set of pre-initialized instances that are kept in a stopped or running state, outside the InService population, ready to be promoted into the group when scale-out is needed. When the ASG scales out, it takes an instance from the warm pool, starts it if it was stopped, and brings it into service. Because the instance has already been booted and bootstrapped, the time to serve traffic is dramatically shorter than a cold launch. The warm pool has its own min, max, and initial size, and its own lifecycle hooks, which means you can run bootstrap logic once when the instance enters the pool rather than on every scale-out event.</p>
+        <p>The interaction between these two mechanisms is where most of the operational nuance lives. A warm pool with a launch lifecycle hook lets you do expensive initialization once, keep the result on standby, and pay only the start-up cost at scale-out time. A termination lifecycle hook on the main group lets you drain connections and flush state before an instance disappears. Used together, they give you a fleet that can respond quickly to demand and shut down cleanly when demand recedes — which is the actual goal, and which is why the exam keeps returning to this combination.</p>
+      </section>
+
+      <section class="doc-section" id="decision-boundary">
+        <h2 class="section-heading">3. The Core Decision Boundary: Cold Launch vs. Warm Pool</h2>
+        <p>The single fork that most ASG scenario questions hinge on is whether the application's bootstrap time is compatible with the required scale-out latency. If an instance can boot and be ready to serve traffic in under a minute, a cold launch is usually fine and the warm pool is unnecessary complexity. If bootstrap takes several minutes — installing packages, pulling large container images, warming a JVM, loading a model — then a cold launch cannot keep up with a fast traffic ramp, and the question becomes how to pre-warm. The exam almost always signals this by describing a specific bootstrap duration and a specific scale-out requirement, and the correct answer is the one that closes the gap between them.</p>
+        <p>The second fork, which is subtler, is whether the application can tolerate an instance being removed from service without warning. Stateless web servers behind an ALB generally can, provided the ALB has time to deregister them and drain in-flight requests. Stateful workloads — a node holding a shard of a distributed cache, a worker processing a long-running job — cannot. For those, a termination lifecycle hook is not optional; it is the mechanism that gives the instance time to hand off its state or finish its work. The exam will describe a workload that loses data or drops requests on scale-in, and the answer is almost always a termination hook with an appropriate heartbeat timeout.</p>
+        <p>The table below lays out the decision boundary in the form the exam tends to present it. The left column is the symptom described in the scenario; the right column is the feature that addresses it. This is not a complete taxonomy of ASG features — it is the subset that shows up repeatedly in scenario questions.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Scenario symptom</th><th>Underlying cause</th><th>Feature that addresses it</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Scale-out lags a fast traffic ramp</td><td>Bootstrap time exceeds the time the ASG has to respond</td><td>Warm pool of pre-initialized instances</td></tr>
+              <tr><td>In-flight requests dropped on scale-in</td><td>Instance terminated before the load balancer drains it</td><td>Termination lifecycle hook with connection draining</td></tr>
+              <tr><td>Fleet oscillates between min and max</td><td>Scaling policy reacts to a metric that lags actual demand</td><td>Cooldown period, or a better scaling metric</td></tr>
+              <tr><td>New instances serve traffic before config is applied</td><td>No gate between launch and InService</td><td>Launch lifecycle hook</td></tr>
+              <tr><td>Instances terminate mid-job</td><td>No drain window for long-running work</td><td>Termination hook with heartbeat timeout</td></tr>
+              <tr><td>Warm pool instances are stale</td><td>Pool instances not refreshed after a config change</td><td>Pool instance refresh / recycling policy</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The pattern to internalize is that each symptom maps to a specific lifecycle boundary. Slow scale-out is a launch-boundary problem. Dropped requests are a termination-boundary problem. Oscillation is a policy problem, not a lifecycle problem. Once you can classify the symptom, the feature choice follows almost mechanically — which is exactly the reasoning the exam is trying to elicit.</p>
+      </section>
+
+      <section class="doc-section" id="config-tradeoffs">
+        <h2 class="section-heading">4. Configuration Modes and Their Tradeoffs</h2>
+        <p>Lifecycle hooks come in two flavors, and the difference between them is entirely about which transition they intercept. A launch hook fires when an instance is entering service; a termination hook fires when an instance is leaving. Both support the same set of parameters — a heartbeat timeout, a default result, and a notification target — but the operational implications are different. A launch hook that times out and defaults to ABANDON will terminate the instance and the ASG will try again, which can create a retry loop if the underlying bootstrap is genuinely broken. A termination hook that times out and defaults to CONTINUE will proceed with termination, which is usually the safer default because it prevents a stuck instance from blocking scale-in indefinitely.</p>
+        <p>The heartbeat timeout is the parameter that most teams get wrong. It must be long enough for the hook's logic to complete under normal conditions, but short enough that a genuinely stuck instance does not block the group for an unreasonable period. A common pattern is to set the timeout to roughly twice the expected duration of the hook's work, and to have the hook's logic explicitly call CompleteLifecycleAction on both success and failure paths so the timeout is only a backstop. If your hook logic can fail silently, the timeout is the only thing preventing a permanent stall, and the default result determines whether that stall resolves toward termination or toward continuation.</p>
+        <p>Warm pools have their own configuration surface, and the tradeoffs there are about cost versus readiness. A warm pool can hold instances in a stopped state, which costs only EBS storage, or in a running state, which costs full instance-hour pricing but eliminates the start-up time entirely. The pool has a minimum and maximum size, and an initial size that determines how many instances are pre-warmed at creation. The recycling policy determines when pool instances are refreshed — either on a schedule or when the group's launch template changes. Getting this wrong is a common source of subtle bugs: a pool that is never recycled will happily promote instances running an old AMI long after the group's launch template has been updated.</p>
+        <p>The interaction with scaling policies is the last piece. A warm pool does not change how the scaling policy decides to scale — it only changes how quickly the scale-out action completes. This means a target-tracking policy that was tuned for cold launches may need its cooldown adjusted once a warm pool is in place, because the group can now add capacity faster than the policy expects. Conversely, a group with a warm pool and no cooldown can over-scale during a brief spike, because the fast scale-out removes the natural damping that slow bootstrap provided. The warm pool is a latency optimization, not a capacity-planning substitute, and treating it as the latter is a reliable way to overshoot your budget.</p>
+      </section>
+
+      <section class="doc-section" id="sizing-limits">
+        <h2 class="section-heading">5. Sizing, Limits, and Quotas</h2>
+        <p>The numbers that matter for ASG configuration are mostly about how many of each thing you can have, and how long the system will wait before giving up. These are the figures worth committing to memory because they appear in scenario questions as constraints rather than as trivia. The default limits below are the ones AWS documents for a standard account; many are adjustable via a support request, but the exam generally assumes the default unless the scenario says otherwise.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Parameter</th><th>Default / documented value</th><th>Notes</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Auto Scaling groups per region</td><td>200</td><td>Adjustable via Service Quotas</td></tr>
+              <tr><td>Launch configurations per region</td><td>200</td><td>Legacy; launch templates are preferred</td></tr>
+              <tr><td>Launch templates per region</td><td>10,000</td><td>Versioned; the recommended mechanism</td></tr>
+              <tr><td>Scaling policies per group</td><td>50</td><td>Includes target tracking, step, and simple policies</td></tr>
+              <tr><td>Lifecycle hooks per group</td><td>50</td><td>Combined launch and termination hooks</td></tr>
+              <tr><td>Lifecycle hook heartbeat timeout</td><td>30–7200 seconds</td><td>Default 3600s; must be set explicitly</td></tr>
+              <tr><td>Warm pool size</td><td>Bounded by group max</td><td>Pool max cannot exceed group max</td></tr>
+              <tr><td>Default instance warmup</td><td>Configurable per group</td><td>Replaces the older cooldown semantics for target tracking</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The heartbeat timeout range is the one to internalize most carefully, because it is the parameter that determines whether a stuck hook becomes a transient delay or a production incident. The minimum of 30 seconds is short enough that a hook doing real work — draining connections, uploading logs — will frequently exceed it, which is why the default of 3600 seconds exists. The maximum of 7200 seconds (two hours) is the ceiling on how long an instance can be held in a wait state, and a scenario that describes an instance stuck in Terminating:Wait for hours is describing a hook whose completion signal never arrived.</p>
+        <p>The warm pool sizing constraint is worth noting because it is a common source of configuration errors. The pool's maximum size cannot exceed the group's maximum size, which makes intuitive sense — you cannot have more pre-warmed instances than the group could ever need — but the pool's minimum size is independent of the group's minimum. A group with a minimum of two and a warm pool with a minimum of ten is valid, and means the group will always have ten pre-warmed instances available even though it only needs two in service. That is a legitimate configuration for a workload with a very fast ramp, but it is also a way to pay for ten instances' worth of storage while running two.</p>
+        <p>Finally, the default instance warmup setting deserves attention because it replaced the older cooldown semantics for target-tracking policies. Warmup is the period after an instance enters service during which its metrics are excluded from the scaling policy's calculations. Setting it correctly is what prevents a newly-launched instance from being counted as under-utilized before it has had a chance to receive traffic, which is the mechanism behind the classic "scale out, then immediately scale in" oscillation. If a scenario describes that oscillation, the answer is usually to increase the warmup period rather than to change the scaling metric.</p>
+      </section>
+
+      <section class="doc-section" id="failure-modes">
+        <h2 class="section-heading">6. Failure Modes and What They Look Like in Production</h2>
+        <p>The most common ASG failure mode in production is not a crash — it is a slow drift into a state where the group is technically healthy but operationally useless. The classic example is a group whose instances are passing their EC2 status checks but failing their ELB health checks, so the ASG keeps launching replacements that also fail, burning through the launch template's capacity and never reaching a steady state. The symptom is a group that reports the correct desired capacity but whose load balancer target group shows zero healthy targets. The first diagnostic move is to check the target group's health check configuration against the application's actual health endpoint — a mismatch in path, port, or expected status code is the usual culprit.</p>
+        <p>The second common failure mode is the scale-in that drops requests. This happens when the termination lifecycle hook is either absent or configured with a heartbeat timeout shorter than the load balancer's deregistration delay. The ALB needs time to remove the instance from its target group and drain in-flight connections; if the ASG terminates the instance before that completes, requests in flight are dropped. The symptom is a small but persistent rate of 5xx errors correlated with scale-in events, which is easy to miss in aggregate metrics because the error rate is low relative to total traffic. The diagnostic move is to correlate the error timestamps with the ASG's scaling activity history, which is visible in the console and via the API.</p>
+        <p>The third failure mode is warm pool staleness. A warm pool that is not recycled will promote instances that were initialized against an old launch template version, which means a configuration change rolled out to the group may not actually be running on the instances that scale out. The symptom is intermittent — some instances behave according to the new configuration, others according to the old — and it is maddening to debug because the instances look identical in the console. The diagnostic move is to compare the launch template version of a warm-pool instance against the group's current version, which requires either tagging instances with their template version or inspecting the instance metadata directly.</p>
+        <p>The fourth failure mode is the retry loop caused by a launch hook that defaults to ABANDON. If the hook's logic fails — a bootstrap script that errors, a dependency that is unavailable — the instance is terminated and the ASG launches another, which fails the same way. The group never reaches desired capacity, and the scaling activity history shows a repeating pattern of launch-and-terminate. The symptom is a group stuck below desired capacity with a high rate of launch activity. The diagnostic move is to inspect the hook's notification target for error messages, or to temporarily set the default result to CONTINUE to break the loop and get a running instance to debug against.</p>
+      </section>
+
+      <section class="doc-section" id="sre-angle">
+        <h2 class="section-heading">7. The Operational and SRE Angle</h2>
+        <p>From an SRE perspective, the ASG is a control system, and control systems are judged by their stability as much as their responsiveness. The metrics that matter are not just the obvious ones — CPU utilization, request count — but the derived signals that tell you whether the controller is behaving. The most useful of these is the gap between desired capacity and InService capacity over time. A healthy group has a small, transient gap during scale events and zero gap at steady state. A group with a persistent gap is either failing to launch instances or failing to bring them into service, and the shape of the gap tells you which.</p>
+        <p>The second signal is the rate of scaling activity. A group that scales frequently but by small amounts is usually well-tuned; a group that scales rarely but by large amounts is usually under-provisioned at baseline; a group that scales constantly in both directions is oscillating and needs its warmup or cooldown adjusted. CloudWatch exposes the group's desired capacity, InService capacity, and pending capacity as metrics, and the scaling activity history is available via the API. Building a dashboard that plots these three lines together is the single highest-value observability investment for an ASG-based workload, because it makes the controller's behavior visible at a glance.</p>
+        <p>The SLO implications are worth thinking through explicitly. If your availability SLO is expressed as a percentage of successful requests, then scale-in events are a direct threat to it, because every dropped in-flight request is a failed request. The mitigation is a termination hook with a heartbeat timeout that comfortably exceeds the load balancer's deregistration delay, plus a deregistration delay that is long enough for the application's slowest request. The two settings have to be tuned together; setting one without the other is a common source of subtle SLO erosion. A useful rule of thumb is to set the deregistration delay to the p99 request duration plus a margin, and the hook timeout to the deregistration delay plus the time needed for any post-drain work.</p>
+        <p>The runbook shape for an ASG-based service should cover four scenarios: a group stuck below desired capacity, a group oscillating between min and max, a scale-in event correlated with errors, and a warm pool that is not refreshing. Each of these has a specific first diagnostic move, and the runbook should encode that move rather than a generic "check the logs" instruction. The value of a runbook is that it shortens the time from symptom to diagnosis under pressure, and for ASG issues the diagnosis is almost always a matter of comparing the group's configuration against the observed behavior — which is exactly the kind of comparison a well-written runbook makes mechanical.</p>
+      </section>
+
+      <section class="doc-section" id="gotchas">
+        <h2 class="section-heading">8. Edge Cases and Exam Gotchas</h2>
+        <p>The first gotcha is that lifecycle hooks do not run scripts. This trips up candidates who have used other orchestration systems where a hook is a command to execute. In AWS, a lifecycle hook is a pause plus a notification; the actual work is done by whatever consumes the notification. If a scenario describes a hook that "runs a script," the correct interpretation is that the hook notifies a target which runs the script, and the exam is testing whether you know the difference. The practical implication is that the hook's reliability depends on the reliability of the notification path, which is why SNS and EventBridge are the usual targets.</p>
+        <p>The second gotcha is the default result of a lifecycle hook. If you do not specify one, the default is ABANDON for launch hooks and CONTINUE for termination hooks. This asymmetry is deliberate — abandoning a launch that failed is safer than bringing a broken instance into service, and continuing a termination that stalled is safer than leaving an instance in limbo — but it is easy to forget, and a scenario that describes a group stuck below capacity is often testing whether you know that a launch hook's default is ABANDON. The fix in that scenario is usually to set the default to CONTINUE temporarily, or to fix the underlying bootstrap failure.</p>
+        <p>The third gotcha is that warm pool instances are not free. A stopped instance still incurs EBS storage charges, and a running pool instance incurs full instance-hour charges. A scenario that asks you to optimize cost for a workload with a warm pool should prompt you to consider whether the pool's minimum size is justified by the actual ramp characteristics, or whether a smaller pool with a longer warmup would be cheaper. The exam does not usually ask you to compute the exact cost, but it does ask you to recognize that a warm pool is a cost-for-latency trade, not a free optimization.</p>
+        <p>The fourth gotcha is the interaction between warm pools and instance refresh. When you update a group's launch template and trigger an instance refresh, the refresh replaces InService instances but does not automatically replace warm-pool instances unless the pool's recycling policy is configured to do so. A scenario that describes a configuration change that "did not take effect on all instances" is often testing this. The fix is to configure the warm pool's recycling policy to refresh on launch template changes, or to manually recycle the pool after a template update.</p>
+        <p>The fifth gotcha is that the ASG's health check type determines what "healthy" means. The default is EC2, which only checks the instance's status checks. If you want the ASG to replace instances that are running but not serving traffic, you must set the health check type to ELB and ensure the instance is registered with a target group. A scenario that describes instances that are "running but not serving traffic" and asks why the ASG is not replacing them is testing exactly this distinction.</p>
+      </section>
+
+      <section class="doc-section" id="vs-comparison">
+        <h2 class="section-heading">9. This vs. the Services It Gets Confused With</h2>
+        <p>Auto Scaling Groups are frequently confused with three other AWS scaling mechanisms, and the exam exploits that confusion. The first is the Application Auto Scaling service, which scales resources that are not EC2 instances — DynamoDB tables, ECS services, Aurora replicas, Lambda provisioned concurrency. The distinction is that an ASG scales a fleet of instances, while Application Auto Scaling scales a target that has its own capacity model. A scenario that asks you to scale an ECS service's task count is an Application Auto Scaling question, not an ASG question, even though the underlying concept is similar.</p>
+        <p>The second confusion is with the load balancer's own health checking and connection draining. The ALB has a deregistration delay that controls how long it waits before removing a target from service, and this is separate from the ASG's termination lifecycle hook. Both are needed for a clean scale-in: the hook gives the ASG a reason to wait, and the deregistration delay gives the ALB time to drain. A scenario that describes dropped connections on scale-in may be testing either one, and the correct answer depends on which is missing. If the hook is absent, the ASG terminates immediately. If the hook is present but the deregistration delay is too short, the ALB removes the target before in-flight requests complete.</p>
+        <p>The third confusion is with ECS and EKS service scaling, which have their own lifecycle semantics. An ECS service has a deployment configuration with its own minimum and maximum healthy percent, and an EKS deployment has a rolling update strategy with maxSurge and maxUnavailable. These are conceptually similar to ASG lifecycle management but operate at the task or pod level rather than the instance level. A scenario that describes a containerized workload with a slow-starting task is more likely testing ECS deployment configuration than ASG warm pools, even though the underlying problem — pre-warming to reduce scale-out latency — is the same.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Mechanism</th><th>What it scales</th><th>Pick it when…</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>EC2 Auto Scaling Group</td><td>A fleet of EC2 instances</td><td>The unit of capacity is an instance and you control the AMI</td></tr>
+              <tr><td>Application Auto Scaling</td><td>DynamoDB, ECS, Aurora, Lambda concurrency</td><td>The target has its own capacity model and is not an EC2 fleet</td></tr>
+              <tr><td>ECS Service Auto Scaling</td><td>Task count within a service</td><td>The workload is containerized and runs on ECS</td></tr>
+              <tr><td>EKS Cluster Autoscaler / Karpenter</td><td>Node count in a Kubernetes cluster</td><td>The workload is Kubernetes-native and nodes are an implementation detail</td></tr>
+              <tr><td>ALB deregistration delay</td><td>Not a scaler — a drain timer</td><td>You need in-flight requests to complete before a target is removed</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The rule of thumb is to identify the unit of capacity first. If the unit is an EC2 instance, you are in ASG territory. If the unit is a task, a pod, a table's read/write capacity, or a function's concurrency, you are in Application Auto Scaling territory. The lifecycle concepts — warm-up, drain, health gating — recur across all of them, but the specific features and their names differ, and the exam is precise about which name belongs to which service.</p>
+      </section>
+
+      <section class="doc-section" id="lab">
+        <h2 class="section-heading">Hands-On Lab: Termination Lifecycle Hook with Log Flush</h2>
+        <div class="card card-green">
+          <p>The goal of this lab is to build a group whose instances drain in-flight connections and upload their final logs to S3 before they are terminated. This is the canonical termination-hook pattern, and it exercises the interaction between the ASG, the load balancer, and an instance-side agent. Budget roughly 45 minutes. You will need an AWS account with permissions to create ASGs, launch templates, SNS topics, IAM roles, and S3 buckets.</p>
+          <p><strong>Step 1 — Create the log bucket and IAM role.</strong> Create an S3 bucket for the final logs, with a lifecycle policy that expires objects after 30 days. Create an IAM role that the instances will assume, granting <code>s3:PutObject</code> on the bucket and <code>autoscaling:CompleteLifecycleAction</code> on the ASG. Attach this role to the launch template via an instance profile. The <code>CompleteLifecycleAction</code> permission is the one that lets the instance signal that it has finished draining, and forgetting it is the most common reason a hook times out.</p>
+          <p><strong>Step 2 — Build the launch template.</strong> Create a launch template with a user-data script that installs a small HTTP server and a shutdown handler. The shutdown handler should be registered to run on SIGTERM, and it should do three things in order: stop accepting new connections, wait for in-flight requests to complete (a simple sleep proportional to the expected request duration is sufficient for the lab), and upload the application log to S3. After the upload completes, the handler calls <code>CompleteLifecycleAction</code> with the token it received from the hook notification. The token is delivered via the instance metadata service or via an SNS notification, depending on how you wire the hook.</p>
+          <p><strong>Step 3 — Create the ASG with a termination hook.</strong> Create an ASG with a minimum of two and a maximum of four instances, spread across two Availability Zones, attached to a target group. Add a termination lifecycle hook with a heartbeat timeout of 300 seconds and a default result of CONTINUE. The default result matters: if the instance-side handler fails for any reason, you want the termination to proceed rather than leaving the instance stuck in Terminating:Wait. Wire the hook's notification target to an SNS topic that the instance subscribes to, or use the instance metadata service to retrieve the token directly.</p>
+          <p><strong>Step 4 — Configure the load balancer drain.</strong> Set the target group's deregistration delay to 60 seconds. This is the window the ALB gives an instance to finish in-flight requests after it is removed from the target group. The ASG's termination hook and the ALB's deregistration delay work together: the hook keeps the instance alive, and the deregistration delay keeps the ALB from sending it new traffic. If the deregistration delay is shorter than the application's slowest request, requests will be dropped even with the hook in place.</p>
+          <p><strong>Step 5 — Test the scale-in path.</strong> Generate a steady stream of requests against the load balancer, then reduce the ASG's desired capacity by one. Watch the instance transition to Terminating:Wait in the ASG's activity history, and confirm that the log file appears in S3 before the instance reaches Terminated. Check the load balancer's access logs for any 5xx responses during the transition; there should be none if the drain is configured correctly. If you see 5xx responses, the most likely cause is a deregistration delay that is too short relative to the request duration.</p>
+          <p><strong>Step 6 — Break it deliberately.</strong> Remove the <code>CompleteLifecycleAction</code> permission from the instance role and repeat the scale-in. The instance should now sit in Terminating:Wait until the 300-second heartbeat timeout expires, at which point the default result of CONTINUE allows the termination to proceed. This is the behavior you want to understand viscerally, because it is the difference between a hook that is a safety net and a hook that is a liability. Restore the permission when you are done.</p>
+          <p><strong>Step 7 — Add a warm pool and compare.</strong> Add a warm pool with a minimum size of one and a maximum size of two, holding instances in a stopped state. Modify the launch template's user-data to include a deliberate 90-second bootstrap delay, then trigger a scale-out and measure the time from the scaling action to the instance entering InService. Repeat with the warm pool disabled. The difference is the value of the warm pool, and it is usually larger than people expect.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="quiz">
+        <h2 class="section-heading">Scenario Question Drills</h2>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q1.</strong> An application takes four minutes to bootstrap before it can serve traffic, causing scale-out to lag demand spikes. What reduces this latency?</p>
+          <div class="scenario-options" id="opts-d17q1">
             <div class="scenario-option">A. Increase the ASG cooldown period</div>
-            <div class="scenario-option">B. Use a Warm Pool of pre-initialized stopped instances so scale-out promotes them instead of booting from cold</div>
+            <div class="scenario-option">B. Use a warm pool of pre-initialized stopped instances so scale-out promotes them instead of booting from cold</div>
             <div class="scenario-option">C. Switch to Spot Instances</div>
             <div class="scenario-option">D. Add a lifecycle hook on launch</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d17q1', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d17q1"><strong>Correct answer: B.</strong> Warm pools keep instances pre-initialized (stopped or running) so the ASG can bring them into service in seconds instead of re-running the full bootstrap sequence. A launch hook would make the problem worse by adding another wait state.</div>
         </div>
-        <button class="scenario-reveal-btn" onclick="revealAnswer('d17q0', 1)">Reveal Answer</button>
-        <div class="scenario-explanation" id="exp-d17q0"><strong>Correct answer: B.</strong> Warm pools keep instances pre-initialized (stopped or running) so the ASG can bring them into service in seconds instead of re-running the full bootstrap sequence.</div>
-      </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q2.</strong> A stateless web tier behind an ALB shows a small but persistent rate of 5xx errors that correlate with scale-in events. The ASG has no termination lifecycle hook. What is the most likely fix?</p>
+          <div class="scenario-options" id="opts-d17q2">
+            <div class="scenario-option">A. Increase the ASG's maximum capacity</div>
+            <div class="scenario-option">B. Add a termination lifecycle hook with a heartbeat timeout longer than the ALB deregistration delay</div>
+            <div class="scenario-option">C. Switch the health check type from ELB to EC2</div>
+            <div class="scenario-option">D. Enable cross-zone load balancing</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d17q2', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d17q2"><strong>Correct answer: B.</strong> Without a termination hook, the ASG terminates instances immediately on scale-in, before the ALB has drained in-flight requests. The hook gives the drain time to complete.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q3.</strong> A launch lifecycle hook is configured with a default result of ABANDON. A bootstrap script has a bug that causes it to fail intermittently. What will the ASG do?</p>
+          <div class="scenario-options" id="opts-d17q3">
+            <div class="scenario-option">A. Bring the instance into service anyway and log a warning</div>
+            <div class="scenario-option">B. Terminate the instance and launch a replacement, potentially creating a retry loop</div>
+            <div class="scenario-option">C. Pause the group until an operator intervenes</div>
+            <div class="scenario-option">D. Fall back to the previous launch template version</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d17q3', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d17q3"><strong>Correct answer: B.</strong> ABANDON terminates the instance when the hook times out or fails, and the ASG launches a replacement. If the underlying failure is deterministic, this becomes a repeating launch-and-terminate loop.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q4.</strong> An ASG's instances are passing EC2 status checks but the target group shows zero healthy targets. The ASG keeps launching replacements that also fail. What is the first diagnostic move?</p>
+          <div class="scenario-options" id="opts-d17q4">
+            <div class="scenario-option">A. Increase the ASG's desired capacity</div>
+            <div class="scenario-option">B. Compare the target group's health check path, port, and expected status code against the application's actual health endpoint</div>
+            <div class="scenario-option">C. Reboot the instances</div>
+            <div class="scenario-option">D. Change the ASG's health check type to EC2</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d17q4', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d17q4"><strong>Correct answer: B.</strong> A mismatch between the target group's health check configuration and the application's actual health endpoint is the most common cause of instances that run but never register as healthy.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q5.</strong> A group oscillates between its minimum and maximum capacity, scaling out and then immediately scaling in. The scaling policy is target tracking on CPU utilization. What is the most likely cause?</p>
+          <div class="scenario-options" id="opts-d17q5">
+            <div class="scenario-option">A. The maximum capacity is too low</div>
+            <div class="scenario-option">B. The instance warmup period is too short, so newly-launched instances are counted as under-utilized before they receive traffic</div>
+            <div class="scenario-option">C. The health check type is set to ELB</div>
+            <div class="scenario-option">D. The group is spread across too many Availability Zones</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d17q5', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d17q5"><strong>Correct answer: B.</strong> A short warmup period causes the scaling policy to see new instances as idle before they have had a chance to take traffic, triggering an immediate scale-in that then triggers another scale-out.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q6.</strong> A warm pool is configured with a minimum of ten instances and the group's minimum is two. What is the cost implication?</p>
+          <div class="scenario-options" id="opts-d17q6">
+            <div class="scenario-option">A. No additional cost, since warm pool instances are not billed</div>
+            <div class="scenario-option">B. The pool instances incur at least EBS storage charges even when stopped, and full instance-hour charges if held in a running state</div>
+            <div class="scenario-option">C. The pool instances are billed only when promoted into the group</div>
+            <div class="scenario-option">D. The pool instances are billed at a discounted rate</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d17q6', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d17q6"><strong>Correct answer: B.</strong> Stopped instances still incur EBS storage charges, and running pool instances incur full instance-hour charges. A warm pool is a cost-for-latency trade, not a free optimization.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q7.</strong> After updating an ASG's launch template and triggering an instance refresh, some newly-scaled-out instances are still running the old configuration. What is the most likely cause?</p>
+          <div class="scenario-options" id="opts-d17q7">
+            <div class="scenario-option">A. The instance refresh failed silently</div>
+            <div class="scenario-option">B. The warm pool's recycling policy is not configured to refresh on launch template changes</div>
+            <div class="scenario-option">C. The launch template version was not set as the default</div>
+            <div class="scenario-option">D. The ASG's health check type is set to EC2</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d17q7', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d17q7"><strong>Correct answer: B.</strong> Instance refresh replaces InService instances but does not automatically replace warm-pool instances unless the pool's recycling policy is configured to do so.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q8.</strong> A termination lifecycle hook has a heartbeat timeout of 60 seconds. The ALB's deregistration delay is 300 seconds. What will happen on scale-in?</p>
+          <div class="scenario-options" id="opts-d17q8">
+            <div class="scenario-option">A. The instance will wait the full 300 seconds before terminating</div>
+            <div class="scenario-option">B. The hook will time out after 60 seconds and the instance will terminate before the ALB has finished draining, dropping in-flight requests</div>
+            <div class="scenario-option">C. The ALB will extend the hook's timeout automatically</div>
+            <div class="scenario-option">D. The instance will be removed from the target group immediately</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d17q8', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d17q8"><strong>Correct answer: B.</strong> The hook timeout must exceed the deregistration delay for a clean drain. A 60-second hook with a 300-second drain means the instance is terminated while requests are still in flight.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q9.</strong> A workload runs long-running batch jobs on instances in an ASG. Jobs are being killed mid-execution during scale-in. What is the correct remedy?</p>
+          <div class="scenario-options" id="opts-d17q9">
+            <div class="scenario-option">A. Disable scale-in entirely by setting min equal to max</div>
+            <div class="scenario-option">B. Add a termination lifecycle hook that gives the instance time to finish its current job or hand off its state</div>
+            <div class="scenario-option">C. Switch the health check type to ELB</div>
+            <div class="scenario-option">D. Increase the instance size</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d17q9', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d17q9"><strong>Correct answer: B.</strong> A termination hook is the mechanism that gives a stateful or long-running workload time to complete its work before the instance is terminated.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q10.</strong> Which AWS service should be used to scale an ECS service's task count based on CPU utilization?</p>
+          <div class="scenario-options" id="opts-d17q10">
+            <div class="scenario-option">A. EC2 Auto Scaling Group</div>
+            <div class="scenario-option">B. Application Auto Scaling</div>
+            <div class="scenario-option">C. AWS Lambda</div>
+            <div class="scenario-option">D. AWS Batch</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d17q10', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d17q10"><strong>Correct answer: B.</strong> Application Auto Scaling scales targets that are not EC2 instances, including ECS services, DynamoDB tables, Aurora replicas, and Lambda provisioned concurrency.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q11.</strong> An ASG's instances are running but not serving traffic, and the ASG is not replacing them. The health check type is set to EC2. What is the fix?</p>
+          <div class="scenario-options" id="opts-d17q11">
+            <div class="scenario-option">A. Increase the ASG's desired capacity</div>
+            <div class="scenario-option">B. Change the health check type to ELB and ensure the instances are registered with a target group</div>
+            <div class="scenario-option">C. Add a launch lifecycle hook</div>
+            <div class="scenario-option">D. Enable detailed monitoring</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d17q11', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d17q11"><strong>Correct answer: B.</strong> The EC2 health check type only checks instance status checks. To have the ASG replace instances that are running but not serving traffic, the health check type must be ELB.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q12.</strong> What is the maximum heartbeat timeout for an Auto Scaling lifecycle hook?</p>
+          <div class="scenario-options" id="opts-d17q12">
+            <div class="scenario-option">A. 300 seconds</div>
+            <div class="scenario-option">B. 3600 seconds</div>
+            <div class="scenario-option">C. 7200 seconds</div>
+            <div class="scenario-option">D. There is no maximum</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d17q12', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d17q12"><strong>Correct answer: C.</strong> The heartbeat timeout range is 30 to 7200 seconds, with a default of 3600 seconds. The maximum of 7200 seconds is the ceiling on how long an instance can be held in a wait state.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q13.</strong> A team wants to run expensive initialization once and keep the result on standby for fast scale-out. Which combination achieves this?</p>
+          <div class="scenario-options" id="opts-d17q13">
+            <div class="scenario-option">A. A launch lifecycle hook with a long heartbeat timeout</div>
+            <div class="scenario-option">B. A warm pool with a launch lifecycle hook that runs the initialization when the instance enters the pool</div>
+            <div class="scenario-option">C. A termination lifecycle hook with a default result of CONTINUE</div>
+            <div class="scenario-option">D. An instance refresh triggered on a schedule</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d17q13', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d17q13"><strong>Correct answer: B.</strong> A warm pool with its own launch hook lets you run expensive initialization once when the instance enters the pool, then pay only the start-up cost at scale-out time.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q14.</strong> A scenario describes a group stuck below desired capacity with a high rate of launch-and-terminate activity in its scaling history. What is the most likely cause?</p>
+          <div class="scenario-options" id="opts-d17q14">
+            <div class="scenario-option">A. The group's maximum capacity is too low</div>
+            <div class="scenario-option">B. A launch lifecycle hook is failing and defaulting to ABANDON, causing a retry loop</div>
+            <div class="scenario-option">C. The load balancer's deregistration delay is too long</div>
+            <div class="scenario-option">D. The warm pool is too small</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d17q14', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d17q14"><strong>Correct answer: B.</strong> A launch hook that fails and defaults to ABANDON terminates the instance, and the ASG launches a replacement that fails the same way, producing a repeating launch-and-terminate pattern.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q15.</strong> Which statement about lifecycle hooks is correct?</p>
+          <div class="scenario-options" id="opts-d17q15">
+            <div class="scenario-option">A. A lifecycle hook runs a script on the instance</div>
+            <div class="scenario-option">B. A lifecycle hook pauses an instance in a wait state and notifies a target, which is responsible for running any logic and signaling completion</div>
+            <div class="scenario-option">C. A lifecycle hook can only be attached to a warm pool</div>
+            <div class="scenario-option">D. A lifecycle hook replaces the need for load balancer health checks</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d17q15', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d17q15"><strong>Correct answer: B.</strong> A lifecycle hook is a pause plus a notification. The actual work is done by whatever consumes the notification, typically via SNS, EventBridge, or an instance-side agent.</div>
+        </div>
       </section>
+
+      <section class="doc-section" id="preview">
+        <h2 class="section-heading">Peek into Tomorrow</h2>
+        <div class="card card-purple">
+          <p>Today's discussion of scale-in and scale-out assumed that the load balancer in front of the group is a passive participant — it drains connections when told to, and otherwise stays out of the way. That assumption is fine for a single-version fleet, but it breaks down the moment you want to run two versions of the application at once. The question today leaves open is how traffic is actually divided between target groups, and what happens when the division is not a clean cutover but a gradual shift. A canary release, for example, needs to send a small percentage of production traffic to a new version while the old version continues to serve the rest, and it needs to do so without a second load balancer or a DNS change.</p>
+          <p>Tomorrow's material on Application Load Balancer routing answers this directly. The ALB supports path-based and host-based routing rules that dispatch to different target groups, and — more relevant to the canary problem — weighted target groups that split traffic by percentage within a single rule. That is the mechanism that makes blue/green and canary deployments possible without duplicating infrastructure. The open question is how the weighting interacts with the health checks and lifecycle semantics we covered today: if the new version's target group fails its health check, does the ALB shift all traffic back to the old version automatically, or does it fail closed? The answer shapes how you design the rollout, and it is the natural next step from the drain-and-replace mechanics we have just worked through.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="sources">
+        <h2 class="section-heading">Sources</h2>
+        <div class="card">
+          <ul class="source-list">
+            <li><a href="https://docs.aws.amazon.com/autoscaling/ec2/userguide/lifecycle-hooks.html" target="_blank">Amazon EC2 Auto Scaling User Guide — Lifecycle hooks</a></li>
+            <li><a href="https://docs.aws.amazon.com/autoscaling/ec2/userguide/ec2-auto-scaling-warm-pools.html" target="_blank">Amazon EC2 Auto Scaling User Guide — Warm pools for Amazon EC2 Auto Scaling</a></li>
+            <li><a href="https://docs.aws.amazon.com/autoscaling/ec2/userguide/ec2-auto-scaling-health-checks.html" target="_blank">Amazon EC2 Auto Scaling User Guide — Health checks for Auto Scaling instances</a></li>
+            <li><a href="https://docs.aws.amazon.com/autoscaling/ec2/userguide/as-scaling-target-tracking.html" target="_blank">Amazon EC2 Auto Scaling User Guide — Target tracking scaling policies</a></li>
+            <li><a href="https://docs.aws.amazon.com/autoscaling/ec2/userguide/ec2-auto-scaling-instance-refresh.html" target="_blank">Amazon EC2 Auto Scaling User Guide — Instance refresh</a></li>
+            <li><a href="https://docs.aws.amazon.com/autoscaling/ec2/userguide/as-using-launch-templates.html" target="_blank">Amazon EC2 Auto Scaling User Guide — Launch templates</a></li>
+            <li><a href="https://docs.aws.amazon.com/elasticloadbalancing/latest/application/target-group-health-checks.html" target="_blank">Elastic Load Balancing User Guide — Target group health checks</a></li>
+            <li><a href="https://docs.aws.amazon.com/elasticloadbalancing/latest/application/target-group-deregistration-delay.html" target="_blank">Elastic Load Balancing User Guide — Deregistration delay</a></li>
+            <li><a href="https://docs.aws.amazon.com/autoscaling/application/userguide/what-is-application-auto-scaling.html" target="_blank">Application Auto Scaling User Guide — What is Application Auto Scaling?</a></li>
+            <li><a href="https://docs.aws.amazon.com/general/latest/gr/aws_service_limits.html" target="_blank">AWS General Reference — Service quotas</a></li>
+          </ul>
+        </div>
+      </section>
+
       <div class="day-nav">
         <a href="day-016.html">&larr; Day 16: Amazon EKS Architecture &amp; Managed Node Groups vs Fargate</a>
         <button class="btn btn-green" onclick="markComplete(17, 'day-018.html')">Mark Day 17 Complete &rarr;</button>

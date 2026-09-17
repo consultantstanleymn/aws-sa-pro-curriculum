@@ -104,38 +104,363 @@
         <span class="pill pill-green">Phase 4: Migration, Hybrid &amp; Cost Optimization</span>
       </div>
       <h1 class="hero-title">FinOps on AWS — Tagging, Budgets &amp; Cost Allocation Reports</h1>
-      <div class="reading-meta">&#128337; ~3 min read &middot; 3 services covered</div>
+      <div class="reading-meta">&#128337; ~58 min read &middot; 3 services covered</div>
       <div class="services-grid">
         <span class="service-tag">Cost Allocation Tags</span>
         <span class="service-tag">AWS Budgets</span>
         <span class="service-tag">Cost and Usage Report (CUR)</span>
       </div>
       <div id="tracker"></div>
-      <section class="doc-section">
-        <h2 class="section-heading">Today's Concept</h2>
+
+      <section class="doc-section" id="recap">
+        <h2 class="section-heading">Recap: From Right-Sizing to Chargeback</h2>
         <div class="card card-accent">
-          <p>Consistent resource tagging (enforced via SCPs/Config rules) enables cost allocation reports that attribute spend by team/project/environment. AWS Budgets alerts on forecasted or actual overspend; the Cost and Usage Report (CUR) provides the most granular billing data for custom BI/FinOps tooling.</p>
-        </div>
-        <h3 class="sub-heading">Hands-on Lab / Practical Action (45 min)</h3>
-        <div class="card">
-          <p>Design a mandatory tagging policy (enforced via SCP) requiring CostCenter and Environment tags on all resource creation, then build a Budget alert per cost center.</p>
+          <p>Day 54 gave us three instruments for looking at spend: Compute Optimizer right-sizing recommendations, Cost Explorer forecasts and RI purchase recommendations, and Trusted Advisor cost/security/performance/fault-tolerance checks. All three answer the question "are we spending the right amount on the right shapes of infrastructure?" — and all three answer it at the level of the whole account, or at best a service and a region. None of them can tell you which team owns the bill.</p>
+          <p>That is the same lifecycle stage with a different concern. Right-sizing is a technical optimization: you look at utilization, you change an instance family, you save money. Chargeback is an organizational one: you look at a bill, you attribute it to a cost center, and someone outside engineering has to trust the number. The tooling overlaps — Cost Explorer is the front end for both — but the prerequisite is entirely different. Right-sizing needs metrics. Chargeback needs tags, and tags are a governance problem long before they are a reporting problem. Today is about building the attribution layer that makes yesterday's recommendations defensible to Finance.</p>
         </div>
       </section>
-      <section class="doc-section">
+
+      <section class="doc-section" id="why-on-exam">
+        <h2 class="section-heading">1. Why FinOps Is on the Exam</h2>
+        <p>SAP-C02 has a dedicated cost-optimization domain, and within it the questions split cleanly into two families. The first family is about choosing cheaper infrastructure: Savings Plans versus Reserved Instances versus Spot, Graviton versus x86, S3 storage class selection, right-sizing. Day 53 and Day 54 covered that family. The second family is about knowing where the money went and being able to prove it — and that family is where tagging, budgets, and the Cost and Usage Report live. The exam tests the second family less often but more sharply, because the answers are less about product knowledge and more about sequencing. A question that asks "what should be done first" has exactly one defensible answer, and it is almost never the reporting tool.</p>
+        <p>The architectural problem underneath is that AWS billing is account-scoped by default. Every line item in your bill is attached to an account, a service, a region, and a usage type. That is enough to answer "how much did we spend on EC2 in us-east-1" and nothing else. It cannot answer "how much did the payments team spend," because the payments team is not an account — it is a set of resources spread across accounts, and the only thing tying those resources together is metadata that someone had to apply deliberately. Cost allocation is therefore not a reporting feature you turn on; it is a data-quality program that produces a report as a side effect. The exam rewards candidates who understand that ordering.</p>
+        <p>There is a second reason this shows up: the multi-account governance material from Week 1 is the enforcement mechanism. SCPs, AWS Config rules, and Control Tower guardrails are the tools that make tagging mandatory rather than aspirational, and the exam likes questions that connect a governance control to a downstream business outcome. When a scenario describes an organization that "cannot produce per-team cost reports," the correct answer is usually to fix the tag enforcement at the Organizations layer, not to buy a third-party FinOps platform. The platform can only report on the tags that exist.</p>
+        <p>Finally, cost questions on SAP-C02 are frequently disguised as architecture questions. A scenario about consolidating accounts, choosing between a shared VPC and per-team VPCs, or deciding whether to run a workload in one region or three all have cost-attribution consequences. Being able to say "this design makes chargeback harder because the resources cannot be tagged independently" is a senior-architect move, and it is the kind of reasoning the exam is trying to surface.</p>
+      </section>
+
+      <section class="doc-section" id="mechanism">
+        <h2 class="section-heading">2. How Cost Attribution Actually Works</h2>
+        <p>The mechanism has four moving parts, and understanding the order they fire in explains most of the confusing behavior people hit in practice. The first part is the tag itself: a key-value pair attached to a resource, stored by the service that owns the resource. Tags are not global. An EC2 instance's tags live in EC2, an S3 bucket's tags live in S3, and a resource that does not support tagging simply cannot participate in cost allocation no matter how much you want it to. The second part is the billing pipeline, which records usage against resources and, at the end of each billing period, emits line items. The third part is the cost allocation tag activation step, which is a deliberate, per-key opt-in in the Billing console. The fourth part is the report — Cost Explorer, a budget, or the CUR — which reads the activated tags and groups by them.</p>
+        <p>The activation step is where most people lose an afternoon. Attaching a tag to a resource does nothing for cost reporting until you go into the Billing console and activate that tag key for cost allocation. Activation is per key, not per value, and it is not retroactive in the way people expect: once a key is activated, AWS begins including it in your cost allocation data going forward, and historical data for that key is generally not backfilled. This means the sequence matters enormously. If you tag resources in January and activate the key in March, your January and February costs will show up as untagged. The practical implication is that tag activation should happen before or alongside the tagging rollout, not after it.</p>
+        <p>There is also a distinction between AWS-generated tags and user-defined tags that the exam likes to probe. AWS-generated tags are applied by AWS itself — things like <code>aws:createdBy</code> — and they are available for cost allocation without you doing anything. User-defined tags are the ones you apply, and they are the ones that require activation. Both appear in the CUR, but only user-defined tags are under your control, which is why the enforcement conversation is always about user-defined tags.</p>
+        <p>Once tags are activated, the three reporting surfaces diverge in granularity and latency. Cost Explorer is the interactive front end: it aggregates, filters, and groups by activated tags, and it is where most day-to-day analysis happens. AWS Budgets is a threshold engine that watches a filtered slice of that same data and fires when actual or forecasted spend crosses a line. The Cost and Usage Report is the raw feed: the most granular billing data AWS publishes, delivered to S3 as files, with line items at the resource and usage-type level. The relationship is a funnel — CUR is the source of truth, Cost Explorer is a query layer over it, and Budgets is an alerting layer over a filtered view of it. When a scenario asks for "the most granular billing data for custom tooling," it is asking for CUR, and the word "custom" is the tell.</p>
+      </section>
+
+      <section class="doc-section" id="decision-boundary">
+        <h2 class="section-heading">3. The Core Decision Boundary: Which Reporting Surface</h2>
+        <p>Almost every cost-visibility scenario reduces to one fork: does the requirement describe a human looking at a chart, a machine firing an alert, or a system consuming raw data? Those three map to Cost Explorer, AWS Budgets, and the Cost and Usage Report respectively, and the exam is usually testing whether you can hear which one the scenario is describing. The trap is that all three can technically answer a lot of the same questions — you can build a budget on almost anything Cost Explorer can show — so the differentiator is not capability but fitness for the stated consumer.</p>
+        <p>The second-order fork, which appears in harder questions, is whether the requirement is about attribution or about control. Attribution is "tell me how much each team spent." Control is "stop the payments team from spending more than $40,000 this month." Attribution is a reporting problem solved with tags and CUR. Control is a governance problem solved with Budgets actions, which can apply an IAM policy or stop instances when a threshold is breached. Candidates who conflate the two tend to pick Budgets for pure reporting questions, which is defensible but not the best answer when the scenario explicitly asks for granular data export.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Requirement</th><th>Best fit</th><th>Why</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Interactive exploration of spend by team</td><td>Cost Explorer</td><td>Aggregates and groups by activated tags with no pipeline to build</td></tr>
+              <tr><td>Alert when forecasted spend exceeds a threshold</td><td>AWS Budgets</td><td>Purpose-built threshold engine with forecasted and actual comparisons</td></tr>
+              <tr><td>Automated action when a threshold is breached</td><td>AWS Budgets actions</td><td>Can apply IAM policies or stop instances on breach</td></tr>
+              <tr><td>Raw line-item data for a BI tool or data lake</td><td>Cost and Usage Report</td><td>Most granular billing data, delivered to S3 on a schedule</td></tr>
+              <tr><td>Per-resource cost attribution</td><td>CUR with resource IDs enabled</td><td>Resource-level line items are a CUR option, not a Cost Explorer one</td></tr>
+              <tr><td>Showback to a team that has no AWS access</td><td>Cost Explorer saved reports or CUR-fed dashboard</td><td>Depends on whether the consumer needs live data or a scheduled extract</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The resource-level detail row is worth internalizing. Cost Explorer groups by service, account, region, and tag, but it does not give you a line item per EC2 instance. If a scenario needs to know that a specific instance cost $412 last month, that is a CUR question, and you have to have enabled resource IDs when you configured the report. This is a common exam gotcha because the requirement sounds like something Cost Explorer should handle.</p>
+      </section>
+
+      <section class="doc-section" id="config-tradeoffs">
+        <h2 class="section-heading">4. Configuration Modes and Their Tradeoffs</h2>
+        <p>Each of the three surfaces has configuration choices that trade effort against capability, and the exam tends to test the ones where the default is wrong for the stated requirement. For Cost Explorer the main choice is granularity and lookback: the console defaults to monthly granularity, and daily or hourly granularity is available but changes how much history you can see and how the data is aggregated. There is also a per-account enablement step — Cost Explorer has to be turned on before it will show anything, and it takes roughly a day before data appears. A scenario that says "we enabled Cost Explorer this morning and see nothing" is describing expected behavior, not a bug.</p>
+        <p>For AWS Budgets the meaningful choices are the budget type, the period, and whether the threshold is measured against actual or forecasted spend. Actual-spend budgets fire after the money is gone, which is fine for accounting but useless for prevention. Forecasted-spend budgets fire when AWS projects you will exceed the threshold within the period, which is what you want for a control. The period choice matters too: a monthly budget with a 100% threshold behaves very differently from a daily budget with the same threshold, because the daily one catches a runaway job on day two instead of day twenty-eight. Budgets also support a fixed target versus a planned-usage model, where you specify expected usage and let the budget alert on the delta.</p>
+        <p>The Cost and Usage Report has the richest set of knobs and the most consequences for getting them wrong. You choose the time granularity (hourly, daily, or monthly), whether to include resource IDs, whether to integrate with Athena, and which S3 bucket receives the files. Hourly granularity with resource IDs produces a very large dataset — this is the configuration that makes CUR useful for chargeback and also the one that makes people underestimate their S3 storage bill. The report is delivered as CSV or Parquet; Parquet with Athena integration is the standard pattern for anything beyond a one-off analysis, because it is columnar and dramatically cheaper to query.</p>
+        <p>There is one more configuration decision that sits above all three: whether the tags themselves are enforced. A tag policy that is merely documented will decay. Enforcement options run from soft (Config rules that flag non-compliant resources) to hard (SCPs that deny resource creation without required tags). The tradeoff is real — hard enforcement breaks automation that does not yet apply tags, and it will generate support tickets in the first weeks — but soft enforcement produces exactly the inconsistent tagging that makes the whole reporting stack useless. Most mature organizations land on hard enforcement for a small set of mandatory keys and soft enforcement for everything else.</p>
+      </section>
+
+      <section class="doc-section" id="sizing-limits">
+        <h2 class="section-heading">5. Sizing, Limits and Quotas</h2>
+        <p>The numbers that matter here are mostly about tag mechanics and report delivery, and they are the kind of thing the exam expects you to recognize rather than recite. Tags are limited per resource, and the limit varies by service — most services allow 50 user-defined tags per resource, though some allow fewer. Tag keys are case-sensitive, which is a quiet source of duplicate-looking data: <code>CostCenter</code> and <code>costcenter</code> are two different keys, and activating one will not capture resources tagged with the other. Tag values are also case-sensitive, so <code>Prod</code> and <code>prod</code> will appear as separate groups in your reports.</p>
+        <p>Cost allocation tag activation has its own limits. There is a maximum number of cost allocation tags that can be active at once, and the practical guidance is to activate only the keys you actually report on, because every active key adds columns to the CUR and complexity to every downstream query. Activation is also per payer account in an Organizations setup, which means the management account controls what the whole organization can report on.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Item</th><th>Value / behavior</th><th>Practical consequence</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>User-defined tags per resource</td><td>Typically 50, service-dependent</td><td>Enough for cost keys; not a constraint in practice</td></tr>
+              <tr><td>Tag key case sensitivity</td><td>Case-sensitive</td><td><code>CostCenter</code> and <code>costcenter</code> are distinct keys</td></tr>
+              <tr><td>Cost allocation tag activation</td><td>Per key, opt-in, in the Billing console</td><td>Tagging without activation produces no cost data</td></tr>
+              <tr><td>Historical backfill on activation</td><td>Not retroactive in the way most people expect</td><td>Activate keys before or with the tagging rollout</td></tr>
+              <tr><td>Cost Explorer data latency</td><td>Roughly a day after enablement</td><td>Empty console on day one is expected</td></tr>
+              <tr><td>CUR granularity options</td><td>Hourly, daily, or monthly</td><td>Hourly plus resource IDs is the chargeback-grade config</td></tr>
+              <tr><td>CUR delivery format</td><td>CSV or Parquet, to S3</td><td>Parquet plus Athena is the standard analysis pattern</td></tr>
+              <tr><td>Budget period options</td><td>Daily, monthly, quarterly, annually</td><td>Daily budgets catch runaway spend far earlier</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The CUR storage cost is the number people forget. A large organization running hourly granularity with resource IDs enabled can produce a substantial volume of data every month, and because the report lands in S3, it accrues storage charges indefinitely unless you set a lifecycle policy on the bucket. The exam does not usually ask for the exact figure, but it does like scenarios where the cost-visibility solution itself has a cost that needs managing — and the correct answer is a lifecycle rule on the CUR bucket, not disabling the report.</p>
+      </section>
+
+      <section class="doc-section" id="failure-modes">
+        <h2 class="section-heading">6. Failure Modes and What They Look Like in Production</h2>
+        <p>The most common failure is silent and looks like success: the reports run, the charts render, and a large fraction of spend lands in an "untagged" or "no tag key" bucket. This happens for three reasons, and distinguishing them is the first diagnostic move. Resources created before the tagging rollout were never tagged. Resources created after the rollout were tagged with a key that was never activated for cost allocation. Or resources were tagged with a case variant of the expected key. The symptom is identical in all three cases — a big untagged slice — so the diagnostic is to open the CUR and look at the actual tag keys present on the untagged line items, not to assume the rollout failed.</p>
+        <p>The second failure mode is tag drift, where the tag exists but the value is wrong or inconsistent. A team tags half its resources <code>Environment=prod</code> and half <code>Environment=production</code>, and now every report has two production rows that nobody reconciles. This is worse than missing tags in some ways, because missing tags are visibly missing while wrong values look plausible. The diagnostic here is a Config rule or a periodic query against the CUR that enumerates distinct values per key and flags anything outside an approved list.</p>
+        <p>The third failure mode is budget alert fatigue. An organization creates a budget per team with a threshold set at the team's expected spend, and within a month every team is over because the thresholds were set from a single month's baseline that happened to be low. The alerts fire constantly, people start filtering them, and the control is effectively gone. The fix is not to raise thresholds blindly but to set them from a trailing average with headroom, and to separate the "you are trending over" alert from the "you have breached" alert so the two have different urgency.</p>
+        <p>The fourth is the one that catches architects specifically: a workload design that makes attribution impossible. If a shared ECS cluster runs containers for four teams, and the cluster is tagged once, then the cluster's cost is attributable to nobody in particular. The same is true of a shared NAT Gateway, a shared Transit Gateway, or a shared RDS instance with multiple schemas. These are legitimate architectural choices, but they push cost attribution into a manual allocation model — you split the shared cost by some agreed ratio — and the exam will sometimes present this as the reason a design fails a cost requirement. The fix is either to tag at a finer granularity where the service supports it, or to accept a documented allocation model and be explicit that it is an estimate.</p>
+      </section>
+
+      <section class="doc-section" id="sre-angle">
+        <h2 class="section-heading">7. The Operational Angle: Making Cost a First-Class Signal</h2>
+        <p>Cost is an operational signal in the same way latency and error rate are, and it deserves the same treatment: a metric, a threshold, an alert, and a runbook. The metric is the budget's actual or forecasted spend. The threshold is the budget amount. The alert is the budget notification, delivered to an SNS topic so it can reach the same on-call channel as everything else. The runbook is the part most organizations skip, and it is the part that determines whether the alert is actionable. A budget alert that says "you are over budget" with no next step is noise. A budget alert that links to a runbook saying "check for orphaned NAT Gateways, unattached EBS volumes, and runaway Lambda invocations in this account" is a control.</p>
+        <p>The SLO framing is useful here too. If Finance has agreed that each team's monthly spend will stay within 10% of forecast, that is an objective, and the budget is the measurement. The error budget concept translates directly: a team that is consistently 3% under forecast has headroom to experiment, and a team that is consistently at the edge should be reviewing its architecture before it breaches. Framing cost this way moves it out of the annual-negotiation category and into the continuous-improvement category, which is where it actually gets managed.</p>
+        <p>On the monitoring side, the practical setup is a small number of budgets per account rather than one giant budget for the organization. A per-account budget catches the account that has gone rogue. A per-service budget catches the service that has changed shape. A per-team budget, built on a cost allocation tag filter, is the one Finance actually cares about. These three views answer different questions and all three are cheap to create. The mistake is building only the third one, because a team-level budget will not tell you which account to look in when it fires.</p>
+        <p>Finally, there is a hygiene routine worth putting on a schedule: a monthly review of untagged spend, a quarterly review of active cost allocation tags to retire keys nobody queries, and an annual review of the CUR bucket's lifecycle policy. None of these are glamorous, and all of them are the difference between a cost program that works and one that produced a nice dashboard in year one and drifted into irrelevance by year two.</p>
+      </section>
+
+      <section class="doc-section" id="gotchas">
+        <h2 class="section-heading">8. Edge Cases and Exam Gotchas</h2>
+        <p>The single most-tested gotcha is the activation step. A scenario will describe an organization that has tagged every resource correctly and still cannot see per-team costs. The answer is that the tag keys were never activated for cost allocation in the Billing console. This is worth memorizing as a pattern because it appears in several forms: sometimes the scenario says the tags exist, sometimes it says the tags were applied by automation, and sometimes it says the tags are visible in the resource console — all of which are true and all of which are irrelevant until activation happens.</p>
+        <p>The second gotcha is the difference between a tag being present and a tag being useful. A resource tagged <code>Name=web-server-01</code> has a tag, but <code>Name</code> is not a cost allocation key and will not help you attribute spend. The exam sometimes presents a scenario where tagging is "complete" but the tags are operational rather than financial, and the correct answer is to introduce cost-specific keys rather than to activate the existing ones.</p>
+        <p>The third is the shared-resource problem described earlier. When a scenario asks how to attribute the cost of a shared service, the honest answer is that you cannot do it precisely with tags alone, and the exam usually wants you to recognize that rather than propose a tag that does not exist. Options include splitting the shared cost by an agreed allocation, or restructuring so the shared resource becomes per-team — but the latter is often architecturally worse, and the exam will sometimes test whether you resist that trade.</p>
+        <p>The fourth is the CUR resource-ID option. If a scenario needs per-resource cost data and the CUR was configured without resource IDs, the fix is to reconfigure the report, and the historical data will not have the detail. This is a "you had to plan ahead" gotcha, similar in shape to the activation one.</p>
+        <p>The fifth is the Organizations angle: cost allocation tags are activated in the management account and apply across the organization, but the tags themselves are applied in member accounts. A scenario where member accounts tag resources but the management account never activates the keys is the same failure as the first gotcha, viewed from a different direction. And a scenario where the management account activates keys that member accounts never apply produces empty columns — the mirror image.</p>
+      </section>
+
+      <section class="doc-section" id="vs-comparison">
+        <h2 class="section-heading">9. This vs. the Services It Gets Confused With</h2>
+        <p>The confusion set here is small but sharp, because the three reporting surfaces overlap in capability and the adjacent cost tools overlap in purpose. The cleanest way to hold it is by consumer: Cost Explorer is for a human exploring, Budgets is for a threshold firing, CUR is for a system consuming. Everything else is a variation on those three.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Service</th><th>Primary job</th><th>Pick it when…</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Cost Explorer</td><td>Interactive analysis and forecasting</td><td>A person needs to explore spend by tag, service, or account</td></tr>
+              <tr><td>AWS Budgets</td><td>Threshold alerting and automated action</td><td>You need to be told, or act, when spend crosses a line</td></tr>
+              <tr><td>Cost and Usage Report</td><td>Raw granular billing data</td><td>A BI tool, data lake, or custom system needs line-item detail</td></tr>
+              <tr><td>Compute Optimizer</td><td>Right-sizing recommendations</td><td>The question is "is this instance the right shape," not "who owns it"</td></tr>
+              <tr><td>Trusted Advisor</td><td>Best-practice checks across pillars</td><td>You want a broad sweep including idle-resource detection</td></tr>
+              <tr><td>Cost Allocation Tags</td><td>The attribution substrate</td><td>Always — nothing above works without it</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The distinction between Cost Explorer and CUR is the one most often missed. Cost Explorer is not a thin wrapper over CUR in the sense that you can get the same data from either; Cost Explorer aggregates and does not expose resource-level line items, while CUR does. If the requirement mentions a specific resource, a specific hour, or a downstream system, it is CUR. If it mentions a chart, a trend, or a forecast, it is Cost Explorer.</p>
+        <p>The distinction between Budgets and everything else is that Budgets is the only one that can act. Cost Explorer and CUR are read-only. If a scenario says "and then automatically restrict the team's ability to launch new instances," that is a Budgets action, and no amount of Cost Explorer configuration will produce it. Recognizing the word "automatically" as the signal for Budgets actions is a reliable exam heuristic.</p>
+      </section>
+
+      <section class="doc-section" id="lab">
+        <h2 class="section-heading">Hands-On Lab: A Mandatory Tagging Policy and Per-Cost-Center Budgets (60 min)</h2>
+        <div class="card card-green">
+          <p>This lab builds the attribution layer end to end: a tag taxonomy, hard enforcement at the Organizations layer, activation of the cost allocation keys, and a budget per cost center with a forecasted-spend alert. Work in a sandbox organization with at least two member accounts. If you do not have an organization, you can do steps 3 through 6 in a single account and note where the Organizations steps would sit.</p>
+          <p><strong>1. Define the taxonomy before touching anything.</strong> Write down the mandatory keys and their allowed values. A workable minimum is <code>CostCenter</code> (values matching your finance system's cost center codes), <code>Environment</code> (<code>prod</code>, <code>staging</code>, <code>dev</code>), and <code>Owner</code> (an email or team alias). Keep the value sets small and lowercase, and write them down somewhere a human can find them — the most common cause of tag drift is that nobody knows what the approved values are. Resist adding more keys at this stage; every key you add is a column in the CUR and a thing that can be wrong.</p>
+          <p><strong>2. Decide the enforcement level per key.</strong> For <code>CostCenter</code> and <code>Environment</code>, choose hard enforcement: an SCP that denies resource creation when the required tags are absent. For <code>Owner</code>, start with a Config rule that flags non-compliance rather than blocking, because ownership is often assigned after creation. Write down which keys are hard and which are soft, and why.</p>
+          <p><strong>3. Build the SCP.</strong> In the management account, create a service control policy that denies the relevant create actions when <code>aws:RequestTag/CostCenter</code> or <code>aws:RequestTag/Environment</code> is missing. Attach it to the OU containing your workload accounts, not to the root, so you can exempt the management account and any sandbox OUs. Test it by attempting to launch an EC2 instance with no tags and confirming the denial, then with both tags and confirming success. Note the exact error message — you will see it again from teams.</p>
+          <p><strong>4. Activate the cost allocation keys.</strong> In the Billing console of the management account, activate <code>CostCenter</code> and <code>Environment</code> for cost allocation. Confirm they appear in the list of active cost allocation tags. This is the step that makes everything downstream possible, and it is the step most people forget. If you are working in a single account, activate them there.</p>
+          <p><strong>5. Tag a representative set of resources.</strong> Launch a handful of resources across two accounts with the mandatory tags applied, using values from your approved list. Include at least one resource you deliberately leave untagged in an account where the SCP does not apply, so you can see what untagged spend looks like in the reports.</p>
+          <p><strong>6. Build a budget per cost center.</strong> Create an AWS Budget of type Cost budget, scoped with a tag filter on <code>CostCenter</code> equal to one of your values. Set the period to monthly and the amount to a realistic figure. Add two notifications: one at 80% of forecasted spend, and one at 100% of actual spend. Send both to an SNS topic rather than to individual email addresses, so the alert can be routed to the same channel as your other operational alerts.</p>
+          <p><strong>7. Verify the pipeline.</strong> Wait for the next billing data refresh — this can take up to a day — then open Cost Explorer, group by <code>CostCenter</code>, and confirm your tagged resources appear under the right value and that the deliberately untagged resource appears under "no tag key." This untagged bucket is the number you will be managing for the rest of the program's life, so look at it deliberately.</p>
+          <p><strong>8. Configure the CUR.</strong> Create a Cost and Usage Report with hourly granularity, resource IDs enabled, and Parquet format, delivered to a dedicated S3 bucket. Add a lifecycle policy to that bucket that transitions objects to a cheaper storage class after 90 days and expires them after a year. If you have Athena available, set up the integration and run one query that sums cost by <code>CostCenter</code> for the previous day.</p>
+          <p><strong>9. Write the runbook.</strong> One page: what a budget alert means, the three things to check first (untagged spend, orphaned resources, a recent deployment that changed instance shapes), and who to contact if the spend is legitimate. This is the artifact that turns the lab into an operational control.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="quiz">
         <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
         
       <div class="scenario-card">
         <p class="scenario-question"><strong>Q1.</strong> Finance wants to see AWS spend broken out per business unit, but resources are inconsistently tagged today. What should be enforced first?</p>
-        <div class="scenario-options" id="opts-d55q0">
+        <div class="scenario-options" id="opts-d55q1">
             <div class="scenario-option">A. Enable Cost Explorer only</div>
             <div class="scenario-option">B. Enforce a mandatory tagging policy (e.g. via SCP/Config) requiring cost-allocation tags at resource creation, then activate those tags for cost allocation reporting</div>
             <div class="scenario-option">C. Use a single shared account for all business units</div>
             <div class="scenario-option">D. Manually track spend in a spreadsheet</div>
         </div>
-        <button class="scenario-reveal-btn" onclick="revealAnswer('d55q0', 1)">Reveal Answer</button>
-        <div class="scenario-explanation" id="exp-d55q0"><strong>Correct answer: B.</strong> Cost allocation reporting is only as good as tag hygiene; enforcing mandatory tags at creation time (via SCP or Config rules) is the prerequisite before per-business-unit cost reports become meaningful.</div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d55q1', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d55q1"><strong>Correct answer: B.</strong> Cost allocation reporting is only as good as tag hygiene; enforcing mandatory tags at creation time (via SCP or Config rules) is the prerequisite before per-business-unit cost reports become meaningful.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q2.</strong> An organization has tagged every EC2 instance with a <code>CostCenter</code> key, but Cost Explorer still shows all spend as untagged. What is the most likely cause?</p>
+        <div class="scenario-options" id="opts-d55q2">
+            <div class="scenario-option">A. The tags were applied with the wrong IAM permissions</div>
+            <div class="scenario-option">B. The <code>CostCenter</code> key was never activated for cost allocation in the Billing console</div>
+            <div class="scenario-option">C. Cost Explorer does not support tag-based grouping</div>
+            <div class="scenario-option">D. The instances are in the wrong region</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d55q2', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d55q2"><strong>Correct answer: B.</strong> Applying a tag does nothing for cost reporting until the key is explicitly activated for cost allocation. This is the single most common cause of "we tagged everything and still see nothing."</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q3.</strong> A BI team needs line-item billing data at the individual resource level, refreshed daily, to feed a custom chargeback dashboard. Which service should you configure?</p>
+        <div class="scenario-options" id="opts-d55q3">
+            <div class="scenario-option">A. Cost Explorer saved reports</div>
+            <div class="scenario-option">B. AWS Budgets with a tag filter</div>
+            <div class="scenario-option">C. Cost and Usage Report with resource IDs enabled, delivered to S3</div>
+            <div class="scenario-option">D. Trusted Advisor cost checks</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d55q3', 2)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d55q3"><strong>Correct answer: C.</strong> CUR is the only surface that provides resource-level line items, and it is designed to be consumed by downstream systems. Cost Explorer aggregates and does not expose per-resource detail.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q4.</strong> A team's monthly spend is unpredictable and Finance wants to be warned before the month ends if the team is on track to exceed its allocation. Which budget configuration fits?</p>
+        <div class="scenario-options" id="opts-d55q4">
+            <div class="scenario-option">A. A monthly cost budget with an actual-spend notification at 100%</div>
+            <div class="scenario-option">B. A monthly cost budget with a forecasted-spend notification at 100%</div>
+            <div class="scenario-option">C. A daily cost budget with an actual-spend notification at 100%</div>
+            <div class="scenario-option">D. A Cost Explorer saved report emailed weekly</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d55q4', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d55q4"><strong>Correct answer: B.</strong> Forecasted-spend notifications fire when AWS projects you will exceed the threshold within the period, which is the only configuration that warns before the money is spent.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q5.</strong> A company wants a control that automatically restricts a team's ability to launch new EC2 instances when its monthly spend exceeds a threshold. What should be configured?</p>
+        <div class="scenario-options" id="opts-d55q5">
+            <div class="scenario-option">A. A Cost Explorer alert</div>
+            <div class="scenario-option">B. An AWS Budgets action that applies a restrictive IAM policy on breach</div>
+            <div class="scenario-option">C. A CUR query that runs hourly</div>
+            <div class="scenario-option">D. A Trusted Advisor notification</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d55q5', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d55q5"><strong>Correct answer: B.</strong> Budgets actions are the only mechanism in this set that can take an automated action. Cost Explorer and CUR are read-only reporting surfaces.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q6.</strong> Reports show two separate production rows, one for <code>Environment=prod</code> and one for <code>Environment=Production</code>. What is the root cause?</p>
+        <div class="scenario-options" id="opts-d55q6">
+            <div class="scenario-option">A. Cost Explorer is aggregating incorrectly</div>
+            <div class="scenario-option">B. Tag values are case-sensitive, so the two values are treated as distinct</div>
+            <div class="scenario-option">C. The CUR was configured with the wrong granularity</div>
+            <div class="scenario-option">D. One of the rows is from a different payer account</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d55q6', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d55q6"><strong>Correct answer: B.</strong> Both tag keys and tag values are case-sensitive, so inconsistent casing produces separate groups in every report. The fix is an approved value list plus a Config rule that flags anything outside it.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q7.</strong> A shared ECS cluster runs containers for four different teams, and Finance wants each team's cost attributed precisely. What is the most accurate statement about this requirement?</p>
+        <div class="scenario-options" id="opts-d55q7">
+            <div class="scenario-option">A. Tagging the cluster with four CostCenter values will split the cost automatically</div>
+            <div class="scenario-option">B. Cost Explorer can split shared resource cost by container</div>
+            <div class="scenario-option">C. Tags alone cannot attribute shared-resource cost precisely; you need either finer-grained tagging where supported or a documented allocation model</div>
+            <div class="scenario-option">D. Enabling resource IDs in the CUR solves this automatically</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d55q7', 2)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d55q7"><strong>Correct answer: C.</strong> A resource carries one set of tags, so a shared resource cannot be attributed to multiple owners by tagging alone. The honest options are finer-grained tagging where the service supports it, or an agreed allocation split.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q8.</strong> An organization's CUR bucket has grown to a significant monthly storage cost. What is the appropriate fix?</p>
+        <div class="scenario-options" id="opts-d55q8">
+            <div class="scenario-option">A. Disable the CUR and rely on Cost Explorer</div>
+            <div class="scenario-option">B. Add a lifecycle policy to the CUR bucket to transition and expire objects</div>
+            <div class="scenario-option">C. Reduce the CUR to monthly granularity and remove resource IDs</div>
+            <div class="scenario-option">D. Move the CUR to a different region</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d55q8', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d55q8"><strong>Correct answer: B.</strong> The CUR's granularity is what makes it useful; the storage cost is managed with a lifecycle policy on the destination bucket, not by degrading the report.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q9.</strong> A company wants to enforce that no EC2 instance can be launched without a <code>CostCenter</code> tag, across all workload accounts. Which mechanism is appropriate?</p>
+        <div class="scenario-options" id="opts-d55q9">
+            <div class="scenario-option">A. An AWS Config rule that flags non-compliant instances</div>
+            <div class="scenario-option">B. A service control policy denying the launch action when <code>aws:RequestTag/CostCenter</code> is absent</div>
+            <div class="scenario-option">C. A budget notification</div>
+            <div class="scenario-option">D. A tag policy in Resource Groups</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d55q9', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d55q9"><strong>Correct answer: B.</strong> Only an SCP can prevent the action outright. A Config rule detects non-compliance after the fact, which is useful but is not enforcement.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q10.</strong> Cost Explorer was enabled this morning and shows no data. What is the expected explanation?</p>
+        <div class="scenario-options" id="opts-d55q10">
+            <div class="scenario-option">A. The account has no resources</div>
+            <div class="scenario-option">B. Cost Explorer data has a latency of roughly a day after enablement</div>
+            <div class="scenario-option">C. Cost Explorer requires an SCP to be attached first</div>
+            <div class="scenario-option">D. The billing console is in the wrong region</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d55q10', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d55q10"><strong>Correct answer: B.</strong> Cost Explorer takes roughly a day to populate after being enabled. An empty console on day one is expected behavior, not a misconfiguration.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q11.</strong> A team has tagged resources with <code>Name</code>, <code>Team</code>, and <code>AppVersion</code>, and Finance cannot produce per-team reports. What is the most likely issue?</p>
+        <div class="scenario-options" id="opts-d55q11">
+            <div class="scenario-option">A. The tags are operational rather than financial, and the relevant keys were never activated for cost allocation</div>
+            <div class="scenario-option">B. Cost Explorer cannot group by custom tags</div>
+            <div class="scenario-option">C. The resources are in multiple regions</div>
+            <div class="scenario-option">D. The team needs to enable the CUR first</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d55q11', 0)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d55q11"><strong>Correct answer: A.</strong> Having tags is not the same as having cost allocation tags. The keys must be activated, and they must be the keys that actually encode the attribution Finance needs.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q12.</strong> An organization wants a single view of spend that catches an individual account going rogue, a service changing shape, and a team overspending. What is the recommended budget structure?</p>
+        <div class="scenario-options" id="opts-d55q12">
+            <div class="scenario-option">A. One organization-wide budget with a single threshold</div>
+            <div class="scenario-option">B. A small number of budgets at different scopes: per account, per service, and per team via a tag filter</div>
+            <div class="scenario-option">C. Only a per-team budget, since that is what Finance cares about</div>
+            <div class="scenario-option">D. A daily budget per resource</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d55q12', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d55q12"><strong>Correct answer: B.</strong> Each scope answers a different question. A team-level budget alone will not tell you which account to investigate when it fires.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q13.</strong> A company needs per-resource cost data for the last six months, but the CUR was configured without resource IDs. What is true?</p>
+        <div class="scenario-options" id="opts-d55q13">
+            <div class="scenario-option">A. Cost Explorer can supply the missing resource-level detail retroactively</div>
+            <div class="scenario-option">B. Reconfiguring the CUR adds resource IDs going forward, but the historical data will not have that detail</div>
+            <div class="scenario-option">C. AWS backfills resource IDs automatically on request</div>
+            <div class="scenario-option">D. The data is available in Trusted Advisor</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d55q13', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d55q13"><strong>Correct answer: B.</strong> CUR configuration is not retroactive. This is a planning-ahead gotcha: the detail you did not enable is the detail you do not have.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q14.</strong> In an AWS Organizations setup, where are cost allocation tags activated, and where are the tags themselves applied?</p>
+        <div class="scenario-options" id="opts-d55q14">
+            <div class="scenario-option">A. Both in the management account</div>
+            <div class="scenario-option">B. Both in each member account independently</div>
+            <div class="scenario-option">C. Activation happens in the management account and applies organization-wide; tags are applied in the member accounts that own the resources</div>
+            <div class="scenario-option">D. Activation happens per OU, and tags are applied at the OU level</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d55q14', 2)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d55q14"><strong>Correct answer: C.</strong> The management account controls which keys are reportable across the organization, while the actual tag application happens where the resources live. Both halves have to happen for reports to work.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q15.</strong> A budget alert fires every week and the on-call team has started ignoring it. What is the most effective remediation?</p>
+        <div class="scenario-options" id="opts-d55q15">
+            <div class="scenario-option">A. Delete the budget and rely on monthly Finance review</div>
+            <div class="scenario-option">B. Raise the threshold until it stops firing</div>
+            <div class="scenario-option">C. Recalibrate thresholds from a trailing average with headroom, separate the trending-over alert from the breached alert, and attach a runbook with concrete first checks</div>
+            <div class="scenario-option">D. Route the alert to a distribution list instead of the on-call channel</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d55q15', 2)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d55q15"><strong>Correct answer: C.</strong> Alert fatigue is a calibration and actionability problem. Thresholds set from a single low baseline will fire constantly, and an alert with no runbook gives the responder nothing to do.</div>
       </div>
       </section>
+
+      <section class="doc-section" id="preview">
+        <h2 class="section-heading">Peek into Tomorrow: DMS and the Cost of Moving Data</h2>
+        <div class="card card-purple">
+          <p>Everything in this day assumed the data is already where it needs to be and the only question is who pays for it. Tomorrow that assumption breaks, because the highest-yield topic in the migration domain is about moving data between engines while the source keeps serving traffic — and the mechanism that makes that possible is Change Data Capture. The open question is what "minimal downtime" actually costs you in configuration complexity. A full load is simple and cheap to reason about, but it implies a maintenance window proportional to the dataset. Full load plus CDC removes the window, and in exchange you now own a replication instance that has to be sized correctly, a change stream that has to keep up, and a class of failures that only appear under sustained write load.</p>
+          <p>There is a second question hiding underneath, and it is the one that separates a working migration from a stalled one: what happens to the objects that do not convert cleanly? When the source and target engines differ, schema conversion produces a completeness percentage, and the remainder is manual work that no amount of replication capacity will fix. Tomorrow's material is where the DMS full load versus CDC decision, replication instance sizing, LOB handling, and the schema-conversion-plus-replication pattern come together — and where the cost model shifts from "who owns this line item" to "what does this migration window actually cost the business."</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="sources">
+        <h2 class="section-heading">Sources</h2>
+        <div class="card">
+          <ul class="source-list">
+            <li><a href="https://docs.aws.amazon.com/awsaccountbilling/latest/aboutv2/cost-alloc-tags.html" target="_blank">AWS Billing — Using cost allocation tags</a></li>
+            <li><a href="https://docs.aws.amazon.com/awsaccountbilling/latest/aboutv2/budgets-managing-costs.html" target="_blank">AWS Billing — Managing costs with AWS Budgets</a></li>
+            <li><a href="https://docs.aws.amazon.com/cur/latest/userguide/what-is-cur.html" target="_blank">AWS Cost and Usage Report — What is the AWS Cost and Usage Report?</a></li>
+            <li><a href="https://docs.aws.amazon.com/awsaccountbilling/latest/aboutv2/ce-what-is.html" target="_blank">AWS Billing — What is AWS Cost Explorer?</a></li>
+            <li><a href="https://docs.aws.amazon.com/tag-editor/latest/userguide/tag-policies-orgs.html" target="_blank">AWS Tag Editor — Tag policies in AWS Organizations</a></li>
+            <li><a href="https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_policies_scps.html" target="_blank">AWS Organizations — Service control policies</a></li>
+            <li><a href="https://docs.aws.amazon.com/awsaccountbilling/latest/aboutv2/cur-athena.html" target="_blank">AWS Billing — Querying the CUR with Amazon Athena</a></li>
+            <li><a href="https://docs.aws.amazon.com/wellarchitected/latest/cost-optimization-pillar/welcome.html" target="_blank">AWS Well-Architected — Cost Optimization Pillar</a></li>
+          </ul>
+        </div>
+      </section>
+
       <div class="day-nav">
         <a href="day-054.html">&larr; Day 54: AWS Compute Optimizer, Cost Explorer &amp; Trusted Advisor</a>
         <button class="btn btn-green" onclick="markComplete(55, 'day-056.html')">Mark Day 55 Complete &rarr;</button>

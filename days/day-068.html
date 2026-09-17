@@ -104,24 +104,290 @@
         <span class="pill pill-green">Phase 5: Practice Exams &amp; Exam Technique</span>
       </div>
       <h1 class="hero-title">Mock Exam 4 Distractor Analysis &amp; Flag-and-Review Technique</h1>
-      <div class="reading-meta">&#128337; ~3 min read &middot; 1 services covered</div>
+      <div class="reading-meta">&#128337; ~58 min read &middot; 1 services covered</div>
       <div class="services-grid">
         <span class="service-tag">Distractor Analysis</span>
       </div>
       <div id="tracker"></div>
-      <section class="doc-section">
-        <h2 class="section-heading">Today's Concept</h2>
+      <section class="doc-section" id="recap">
+        <h2 class="section-heading">Recap: What Mock Exam 4 Was Actually Testing</h2>
         <div class="card card-accent">
-          <p>Final full distractor analysis pass. Refine the flag-and-review technique: which questions do you consistently need a second look at, and why.</p>
-        </div>
-        <h3 class="sub-heading">Hands-on Lab / Practical Action (45 min)</h3>
-        <div class="card">
-          <p>Complete distractor analysis; write a one-page personal 'weak spot cheat sheet' to review the morning of the exam.</p>
+          <p>Mock Exam 4 was deliberately drawn from a different question bank than the first three, and that choice was the point: a fresh vendor strips away the pattern memorization that builds up when you sit the same style of question repeatedly, and it exposes whether your understanding is genuine or whether you have learned to recognize a particular author's phrasing. The score you got on Mock Exam 4 is therefore a more honest signal than the previous three, and it is also a harder one to interpret, because a drop here does not necessarily mean you regressed. It may mean the earlier exams were flattering you.</p>
+          <p>That is the same trap in a different service. On Day 62 the distractor analysis for Mock Exam 2 was about tracking whether previously weak domains had improved; here the question is different, because a new vendor changes the surface of the questions while leaving the underlying misconceptions identical. The wrong answers you chose on Mock Exam 4 are almost certainly the same wrong answers you chose on Mock Exam 1, dressed in unfamiliar wording. Today's work is to find those recurring patterns, name them, and build the specific tell that separates each one from the correct answer.</p>
         </div>
       </section>
-      <section class="doc-section">
-        <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
-        <p style="color:var(--text-muted);font-style:italic;">Detailed scenario questions for this day will be added when the curriculum reaches it — see the <a href="day-056.html">Day 56 DMS lesson</a> for the full format this site is building toward.</p>
+      <section class="doc-section" id="patterns">
+        <h2 class="section-heading">The Recurring Distractor Patterns</h2>
+        <p>What follows is not a list of questions you missed. It is a catalogue of the answer patterns that SAP-C02 writers reuse across vendors, because the exam's difficulty comes from plausible-sounding options rather than obscure services. Each entry names the tempting answer, explains why it is tempting, and gives the tell that distinguishes it from the correct choice. Read them against your own Mock Exam 4 review sheet and mark the ones that match a question you got wrong or got right by elimination.</p>
+
+        <h3 class="sub-heading">Pattern 1: The Single-Region Answer to a Multi-Region Requirement</h3>
+        <p>The most common distractor on the entire exam is a technically correct service deployed in the wrong number of regions. A scenario states that a workload must survive the loss of an entire region, and one option offers RDS Multi-AZ with a cross-region read replica. Every word of that option is a real AWS capability, and Multi-AZ genuinely does provide automatic failover, which is why it feels responsive to the requirement. The tell is the word "region" in the requirement and the word "AZ" in the option. Multi-AZ failover moves you between Availability Zones inside one region; it does nothing when the region itself is unavailable, and a cross-region read replica is asynchronous and not automatically promoted.</p>
+        <p>On Mock Exam 4 this pattern typically appears in the resilience domain with a stated RTO in minutes and an RPO in seconds, which is the signature of Aurora Global Database or DynamoDB Global Tables rather than any single-region configuration. When you flag a question for review, the fastest check is to underline the scope word in the requirement and the scope word in each option and see whether they match. If the requirement says region and the option says AZ, the option is wrong regardless of how many other details it gets right.</p>
+
+        <h3 class="sub-heading">Pattern 2: The Service That Solves the Stated Problem but Not the Stated Constraint</h3>
+        <p>These options are the hardest to eliminate because they are not wrong about the problem, only about the constraint. A scenario asks for the lowest-cost way to move 300 TB of historical data with a 500 Mbps link, and one option proposes AWS DataSync over the internet. DataSync is a real, correct answer to "how do I move files to AWS," and it will eventually complete the transfer, so the option survives a first pass. The tell is the arithmetic the scenario is quietly asking you to do: 300 TB at 500 Mbps is on the order of two months of continuous transfer, which the scenario's timeline will not tolerate.</p>
+        <p>The same shape appears in cost questions, where an option proposes the right architecture at a price the scenario explicitly rules out, and in latency questions, where an option proposes a correct service in a region that is geographically wrong. The discipline is to re-read the constraint clause after you have identified the problem clause, because the constraint is what eliminates the plausible option. On Mock Exam 4, questions you answered correctly but slowly are usually this pattern: you found the right answer by feel and only later noticed the constraint that made the tempting option impossible.</p>
+
+        <h3 class="sub-heading">Pattern 3: The Over-Permissive IAM or SCP Answer</h3>
+        <p>Governance questions frequently offer an option that grants broader access than the scenario requires, phrased so that it sounds like the simplest solution. A scenario asks how a delegated admin can create roles for developers without being able to escalate their own privileges, and one option suggests attaching AdministratorAccess to the delegated admin role and relying on trust. It is tempting because it removes friction and because the scenario does not explicitly forbid it. The tell is any requirement containing the words "cannot," "must not," or "least privilege" — those words are asking for a permission boundary, an SCP, or a condition key, not for a broader grant.</p>
+        <p>The mirror image is the over-restrictive answer, which denies something the scenario needs. A region-restriction SCP that denies all actions outside two approved regions without exempting IAM, Route 53, CloudFront, and Support will break account operations, and an option that omits the exemption is wrong even though it is stricter. Both directions of this pattern are tested, and the tell in both cases is to check the option against the exact set of actions the scenario says must succeed or must fail.</p>
+
+        <h3 class="sub-heading">Pattern 4: The Manual Step Hidden Inside an Automated Answer</h3>
+        <p>An option will describe an otherwise correct architecture and then include a phrase like "with manual DNS updates" or "operators run the failover runbook." The service list looks right, so the option reads as correct, but the scenario's requirement for deterministic, tested failover is precisely a requirement that the manual step not exist. This pattern is common in disaster recovery questions, where the difference between a warm standby and a pilot light is often not the infrastructure but whether a human has to be in the loop at cutover.</p>
+        <p>The tell is to scan each option for verbs that imply human action: update, run, execute, notify, approve. Some scenarios genuinely require a human approval step, and Step Functions wait states exist for exactly that, so the presence of a manual step is not automatically disqualifying. What disqualifies it is a scenario that states an RTO the manual step cannot meet, or that asks for a control plane that survives the failure it is responding to. Route 53 Application Recovery Controller exists because a failover mechanism that depends on the region that just failed is not a failover mechanism.</p>
+
+        <h3 class="sub-heading">Pattern 5: The Right Service in the Wrong Layer</h3>
+        <p>This pattern offers a service that operates at a different layer than the requirement. A scenario asks how to expose a single microservice to many consumer accounts with overlapping CIDR ranges, and one option proposes Transit Gateway peering. Transit Gateway is the correct answer to a great many connectivity questions, which is what makes it tempting here, but it operates at the network layer and requires non-overlapping address space. The tell is the word "overlapping" in the scenario, or any requirement that the two networks not be merged.</p>
+        <p>The same confusion runs in the other direction with PrivateLink, which is frequently offered as an answer to questions that need broad bidirectional reachability between VPCs. PrivateLink exposes a service, not a network, and it will not let two VPCs route arbitrary traffic to each other. When you see a connectivity question, the first decision is whether the requirement is service-level exposure or network-level reachability, and that decision eliminates half the options before you evaluate any of the details.</p>
+
+        <h3 class="sub-heading">Pattern 6: The Cache or Replica Offered as a System of Record</h3>
+        <p>Options that propose ElastiCache, DAX, or a read replica as the durable store for data are almost always wrong, and they are tempting because the scenario's latency requirement makes a cache feel necessary. A scenario asks for microsecond reads on a hot leaderboard and one option proposes ElastiCache for Redis as the primary data store. Redis can persist, so the option is not absurd, but the scenario's durability requirement is not satisfied by a cache whose eviction policy is designed to drop data under memory pressure.</p>
+        <p>The tell is whether the scenario describes data that must survive the loss of the caching tier. If it does, the cache belongs in front of a durable store, not in place of one. The same logic applies to read replicas: they scale reads and can be promoted, but promotion is asynchronous and loses recent writes, so a scenario with a stated RPO of zero cannot be satisfied by a replica-based answer.</p>
+
+        <h3 class="sub-heading">Pattern 7: The Answer That Ignores the Operational Overhead Clause</h3>
+        <p>Many scenarios include a sentence about the team's existing skills or the organization's tolerance for operational burden, and options that ignore it are wrong even when they are architecturally sound. A scenario describes a team with deep Kubernetes tooling and a multi-cloud portability requirement, and one option proposes ECS with the EC2 launch type. ECS is a perfectly good orchestrator, but it discards the team's existing investment and its portability requirement, which the scenario stated explicitly.</p>
+        <p>The tell is any phrase about the team, the organization, or the existing tooling. These clauses are easy to skim past because they read as background rather than requirements, and on Mock Exam 4 they are the most common reason a question you understood was still answered incorrectly. When you flag a question, note whether it contained a team or organization clause, and if it did, re-read that clause before re-reading the options.</p>
+
+        <h3 class="sub-heading">Pattern 8: The Distractor That Is Correct Except for One Number</h3>
+        <p>Some options are correct in every respect but one figure: a retention period, a replication factor, a timeout, a retrieval time. A scenario asks for the lowest-cost storage class that survives the loss of an entire Availability Zone with a twelve-hour retrieval tolerance, and one option proposes S3 One Zone-IA. The retrieval characteristics and the cost both fit, and the option is wrong only because One Zone-IA does not survive an AZ loss. The tell is that the scenario contains a durability or availability clause that the option's name quietly contradicts.</p>
+        <p>These are the questions where flagging pays for itself, because the error is invisible on a fast read and obvious on a second pass. The practical technique is to check the option's name against the scenario's availability requirement before checking anything else, since storage class names encode their redundancy model. The same applies to DynamoDB capacity modes, where the name tells you whether capacity planning is required, and to Savings Plans, where the name tells you whether the commitment is locked to an instance family.</p>
+
+        <h3 class="sub-heading">Pattern 9: The Tool That Does the Adjacent Job</h3>
+        <p>Migration questions are dense with tools that are correct for a neighboring task. A scenario asks how to convert Oracle stored procedures to Aurora PostgreSQL, and one option proposes AWS DMS. DMS is the right tool for moving data, and it is the tool most people reach for first, but it does not convert schema or procedural code. The tell is whether the scenario is asking about data, schema, or files: DMS moves data, SCT converts schema and code, DataSync moves files, and the Snow Family moves data offline.</p>
+        <p>The same adjacency trap appears with Storage Gateway, where File, Volume, and Tape gateways each answer a different protocol question, and with the Snow Family, where Snowcone, Snowball Edge, and Snowmobile differ by scale and ruggedization rather than by capability. When a migration question offers two tools from the same family, the scenario will contain exactly one word that decides between them, and finding that word is faster than reasoning about the tools.</p>
+
+        <h3 class="sub-heading">Pattern 10: The Answer That Solves Today and Creates Tomorrow's Incident</h3>
+        <p>Some options resolve the immediate scenario while introducing a failure mode the scenario did not mention but the exam expects you to anticipate. Raising a Lambda function's timeout to survive a slow downstream call is tempting because it is a one-line change, but it does not reduce the number of concurrent connections the function opens to a database, so it converts a timeout problem into a connection exhaustion problem. The tell is a scenario that mentions a downstream resource with a hard concurrency or connection limit.</p>
+        <p>Reserved concurrency is the answer in that shape because it bounds the number of simultaneous invocations, which is the quantity the downstream resource actually cares about. The general form of this pattern is that the tempting option treats the symptom the scenario describes, while the correct option treats the resource the scenario names. When you flag a question, note whether the scenario named a specific downstream resource, because that name is usually the key to the correct answer.</p>
+
+        <h3 class="sub-heading">Pattern 11: The Distractor Built From a Real Limit You Half-Remember</h3>
+        <p>Exam writers know which numbers candidates memorize imperfectly, and they build options around them. An option will claim that Transit Gateway peering supports route propagation, or that inter-region peering allows jumbo frames, or that a service quota is higher than it is. These options are tempting precisely because they sound like the kind of detail a well-prepared candidate would know, and the half-remembered number feels familiar enough to accept. The tell is that the option asserts a specific technical behavior rather than describing an architecture.</p>
+        <p>The defense is not to memorize more numbers but to know which behaviors are structurally impossible. Transit Gateway peering attachments do not propagate routes because the peering relationship is between two route tables that have no shared control plane, and inter-region peering caps MTU at 1500 bytes because the traffic crosses a boundary that does not carry jumbo frames. Understanding why the limit exists makes the distractor obvious, whereas memorizing the number alone leaves you vulnerable to a slightly different number.</p>
+
+        <h3 class="sub-heading">Pattern 12: The Option That Is Correct for a Different Question</h3>
+        <p>Occasionally an option is the textbook answer to a question the exam has asked before, which is exactly why it is offered. A scenario about reducing alert fatigue offers a lower alarm threshold, which is the correct move for a sensitivity problem and the wrong move for a noise problem. The tell is to restate the scenario's goal in your own words before reading the options, because the goal is what the distractor is designed to miss.</p>
+        <p>This pattern is most dangerous on questions you have seen variants of in earlier mocks, because recognition substitutes for reading. On Mock Exam 4, drawn from a different vendor, the same underlying question will be phrased differently enough that a memorized answer no longer fits, which is the specific value of switching question banks. If you found yourself answering quickly and confidently and still getting the question wrong, this pattern is the likely cause.</p>
+
+        <h3 class="sub-heading">Pattern 13: The "Both Are True" Pair</h3>
+        <p>Some questions present two options that are both technically accurate, and the correct one is determined by a preference the scenario states rather than by a fact. A scenario asks for the cheapest DR strategy that meets a fifteen-minute RTO and a five-minute RPO, and both pilot light and warm standby can be argued to meet it. The tell is the word "cheapest" or "most cost-effective," which selects pilot light because it keeps less standing infrastructure running.</p>
+        <p>When two options survive your first pass, stop looking for the one that is wrong and start looking for the word in the scenario that ranks them. Cost, operational overhead, latency, and time-to-implement are the four ranking criteria the exam uses, and a scenario that contains one of those words is telling you which of two correct answers it wants. This is also the situation where flagging is most valuable, because the ranking word is easy to miss on a first read and unmistakable on a second.</p>
+
+        <h3 class="sub-heading">Pattern 14: The Answer That Requires a Capability the Service Does Not Have</h3>
+        <p>The last recurring pattern is an option that assumes a service can do something it cannot. EKS Fargate profiles cannot run DaemonSets, because each pod runs in its own isolated micro-VM with no shared node for a per-node agent to attach to. An option that proposes Fargate for a workload requiring node-level log collection is wrong for a structural reason, not a configuration reason, and no amount of tuning will fix it. The tell is a scenario that names a node-level or host-level requirement.</p>
+        <p>These options are tempting because the service is otherwise a good fit and because the limitation is not obvious from the service's marketing description. The practical defense is to keep a short list of structural limitations you have actually encountered: no DaemonSets on Fargate, no route propagation on Transit Gateway peering, no cross-region writes on Aurora Global Database's secondary, no schema conversion from DMS. Each of these has appeared as a distractor on at least one mock, and each is worth one line on the cheat sheet you will write today.</p>
+      </section>
+      <section class="doc-section" id="lab">
+        <h2 class="section-heading">Hands-On Lab: Building the Weak-Spot Cheat Sheet (45 min)</h2>
+        <div class="card card-green">
+          <p>The deliverable for today is a single page, and it is the only document you will read on the morning of the exam. Its value comes from being short enough to actually re-read and specific enough to change an answer, which means it should contain tells rather than topics. A page that says "review Transit Gateway" is useless; a page that says "TGW peering does not propagate routes — if the option claims propagation, it is wrong" is worth a question.</p>
+          <p>Start by pulling up your Mock Exam 4 review sheet alongside the pattern catalogue above. For each question you missed, and each question you answered correctly but flagged, identify which of the fourteen patterns applies. Most misses will map to two or three patterns rather than fourteen, and that concentration is the useful finding: it tells you that your remaining risk is not broad but specific. Write the pattern name and its tell on the cheat sheet, not the question.</p>
+          <p>Then do the same pass over Mock Exams 1 through 3, but only for questions that map to the patterns you just identified. The goal is to confirm that the pattern recurs across vendors, which is what makes it worth memorizing. A pattern that appears once is a coincidence; a pattern that appears in all four mocks is a structural feature of the exam, and those are the ones that belong on the page.</p>
+          <p>Finally, add a short section for the structural limitations from Pattern 14, since those are the facts most likely to be tested in a form you have not seen. Keep each entry to one line and phrase it as a disqualifier rather than a description, so that reading it during the exam immediately eliminates an option. When the page is done, it should be roughly twenty to thirty lines, and every line should be something you could not reliably reconstruct under time pressure.</p>
+          <p>Store the page somewhere you will actually encounter it on exam morning, and resist the urge to expand it over the next two days. The temptation to add material is strong after a mock exam, but a cheat sheet that grows past a page stops being readable in the ten minutes you will have. If you find yourself wanting to add a topic rather than a tell, that topic belongs in tomorrow's mock exam review, not on this page.</p>
+        </div>
+      </section>
+      <section class="doc-section" id="quiz">
+        <h2 class="section-heading">Drill Quiz: Distractor Patterns (15 questions)</h2>
+        <p>Each question below is built around one of the patterns above, and each includes the tempting wrong answer as an option. Answer before revealing, and note which pattern you fell for if you miss.</p>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q1.</strong> A workload must survive the loss of an entire AWS region with an RTO of under one minute and an RPO of under one second. Which configuration meets the requirement?</p>
+          <div class="scenario-options" id="opts-d68q1">
+            <div class="scenario-option">A. RDS Multi-AZ with a cross-region read replica</div>
+            <div class="scenario-option">B. Aurora Global Database with a secondary region</div>
+            <div class="scenario-option">C. RDS Multi-AZ in two Availability Zones</div>
+            <div class="scenario-option">D. A single-region Aurora cluster with three read replicas</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d68q1', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d68q1"><strong>Correct answer: B.</strong> The requirement is stated at region scope, so only a multi-region data service qualifies. Multi-AZ failover moves between Availability Zones inside one region and does nothing when the region is unavailable, and a cross-region read replica is asynchronous and not automatically promoted.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q2.</strong> A company must move 300 TB of historical data to AWS. Its network link is capped at 500 Mbps and the migration window is three weeks. What should they use for the bulk transfer?</p>
+          <div class="scenario-options" id="opts-d68q2">
+            <div class="scenario-option">A. AWS DataSync over the internet link</div>
+            <div class="scenario-option">B. AWS Snowball Edge devices for the bulk dataset</div>
+            <div class="scenario-option">C. AWS Storage Gateway in cached volume mode</div>
+            <div class="scenario-option">D. AWS DMS full load over the internet link</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d68q2', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d68q2"><strong>Correct answer: B.</strong> DataSync and DMS are both correct tools for their respective jobs, but the constraint clause rules them out: 300 TB over a 500 Mbps link takes far longer than the three-week window. The scenario's timeline is the tell.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q3.</strong> A delegated admin role must be able to create IAM roles for developers but must not be able to grant permissions beyond a defined set. What should be enforced?</p>
+          <div class="scenario-options" id="opts-d68q3">
+            <div class="scenario-option">A. Attach AdministratorAccess to the delegated admin role and rely on trust</div>
+            <div class="scenario-option">B. Require a permission boundary on every role the delegated admin creates</div>
+            <div class="scenario-option">C. Remove iam:CreateRole from the delegated admin role</div>
+            <div class="scenario-option">D. Enable MFA on the delegated admin role</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d68q3', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d68q3"><strong>Correct answer: B.</strong> The scenario contains "must not," which is the tell for a boundary or condition rather than a broader grant. Removing iam:CreateRole is over-restrictive because the scenario requires the role to create roles.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q4.</strong> A critical system needs failover control that remains available even if an entire AWS region fails, and the standby region's readiness must be continuously validated. What should be used?</p>
+          <div class="scenario-options" id="opts-d68q4">
+            <div class="scenario-option">A. Route 53 failover routing with health checks and manual DNS updates</div>
+            <div class="scenario-option">B. Route 53 Application Recovery Controller with readiness checks and routing controls</div>
+            <div class="scenario-option">C. A CloudWatch alarm that triggers a Lambda to update DNS</div>
+            <div class="scenario-option">D. Global Accelerator with a single-region endpoint group</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d68q4', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d68q4"><strong>Correct answer: B.</strong> The scenario requires the failover mechanism itself to survive a regional failure and requires validated standby readiness. Option A hides a manual step, and option C depends on the region that may have failed.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q5.</strong> Two companies with overlapping CIDR ranges (both 10.0.0.0/16) need one to consume a specific API hosted in the other's VPC. What connectivity option works?</p>
+          <div class="scenario-options" id="opts-d68q5">
+            <div class="scenario-option">A. VPC peering</div>
+            <div class="scenario-option">B. Transit Gateway peering</div>
+            <div class="scenario-option">C. AWS PrivateLink with an interface endpoint</div>
+            <div class="scenario-option">D. A Direct Connect connection between the two VPCs</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d68q5', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d68q5"><strong>Correct answer: C.</strong> The word "overlapping" is the tell. Peering and Transit Gateway both operate at the network layer and require non-overlapping address space, while PrivateLink exposes a service without merging networks.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q6.</strong> A gaming leaderboard needs microsecond read latency for a small set of extremely hot items, and the data must survive the loss of the caching tier. What should be used?</p>
+          <div class="scenario-options" id="opts-d68q6">
+            <div class="scenario-option">A. ElastiCache for Redis as the primary data store</div>
+            <div class="scenario-option">B. Amazon DAX in front of a DynamoDB table</div>
+            <div class="scenario-option">C. A DynamoDB read replica in a second region</div>
+            <div class="scenario-option">D. CloudFront caching of API responses only</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d68q6', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d68q6"><strong>Correct answer: B.</strong> The scenario requires durability, which rules out a cache as the system of record. DAX sits in front of DynamoDB and provides the microsecond reads without replacing the durable store.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q7.</strong> A team has deep existing Kubernetes tooling and a multi-cloud portability requirement. Which compute platform best fits?</p>
+          <div class="scenario-options" id="opts-d68q7">
+            <div class="scenario-option">A. Amazon ECS with the EC2 launch type</div>
+            <div class="scenario-option">B. Amazon EKS</div>
+            <div class="scenario-option">C. AWS Lambda</div>
+            <div class="scenario-option">D. AWS Batch on Fargate</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d68q7', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d68q7"><strong>Correct answer: B.</strong> The scenario contains a team clause and a portability clause, both of which are requirements rather than background. ECS is architecturally sound but discards the existing tooling investment and the portability requirement.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q8.</strong> An object needs the lowest storage cost, is rarely accessed, tolerates a twelve-hour retrieval time, and must survive the loss of an entire Availability Zone. Which storage class fits?</p>
+          <div class="scenario-options" id="opts-d68q8">
+            <div class="scenario-option">A. S3 One Zone-IA</div>
+            <div class="scenario-option">B. S3 Glacier Deep Archive</div>
+            <div class="scenario-option">C. S3 Standard-IA</div>
+            <div class="scenario-option">D. S3 Intelligent-Tiering</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d68q8', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d68q8"><strong>Correct answer: B.</strong> One Zone-IA matches the cost and retrieval profile but its name encodes a single-AZ redundancy model, which contradicts the scenario's availability clause. Glacier Deep Archive is replicated across multiple AZs at the lowest cost.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q9.</strong> A company is migrating Oracle to Aurora PostgreSQL and needs the stored procedures and functions converted. Which tool handles the conversion?</p>
+          <div class="scenario-options" id="opts-d68q9">
+            <div class="scenario-option">A. AWS Database Migration Service</div>
+            <div class="scenario-option">B. AWS Schema Conversion Tool</div>
+            <div class="scenario-option">C. AWS DataSync</div>
+            <div class="scenario-option">D. AWS Snowball Edge</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d68q9', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d68q9"><strong>Correct answer: B.</strong> The scenario asks about schema and procedural code, not data. DMS moves data, SCT converts schema and code, DataSync moves files, and the Snow Family moves data offline.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q10.</strong> A Lambda function reading from Kinesis is overwhelming a downstream RDS instance with connections during traffic spikes. What limits this safely?</p>
+          <div class="scenario-options" id="opts-d68q10">
+            <div class="scenario-option">A. Increase the Lambda function timeout</div>
+            <div class="scenario-option">B. Set reserved concurrency on the function</div>
+            <div class="scenario-option">C. Increase the Kinesis shard count</div>
+            <div class="scenario-option">D. Switch RDS to Multi-AZ</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d68q10', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d68q10"><strong>Correct answer: B.</strong> The scenario names a downstream resource with a hard connection limit. Raising the timeout treats the symptom and can worsen connection exhaustion; reserved concurrency bounds the number of simultaneous invocations.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q11.</strong> After creating a Transit Gateway peering attachment between two regions, spoke VPCs still cannot reach each other. What is most likely missing?</p>
+          <div class="scenario-options" id="opts-d68q11">
+            <div class="scenario-option">A. Route propagation is disabled for peering attachments, so static routes must be added manually</div>
+            <div class="scenario-option">B. The Transit Gateways are in different Availability Zones</div>
+            <div class="scenario-option">C. Peering does not support cross-region traffic at all</div>
+            <div class="scenario-option">D. Security groups always block inter-region traffic</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d68q11', 0)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d68q11"><strong>Correct answer: A.</strong> Peering attachments do not propagate routes because the two route tables share no control plane. This is a structural limitation rather than a configuration mistake, which is why it recurs as a distractor.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q12.</strong> On-call engineers are fatigued by alarms firing on isolated latency spikes that self-resolve. What reduces noise while still catching real incidents?</p>
+          <div class="scenario-options" id="opts-d68q12">
+            <div class="scenario-option">A. Lower the latency alarm threshold</div>
+            <div class="scenario-option">B. A composite alarm requiring both the latency alarm and the error-rate alarm to be in ALARM</div>
+            <div class="scenario-option">C. Delete the latency alarm</div>
+            <div class="scenario-option">D. Increase the evaluation period to 24 hours</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d68q12', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d68q12"><strong>Correct answer: B.</strong> Lowering the threshold is the correct move for a sensitivity problem and the wrong move for a noise problem. The scenario's goal is noise reduction, which composite alarms address by requiring correlated signals.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q13.</strong> A workload can tolerate an RTO of fifteen minutes and an RPO of five minutes, and the business wants to minimize standing infrastructure cost. Which DR pattern fits best?</p>
+          <div class="scenario-options" id="opts-d68q13">
+            <div class="scenario-option">A. Backup and restore</div>
+            <div class="scenario-option">B. Pilot light</div>
+            <div class="scenario-option">C. Warm standby</div>
+            <div class="scenario-option">D. Multi-site active-active</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d68q13', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d68q13"><strong>Correct answer: B.</strong> Both pilot light and warm standby can meet the stated RTO, so the ranking word "cheapest" decides between them. Pilot light keeps only core data replicated and minimal infrastructure running.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q14.</strong> A workload requires DaemonSets for log collection on every node. Which EKS compute option should be avoided?</p>
+          <div class="scenario-options" id="opts-d68q14">
+            <div class="scenario-option">A. Managed node groups</div>
+            <div class="scenario-option">B. Self-managed EC2 node groups</div>
+            <div class="scenario-option">C. EKS Fargate profiles</div>
+            <div class="scenario-option">D. Cluster Autoscaler on EC2</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d68q14', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d68q14"><strong>Correct answer: C.</strong> Fargate pods run in isolated micro-VMs with no shared node, so a per-node agent has nothing to attach to. This is a structural limitation, not a configuration issue.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q15.</strong> A company needs ransomware-resilient backups that cannot be deleted even by a compromised admin account. What should be configured?</p>
+          <div class="scenario-options" id="opts-d68q15">
+            <div class="scenario-option">A. Standard EBS snapshots with a longer retention period</div>
+            <div class="scenario-option">B. AWS Backup with cross-account copy into an isolated account and Backup Vault Lock enabled</div>
+            <div class="scenario-option">C. S3 versioning on the backup bucket</div>
+            <div class="scenario-option">D. More frequent snapshot schedules</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d68q15', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d68q15"><strong>Correct answer: B.</strong> The scenario requires that a compromised admin cannot delete the backups, which is a control-plane requirement rather than a retention requirement. Cross-account isolation plus Vault Lock immutability is the only option that satisfies it.</div>
+        </div>
+      </section>
+      <section class="doc-section" id="preview">
+        <h2 class="section-heading">Preview: Mock Exam 5</h2>
+        <div class="card card-purple">
+          <p>The open question after today is whether the patterns you just catalogued are actually gone, or whether you have simply learned to recognize them in the phrasing of the four mocks you have already sat. That distinction matters because the real exam will not use any of those questions, and a cheat sheet built from recognition rather than understanding will not transfer. Mock Exam 5 is the last full timed run before the real thing, and it is the only remaining measurement of whether the work from Days 58 through 68 has moved your underlying accuracy rather than your familiarity.</p>
+          <p>The target for tomorrow is a consistent score above 85 percent, which is the margin that absorbs the variance of an unfamiliar question bank and the pressure of a real proctored environment. If Mock Exam 5 lands below that, the useful signal is not the total score but which of today's fourteen patterns reappeared, because a pattern that survives four mocks and a cheat sheet is one you have not actually internalized. Sit it under full exam conditions, and treat the result as the last honest data point you will get before Day 70.</p>
+        </div>
+      </section>
+      <section class="doc-section" id="sources">
+        <h2 class="section-heading">Sources</h2>
+        <div class="card">
+          <ul class="source-list">
+            <li>AWS Well-Architected Framework — Reliability Pillar, failure management and tested recovery procedures.</li>
+            <li>AWS Well-Architected Framework — Operational Excellence Pillar, operations as code and blameless post-incident review.</li>
+            <li>AWS Certification — AWS Certified Solutions Architect &ndash; Professional (SAP-C02) exam guide, domain weightings and question format.</li>
+            <li>AWS Documentation — Route 53 Application Recovery Controller, readiness checks and routing controls.</li>
+            <li>AWS Documentation — AWS Backup Vault Lock and cross-account backup.</li>
+          </ul>
+        </div>
       </section>
       <div class="day-nav">
         <a href="day-067.html">&larr; Day 67: Full-Length Mock Exam 4 — 75 Questions Timed</a>

@@ -104,26 +104,302 @@
         <span class="pill pill-green">Phase 5: Practice Exams &amp; Exam Technique</span>
       </div>
       <h1 class="hero-title">Deep Review — Domain 1 Weak Areas (Org/Governance/Networking)</h1>
-      <div class="reading-meta">&#128337; ~3 min read &middot; 3 services covered</div>
+      <div class="reading-meta">&#128337; ~58 min read &middot; 14 distractor patterns &middot; 15 drill questions</div>
       <div class="services-grid">
-        <span class="service-tag">Organizations</span>
+        <span class="service-tag">AWS Organizations</span>
+        <span class="service-tag">SCP</span>
+        <span class="service-tag">Control Tower</span>
+        <span class="service-tag">IAM Identity Center</span>
+        <span class="service-tag">AWS RAM</span>
         <span class="service-tag">Transit Gateway</span>
         <span class="service-tag">Direct Connect</span>
+        <span class="service-tag">Route 53 Resolver</span>
+        <span class="service-tag">PrivateLink</span>
       </div>
       <div id="tracker"></div>
-      <section class="doc-section">
-        <h2 class="section-heading">Today's Concept</h2>
+
+      <section class="doc-section" id="recap">
+        <h2 class="section-heading">Recap — Why Distractor Analysis Comes First</h2>
         <div class="card card-accent">
-          <p>Revisit Weeks 1-2 content (multi-account governance and hybrid networking) focused specifically on whatever domain analysis from Day 58 flagged as weak.</p>
-        </div>
-        <h3 class="sub-heading">Hands-on Lab / Practical Action (45 min)</h3>
-        <div class="card">
-          <p>Re-do all missed Week 1-2 practice questions from Days 1-14, plus 10 new scenario questions targeting your weakest sub-topic.</p>
+          <p>Day 58 established that distractor analysis is the real work: for every missed question — and every question answered correctly by luck or elimination — you articulate why the correct answer is right and why each distractor is wrong, then tag each miss by domain to find your weakest area. That exercise was a prerequisite for what happens here, because a domain tag is only useful if it converts into a specific, named misconception you can attack. "Domain 1 is weak" is not actionable. "I keep choosing VPC peering when the CIDR ranges overlap" is.</p>
+          <p>So today takes the Domain 1 tags from that analysis — multi-account governance and hybrid networking, Weeks 1 and 2 — and turns them into a catalogue of answer patterns. Each entry below names the tempting-but-wrong option, explains why it is tempting, and gives the specific tell that separates it from the correct answer. The goal is not to re-teach Organizations or Transit Gateway from scratch; it is to make the wrong answers recognizable on sight, which is a different and faster skill than recall.</p>
         </div>
       </section>
-      <section class="doc-section">
+
+      <section class="doc-section" id="patterns">
+        <h2 class="section-heading">Domain 1 Distractor Patterns</h2>
+        <p>Fourteen patterns, ordered roughly by how often they appear in Domain 1 scenario questions. Read each one against your own Day 58 miss list; if a pattern matches a question you got wrong, that is the one to drill hardest in the quiz below.</p>
+
+        <h3 class="sub-heading">Pattern 1 — "Put the log-archive account under the root"</h3>
+        <p>The tempting answer places the centralized logging account directly under the organization root, or inside the Workloads OU, on the reasoning that it needs to be reachable by everything and therefore should sit somewhere neutral. It is tempting because the account genuinely does need broad read access from every other account, and "under the root" sounds like the most permissive, most connected position available. The distractor is exploiting the intuition that centrality equals accessibility.</p>
+        <p>The tell is the word <em>cannot be modified by workload teams</em>, or any phrasing about blast radius and isolation. A log-archive or audit account belongs in a dedicated Security OU protected by SCPs that deny deletion or modification of logging resources, precisely so that a compromised workload account cannot reach up and tamper with the evidence. Centrality is not the requirement; isolation with a one-way write path is. If an option describes the account as sitting alongside Production "for proximity to the data it audits," that proximity framing is the giveaway — audit accounts are deliberately distant from what they audit.</p>
+
+        <h3 class="sub-heading">Pattern 2 — "The management account can just run this one workload"</h3>
+        <p>This distractor offers the management account as a convenient home for a small, low-risk workload — a billing report generator, a tagging enforcer, a single Lambda. It is tempting because the management account already exists, already has broad visibility, and provisioning a new account feels like overhead for something trivial. The option usually includes a softener like "since it only needs read access" or "to avoid cross-account complexity."</p>
+        <p>The tell is any question that asks why the management account should stay empty, or any scenario where the correct answer hinges on SCP coverage. SCPs cannot be applied to the management account, so anything running there operates outside the guardrail layer entirely. Best practice keeps it workload-free and limited to billing, Organizations, and org-wide services such as IAM Identity Center. When a distractor justifies management-account placement with convenience or existing permissions, that is the trap. The related wrong answer — "it has a lower service quota by default" — is a plausible-sounding but invented constraint; the real reason is SCP immunity, not quotas.</p>
+
+        <h3 class="sub-heading">Pattern 3 — "SCPs grant access, so attach the SCP and you're done"</h3>
+        <p>The tempting option treats an SCP as a permission grant: attach a policy allowing S3 to the OU and the accounts can now use S3. It is tempting because SCPs are written in the same JSON policy language as IAM policies, with the same Allow and Deny structure, so they look like they should behave the same way. The distractor is exploiting surface similarity between two policy types with fundamentally different semantics.</p>
+        <p>The tell is a question that pairs an SCP with an IAM identity and asks what the effective permission is. SCPs are a permission ceiling, not a grant: the effective permission is the intersection of what IAM allows and what the SCP permits, and an explicit Deny in either one always wins. A developer with <code>s3:*</code> in their IAM policy who is also covered by an SCP denying <code>s3:DeleteBucket</code> will be denied — the SCP does not need to allow anything for that to be true. Watch for the reverse framing too: an option claiming "IAM policies take precedence" over an SCP Deny is the same misconception wearing a different hat.</p>
+
+        <h3 class="sub-heading">Pattern 4 — "Region-restriction SCPs are safe to apply as written"</h3>
+        <p>This distractor presents a clean region-restriction SCP — deny everything outside two approved regions — and treats it as a finished artifact. It is tempting because the policy is short, obviously correct in intent, and matches the stated compliance requirement exactly. Nothing in the option looks wrong.</p>
+        <p>The tell is the absence of any mention of global services. IAM, Route 53, CloudFront, and Support are global and do not live in a region, so a naive region-deny breaks account operations in ways that are hard to diagnose — IAM calls start failing, and the failure looks unrelated to the networking change you just made. The correct answer always carves out those services, usually via a condition on <code>aws:RequestedRegion</code> combined with an exemption list. If a distractor's SCP has no global-services carve-out and the scenario mentions IAM or Route 53 anywhere, that is the answer to eliminate.</p>
+
+        <h3 class="sub-heading">Pattern 5 — "Control Tower guardrails are all optional"</h3>
+        <p>The tempting option describes Control Tower guardrails as a menu of best practices you enable as you see fit, which makes "turn off the guardrail that's blocking us" sound like a legitimate operational move. It is tempting because elective and strongly recommended guardrails genuinely are optional, so the framing is half true — which is exactly what makes it dangerous.</p>
+        <p>The tell is the word <em>mandatory</em>, or a scenario where a control cannot be disabled. Mandatory guardrails are always enforced and cannot be turned off; elective and strongly recommended guardrails can be enabled per OU based on governance needs. A distractor that offers "disable the mandatory guardrail for this OU" is offering something that does not exist. The related wrong answer — "mandatory guardrails cost extra" — is a fabricated pricing claim; the distinction is enforcement, not billing.</p>
+
+        <h3 class="sub-heading">Pattern 6 — "One IAM user per engineer per account"</h3>
+        <p>This distractor solves a federation question with per-account IAM users, sometimes dressed up with a group structure or a shared credential store. It is tempting because it is the most familiar pattern, it works in a single-account world, and it requires no IdP integration work. In a 40-account organization it is also unambiguously the wrong answer.</p>
+        <p>The tell is any scenario mentioning an existing corporate IdP (Entra ID, Okta), a large account count, or a requirement to avoid long-lived credentials. IAM Identity Center with SAML federation and permission sets is the answer: permission sets map to an IAM role auto-provisioned into each assigned account, and users authenticate once against the IdP. The distractor "share a single root-account access key" is the same error at maximum severity, and "use SCPs alone" is the error of reaching for a guardrail mechanism to solve an authentication problem.</p>
+
+        <h3 class="sub-heading">Pattern 7 — "Permission boundaries are just another policy to attach"</h3>
+        <p>The tempting answer treats a permission boundary as an additional grant — attach it to the role and the role gains those permissions. It is tempting because a boundary is a managed policy, and managed policies normally do grant things. The distractor is exploiting the fact that the boundary's JSON looks like an allow-list.</p>
+        <p>The tell is a delegated-admin scenario, especially one asking how to stop a role-creator from minting an AdministratorAccess role. A permission boundary caps the maximum permissions an entity can ever hold, even when its attached policies are broader. The correct pattern is a condition requiring <code>iam:PermissionsBoundary</code> on <code>CreateRole</code>, so every role the delegate creates is automatically capped. Distractors that propose attaching a Deny to each developer role individually, or removing <code>iam:CreateRole</code> entirely, miss the point: the first does not scale and the second breaks the delegation you were asked to build.</p>
+
+        <h3 class="sub-heading">Pattern 8 — "Share the whole VPC with RAM"</h3>
+        <p>This distractor offers AWS RAM as a way to hand an entire VPC to another account. It is tempting because RAM is genuinely the right service for the underlying requirement — central network ownership without per-account VPCs — and the option gets the service name right, which is often enough to feel correct under time pressure.</p>
+        <p>The tell is the granularity. RAM shares subnets, not VPCs. Application accounts launch resources into subnets owned by a central VPC, and the VPC itself stays owned by the network account. A distractor that says "share the VPC" is wrong on the resource type even though it is right on the service. The other common wrong answer in this family is "VPC peering between every pair of accounts," which solves reachability but not ownership, and scales quadratically — the exact problem RAM subnet sharing exists to avoid.</p>
+
+        <h3 class="sub-heading">Pattern 9 — "A single flat Transit Gateway route table is fine"</h3>
+        <p>The tempting answer attaches every VPC to one TGW route table with all routes propagated, on the grounds that everything needs to reach the shared-services VPC anyway. It is tempting because it is the simplest configuration, it works immediately, and the connectivity requirement as stated is satisfied — every spoke can reach shared services.</p>
+        <p>The tell is a negative requirement: "but never reach each other," "must not be able to," "isolated from." A flat route table gives you reachability and isolation is impossible to express in it. The correct design uses separate TGW route tables for Dev and Prod, each propagating only the shared-services routes, with no propagation between the two. Distractors that propose Security Groups or NACLs to enforce the isolation are answering a different question — those are stateful/stateless packet filters, not routing topology, and they do not prevent route-level reachability from existing.</p>
+
+        <h3 class="sub-heading">Pattern 10 — "TGW peering propagates routes automatically"</h3>
+        <p>This distractor assumes a TGW peering attachment behaves like a VPC attachment: create it, and routes flow. It is tempting because every other TGW attachment type does propagate, so the mental model is consistent — it is just wrong for this one attachment type.</p>
+        <p>The tell is a scenario where the peering attachment exists, both TGWs are healthy, and spoke VPCs still cannot reach each other. Peering attachments do not support route propagation; static routes must be added manually to each TGW route table. The distractor "the TGWs are in different Availability Zones" is a category error — TGWs are regional, not AZ-scoped — and "peering doesn't support cross-region traffic at all" is simply false. The related number worth holding onto: inter-region TGW peering caps MTU at 1500 bytes, which matters for any workload that assumes jumbo frames.</p>
+
+        <h3 class="sub-heading">Pattern 11 — "One Direct Connect link is enough if it's 10 Gbps"</h3>
+        <p>The tempting option answers a resiliency question with bandwidth: a single large connection, or two connections at the same location, on the reasoning that capacity is the constraint being described. It is tempting because the scenario usually does mention throughput, and a 10 Gbps link sounds like it removes the problem.</p>
+        <p>The tell is the word <em>resiliency</em>, or any mention of a mission-critical workload. DX resiliency is about diversity, not size: two connections at two different DX locations, terminating on separate devices, with BGP failover, plus a VPN backup for the case where both DX paths fail. Two connections at the same location share fate — a single facility outage takes both. The distractor "Public VIF only, since it's cheaper" confuses the VIF type with the resiliency model; a Public VIF is for reaching public AWS endpoints, not for private VPC connectivity at all.</p>
+
+        <h3 class="sub-heading">Pattern 12 — "Inbound and outbound Resolver endpoints are interchangeable"</h3>
+        <p>This distractor picks the wrong Resolver endpoint direction, usually by choosing outbound when the scenario needs inbound. It is tempting because both endpoints are part of the same hybrid DNS story and the names are easy to swap under time pressure — the option reads as correct if you are pattern-matching on "Route 53 Resolver" rather than on who is asking whom.</p>
+        <p>The tell is the direction of the query. Inbound endpoints let on-prem resolvers query AWS private hosted zones; outbound endpoints plus forwarding rules let AWS resources resolve on-prem names. The mnemonic that survives exam pressure is to ask who initiates: if the query originates on-prem and the answer lives in AWS, you need inbound. If the query originates in AWS and the answer lives on-prem, you need outbound. A distractor offering "a public hosted zone instead" is a different error — it changes the visibility model rather than the direction.</p>
+
+        <h3 class="sub-heading">Pattern 13 — "PrivateLink and peering are interchangeable for cross-account access"</h3>
+        <p>The tempting answer reaches for VPC peering or TGW peering to expose one service to another account, because those are the connectivity tools you have been using all week. It is tempting because peering does provide reachability, and reachability is what the scenario appears to ask for.</p>
+        <p>The tell is overlapping CIDR ranges, or a requirement to expose exactly one service to many consumers. PrivateLink works with fully overlapping IP ranges because it never merges route tables or CIDRs — it is ENI-level connectivity in the consumer VPC to an endpoint service in the provider VPC. Peering and TGW both require non-overlapping ranges and give you network-level reachability, which is more than the scenario asked for and impossible when the ranges collide. The decision rule: PrivateLink for service-level exposure to many consumers, TGW for broad network-level connectivity across VPCs and on-prem.</p>
+
+        <h3 class="sub-heading">Pattern 14 — "Network Firewall belongs in every VPC"</h3>
+        <p>This distractor deploys AWS Network Firewall independently in each spoke VPC, which is defensible on the grounds that each VPC then owns its own inspection policy. It is tempting because it is the most direct reading of "every VPC needs inspection," and it avoids any cross-VPC routing complexity.</p>
+        <p>The tell is cost, consistency, or a requirement to inspect traffic between VPCs. The standard pattern is a centralized inspection VPC attached to the Transit Gateway, with spoke route tables directing <code>0.0.0.0/0</code> to the TGW so all egress passes through one firewall. That gives one policy to maintain, one place to add rules, and one bill. The distractor "Network Firewall cannot inspect cross-VPC traffic" is false — it inspects whatever is routed through it, which is precisely why the centralized pattern works. Per-VPC deployment is not wrong in the sense of failing to inspect; it is wrong in the sense of multiplying cost and policy drift by the number of VPCs.</p>
+      </section>
+
+      <section class="doc-section" id="lab">
+        <h2 class="section-heading">Hands-on Lab / Practical Action (45 min)</h2>
+        <div class="card card-green">
+          <p>Re-do every missed Week 1-2 practice question from Days 1 through 14, then add ten new scenario questions aimed at whichever sub-topic your Day 58 tag list put at the bottom. The point of the re-do is not to get the questions right the second time — you have seen them, so that proves nothing. The point is to write, for each one, the one-sentence reason the correct answer is correct and the one-sentence reason each distractor is wrong, in the same format Day 58 established. If you cannot produce the distractor sentence, you have not actually closed the gap; you have memorized the letter.</p>
+          <p>For the ten new questions, source them from a different question bank than the one used for Mock Exam 1 if you have access to one. Fresh distractors are the only way to test whether the pattern recognition generalizes or whether you have simply learned the specific wrong answers in the first bank. Tag each new miss by domain as you go, and if a new pattern emerges that is not in the fourteen above, write it down — that is a genuine finding, and it belongs in your cheat sheet.</p>
+          <p>Budget the time roughly as twenty-five minutes for the re-do and twenty for the new questions, and stop at forty-five minutes even if you are mid-question. The value here is calibration, not volume, and the quiz below is designed to test the same patterns under time pressure.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="quiz">
         <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
-        <p style="color:var(--text-muted);font-style:italic;">Detailed scenario questions for this day will be added when the curriculum reaches it — see the <a href="day-056.html">Day 56 DMS lesson</a> for the full format this site is building toward.</p>
+        <p>Fifteen questions, each built around one of the patterns above. Every question includes the tempting wrong answer as a live option — read all four before revealing.</p>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q1.</strong> A company wants a dedicated account that only aggregates CloudTrail logs from every other account and cannot be modified by workload teams. Where should this account live?</p>
+          <div class="scenario-options" id="opts-d59q1">
+            <div class="scenario-option">A. Directly under the root, alongside Production</div>
+            <div class="scenario-option">B. In a dedicated Security OU with a restrictive SCP</div>
+            <div class="scenario-option">C. Inside the Workloads/Prod OU for proximity to the data it audits</div>
+            <div class="scenario-option">D. In the management account itself</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d59q1', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d59q1"><strong>Correct answer: B.</strong> Log-archive and audit accounts belong in a dedicated Security OU protected by SCPs that deny deletion or modification of logging resources. Option C is the proximity distractor — audit accounts are deliberately isolated from what they audit, not adjacent to it.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q2.</strong> Why should the AWS Organizations management account never run workloads?</p>
+          <div class="scenario-options" id="opts-d59q2">
+            <div class="scenario-option">A. It has a lower service quota by default</div>
+            <div class="scenario-option">B. SCPs cannot be applied to it, so it should be kept empty to reduce blast radius and support least privilege</div>
+            <div class="scenario-option">C. It is billed at a premium rate</div>
+            <div class="scenario-option">D. It cannot host EC2 instances</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d59q2', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d59q2"><strong>Correct answer: B.</strong> The management account is immune to SCPs, so best practice keeps it workload-free. Options A and C are invented constraints — the real reason is guardrail coverage, not quotas or pricing.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q3.</strong> A developer has an IAM policy granting <code>s3:*</code>, but an SCP on their OU denies <code>s3:DeleteBucket</code>. What happens if they call DeleteBucket?</p>
+          <div class="scenario-options" id="opts-d59q3">
+            <div class="scenario-option">A. It succeeds because IAM policies take precedence</div>
+            <div class="scenario-option">B. It is denied — SCPs set the ceiling and an explicit Deny always wins</div>
+            <div class="scenario-option">C. It succeeds only in the management account</div>
+            <div class="scenario-option">D. It depends on the S3 bucket policy</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d59q3', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d59q3"><strong>Correct answer: B.</strong> Effective permission is the intersection of IAM and SCP; an explicit Deny in either always overrides an Allow. Option A is the "SCPs grant access" misconception in reverse.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q4.</strong> A compliance team requires that no resource be created outside two approved regions. What must the region-restriction SCP account for?</p>
+          <div class="scenario-options" id="opts-d59q4">
+            <div class="scenario-option">A. Nothing — a straightforward region deny is sufficient</div>
+            <div class="scenario-option">B. An exemption for global services such as IAM, Route 53, CloudFront, and Support</div>
+            <div class="scenario-option">C. A separate SCP per account, since region rules cannot be applied at the OU level</div>
+            <div class="scenario-option">D. A service quota increase for the approved regions</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d59q4', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d59q4"><strong>Correct answer: B.</strong> Global services do not live in a region, so a naive region deny breaks IAM, Route 53, CloudFront, and Support operations. Option A is the "safe as written" distractor.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q5.</strong> What is the key difference between a mandatory and an elective Control Tower guardrail?</p>
+          <div class="scenario-options" id="opts-d59q5">
+            <div class="scenario-option">A. Mandatory guardrails cost extra</div>
+            <div class="scenario-option">B. Mandatory guardrails cannot be disabled and are always enforced; elective guardrails are optional best practices you can turn on or off</div>
+            <div class="scenario-option">C. Elective guardrails only apply to the management account</div>
+            <div class="scenario-option">D. There is no functional difference</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d59q5', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d59q5"><strong>Correct answer: B.</strong> Mandatory guardrails are always active; elective and strongly recommended guardrails can be enabled per OU. Option A is a fabricated pricing claim — the distinction is enforcement, not billing.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q6.</strong> An enterprise wants engineers to log in once via their corporate Okta and assume the correct role in any of 40 AWS accounts without individual IAM users. What is the best-practice solution?</p>
+          <div class="scenario-options" id="opts-d59q6">
+            <div class="scenario-option">A. Create an IAM user per engineer per account</div>
+            <div class="scenario-option">B. IAM Identity Center with SAML federation from Okta and permission sets</div>
+            <div class="scenario-option">C. Share a single root-account access key</div>
+            <div class="scenario-option">D. Use AWS Organizations SCPs alone</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d59q6', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d59q6"><strong>Correct answer: B.</strong> IAM Identity Center provisions short-lived federated roles per account instead of long-lived IAM users. Option D is the error of reaching for a guardrail mechanism to solve an authentication problem.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q7.</strong> A delegated admin role can create IAM roles for developers. How do you prevent them from creating a role with AdministratorAccess?</p>
+          <div class="scenario-options" id="opts-d59q7">
+            <div class="scenario-option">A. Attach a Deny statement to every developer role individually</div>
+            <div class="scenario-option">B. Require the delegated admin to set a permission boundary on every role they create, capping maximum permissions</div>
+            <div class="scenario-option">C. Remove <code>iam:CreateRole</code> entirely</div>
+            <div class="scenario-option">D. Use MFA enforcement only</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d59q7', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d59q7"><strong>Correct answer: B.</strong> Enforcing a mandatory permission boundary via a condition on <code>iam:PermissionsBoundary</code> is the standard escalation-prevention pattern. Option A does not scale; option C breaks the delegation you were asked to build.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q8.</strong> A company wants every application account to use a common, centrally managed VPC without each account owning its own VPC. What is the mechanism?</p>
+          <div class="scenario-options" id="opts-d59q8">
+            <div class="scenario-option">A. VPC Peering between every pair of accounts</div>
+            <div class="scenario-option">B. Share subnets from a central VPC using AWS RAM</div>
+            <div class="scenario-option">C. Share the entire VPC with AWS RAM</div>
+            <div class="scenario-option">D. Copy the VPC configuration manually into every account</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d59q8', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d59q8"><strong>Correct answer: B.</strong> RAM shares subnets, not VPCs — option C gets the service right and the resource type wrong. Option A solves reachability but not ownership, and scales quadratically.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q9.</strong> You need Dev and Prod VPCs to both reach a Shared-Services VPC, but never reach each other. How do you design TGW route tables?</p>
+          <div class="scenario-options" id="opts-d59q9">
+            <div class="scenario-option">A. A single flat TGW route table with all routes propagated</div>
+            <div class="scenario-option">B. Separate TGW route tables for Dev and Prod that each only propagate Shared-Services routes, with no propagation between Dev and Prod</div>
+            <div class="scenario-option">C. VPC Peering directly between Dev and Prod</div>
+            <div class="scenario-option">D. Use only Security Groups to block traffic</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d59q9', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d59q9"><strong>Correct answer: B.</strong> TGW route table segmentation is the standard isolation mechanism. Option D answers a different question — security groups are packet filters, not routing topology.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q10.</strong> After creating a TGW peering attachment between two regions, spoke VPCs still cannot reach each other. What is most likely missing?</p>
+          <div class="scenario-options" id="opts-d59q10">
+            <div class="scenario-option">A. Route propagation is disabled for peering attachments — static routes must be added manually</div>
+            <div class="scenario-option">B. The TGWs are in different Availability Zones</div>
+            <div class="scenario-option">C. Peering doesn't support cross-region traffic at all</div>
+            <div class="scenario-option">D. Security groups always block inter-region traffic</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d59q10', 0)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d59q10"><strong>Correct answer: A.</strong> Peering attachments do not propagate routes; static routes are required in each TGW route table. Option B is a category error — TGWs are regional, not AZ-scoped.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q11.</strong> A company needs the highest-resiliency Direct Connect design for a mission-critical workload. What should they provision?</p>
+          <div class="scenario-options" id="opts-d59q11">
+            <div class="scenario-option">A. A single 10 Gbps DX connection</div>
+            <div class="scenario-option">B. Two DX connections at two different DX locations, each terminating on separate devices, with BGP failover and a VPN backup</div>
+            <div class="scenario-option">C. One DX connection plus a second identical connection at the same location</div>
+            <div class="scenario-option">D. Public VIF only, since it's cheaper</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d59q11', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d59q11"><strong>Correct answer: B.</strong> DX resiliency requires diversity across locations and devices plus BGP failover. Option C shares fate — a single facility outage takes both connections.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q12.</strong> On-prem servers need to resolve names in a private Route 53 hosted zone. What do you configure?</p>
+          <div class="scenario-options" id="opts-d59q12">
+            <div class="scenario-option">A. A Route 53 Resolver outbound endpoint</div>
+            <div class="scenario-option">B. A Route 53 Resolver inbound endpoint, with on-prem DNS forwarding queries to it</div>
+            <div class="scenario-option">C. A public hosted zone instead</div>
+            <div class="scenario-option">D. NAT Gateway DNS forwarding</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d59q12', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d59q12"><strong>Correct answer: B.</strong> Inbound endpoints expose AWS private DNS to on-prem resolvers; outbound endpoints do the reverse. Ask who initiates the query — here it originates on-prem, so inbound is correct.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q13.</strong> Two companies with overlapping CIDR ranges (both 10.0.0.0/16) need one to consume a specific API hosted in the other's VPC. What connectivity option works despite the overlap?</p>
+          <div class="scenario-options" id="opts-d59q13">
+            <div class="scenario-option">A. VPC Peering</div>
+            <div class="scenario-option">B. Transit Gateway peering</div>
+            <div class="scenario-option">C. AWS PrivateLink (Interface Endpoint / Endpoint Service)</div>
+            <div class="scenario-option">D. Direct Connect</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d59q13', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d59q13"><strong>Correct answer: C.</strong> PrivateLink never merges route tables or CIDRs, so it works with fully overlapping ranges. Peering and TGW both require non-overlapping ranges.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q14.</strong> What is the standard pattern for forcing all internet-bound traffic from multiple VPCs through a single AWS Network Firewall?</p>
+          <div class="scenario-options" id="opts-d59q14">
+            <div class="scenario-option">A. Deploy Network Firewall independently in every VPC</div>
+            <div class="scenario-option">B. Centralized inspection VPC attached to Transit Gateway, with spoke route tables directing 0.0.0.0/0 to the TGW</div>
+            <div class="scenario-option">C. Use only NACLs on each spoke subnet</div>
+            <div class="scenario-option">D. Network Firewall cannot inspect cross-VPC traffic</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d59q14', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d59q14"><strong>Correct answer: B.</strong> The centralized inspection VPC pattern gives one policy, one place to add rules, and one bill. Option A is not wrong about inspection — it is wrong about cost and policy drift.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q15.</strong> When should you choose PrivateLink over Transit Gateway for cross-account connectivity?</p>
+          <div class="scenario-options" id="opts-d59q15">
+            <div class="scenario-option">A. When you need full bidirectional network-level reachability between VPCs</div>
+            <div class="scenario-option">B. When exposing a single specific service to many consumers without merging networks or worrying about CIDR overlap</div>
+            <div class="scenario-option">C. When connecting on-prem to AWS</div>
+            <div class="scenario-option">D. Never — TGW always replaces PrivateLink</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d59q15', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d59q15"><strong>Correct answer: B.</strong> PrivateLink is service-level exposure; TGW is network-level connectivity for broad multi-VPC and on-prem routing. Option A describes the TGW case, not the PrivateLink case.</div>
+        </div>
+      </section>
+
+      <section class="doc-section" id="preview">
+        <h2 class="section-heading">Preview — Domain 2</h2>
+        <div class="card card-purple">
+          <p>Everything above assumed the failure was a governance or routing decision made at design time — a policy attached to the wrong OU, a route table that propagated too much, a VPC that should have been a PrivateLink endpoint. Domain 2 asks a harder question: what happens when the design is correct and the system still fails? The open question is whether your recovery mechanisms have ever actually been exercised, or whether they are assumptions dressed up as architecture.</p>
+          <p>Day 60 turns to the Domain 2 tags from the same Day 58 analysis — compute, databases, and the SRE and DR cluster. Expect the distractors to look different there. Domain 1 wrong answers tend to be the right service applied at the wrong granularity; Domain 2 wrong answers tend to be the right pattern applied at the wrong RTO, or a recovery mechanism that was never tested. Bring the same discipline: name the tempting option, name the tell, and write the sentence that explains why it is wrong.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="sources">
+        <h2 class="section-heading">Sources</h2>
+        <div class="card">
+          <ul class="source-list">
+            <li><a href="https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_policies_scps.html" target="_blank">AWS Organizations — Service control policies (SCPs)</a></li>
+            <li><a href="https://docs.aws.amazon.com/controltower/latest/userguide/guardrails.html" target="_blank">AWS Control Tower — Guardrails reference</a></li>
+            <li><a href="https://docs.aws.amazon.com/vpc/latest/tgw/tgw-route-tables.html" target="_blank">Amazon VPC — Transit Gateway route tables</a></li>
+            <li><a href="https://docs.aws.amazon.com/whitepapers/latest/hybrid-connectivity/hybrid-connectivity.html" target="_blank">AWS Whitepaper — Hybrid connectivity</a></li>
+            <li><a href="https://docs.aws.amazon.com/whitepapers/latest/building-scalable-secure-multi-vpc-network-infrastructure/aws-privatelink.html" target="_blank">AWS Whitepaper — Building a scalable and secure multi-VPC network infrastructure</a></li>
+          </ul>
+        </div>
       </section>
       <div class="day-nav">
         <a href="day-058.html">&larr; Day 58: Mock Exam 1 Distractor Analysis &amp; Weak Domain Review</a>

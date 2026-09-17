@@ -104,7 +104,7 @@
         <span class="pill pill-green">Phase 3: SRE Observability, Resilience &amp; DR</span>
       </div>
       <h1 class="hero-title">CloudWatch Metrics, Alarms &amp; Composite Alarms</h1>
-      <div class="reading-meta">&#128337; ~3 min read &middot; 4 services covered</div>
+      <div class="reading-meta">&#128337; ~58 min read &middot; 4 services covered</div>
       <div class="services-grid">
         <span class="service-tag">CloudWatch Metrics</span>
         <span class="service-tag">Alarms</span>
@@ -112,31 +112,350 @@
         <span class="service-tag">Anomaly Detection</span>
       </div>
       <div id="tracker"></div>
-      <section class="doc-section">
-        <h2 class="section-heading">Today's Concept</h2>
+
+      <section class="doc-section" id="recap">
+        <h2 class="section-heading">Recap: From Data Selection to Signal Selection</h2>
         <div class="card card-accent">
-          <p>CloudWatch alarms trigger on metric thresholds (static or ML-based anomaly detection bands); composite alarms combine multiple alarm states with AND/OR logic to reduce alert noise and only page when a true incident pattern occurs (e.g. high latency AND high error rate together).</p>
-        </div>
-        <h3 class="sub-heading">Hands-on Lab / Practical Action (45 min)</h3>
-        <div class="card">
-          <p>Build a composite alarm that only fires when both high latency and elevated 5xx error rate alarms are ALARM simultaneously, suppressing single-metric noise.</p>
+          <p>Day 28 closed Phase 2 by locking in the database and storage selection matrix — the relational vs key-value vs cache fork, the consistency model trade-offs that sit behind it, and the global replication decision between Aurora Global DB and DynamoDB Global Tables. That synthesis was deliberately a selection exercise: given a stated latency, scale, and consistency requirement, name the data service and defend it. Phase 2 as a whole was built the same way. Compute, containers, and data stores were all presented as a set of forks with a defensible answer on each side, and the exam rewards candidates who can walk into a scenario and eliminate options on architecture grounds rather than on service trivia.</p>
+          <p>Phase 3 extends that same selection discipline into a domain where the forks are harder to see, because the artifacts are not resources you provision but signals you interpret. Observability, resilience, and disaster recovery all hinge on a prior question: what does the system look like when it is healthy, and what does it look like when it is not? CloudWatch metrics and alarms are the first layer of that answer, and they are the layer every other Phase 3 topic — canaries, tracing, chaos experiments, DR failover — ultimately reports into. The selection matrix you built yesterday chose what to store. Today's matrix chooses what to watch.</p>
         </div>
       </section>
-      <section class="doc-section">
-        <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
-        
-      <div class="scenario-card">
-        <p class="scenario-question"><strong>Q1.</strong> On-call engineers are fatigued by alarms firing on isolated latency spikes that self-resolve. What reduces noise while still catching real incidents?</p>
-        <div class="scenario-options" id="opts-d29q0">
+
+      <section class="doc-section" id="why-on-exam">
+        <h2 class="section-heading">1. Why This Is on the Exam</h2>
+        <p>CloudWatch alarms appear on SAP-C02 in two distinct guises, and confusing them is the most common way candidates lose points on otherwise straightforward questions. The first guise is as a component inside a larger architecture: an alarm that triggers an Auto Scaling policy, an alarm that acts as a stop condition on a Fault Injection Service experiment, an alarm that drives a Route 53 health check or a Lambda-based remediation. In those questions the alarm is not the subject of the question — it is a required piece of plumbing, and the exam is testing whether you know that the alarm must exist and what it must be attached to. The second guise is as the subject itself: a scenario describes alert fatigue, a noisy pager, or a monitoring gap, and the correct answer is a specific alarm configuration rather than a different service.</p>
+        <p>The reason this topic carries weight is that it sits at the intersection of the Resilient Architectures domain and the Operational Excellence concerns that thread through every scenario. A design that has no alarms is not merely incomplete; it cannot satisfy a stated RTO, because nothing detects the failure that starts the recovery clock. A design that has too many alarms is also wrong, because the exam increasingly tests whether you understand that an alerting system which pages on every transient spike is functionally equivalent to one that pages on nothing — the on-call engineer stops trusting it. Composite alarms and anomaly detection bands exist precisely to answer that second failure mode, and they are the two features most likely to appear as the distinguishing detail between two otherwise plausible answers.</p>
+        <p>There is also a quieter reason. CloudWatch is the default integration point for nearly every other AWS service's health signal, which means a question about ECS task health, RDS storage, Lambda error rates, or NAT Gateway port exhaustion is often really a question about whether you know which metric to alarm on and at what granularity. The exam does not expect you to memorize every metric name, but it does expect you to know the shape of the answer: which namespace, which statistic, which period, and which of the alarm states you would act on.</p>
+      </section>
+
+      <section class="doc-section" id="mechanism">
+        <h2 class="section-heading">2. How Metrics and Alarms Actually Work</h2>
+        <p>A CloudWatch metric is a time-ordered series of data points identified by a namespace, a metric name, and a set of dimensions. Dimensions are the part that trips people up, because they are not labels in the Kubernetes sense — they are part of the metric's identity. A metric published as <code>AWS/EC2</code> with dimension <code>InstanceId=i-abc123</code> is a different metric from the same name with dimension <code>InstanceId=i-def456</code>, and there is no query that aggregates across them unless you explicitly ask for it. This matters for alarms because an alarm is bound to exactly one metric (or one metric math expression), and the dimensions you choose determine whether that alarm watches a single instance, a single target group, or an aggregate.</p>
+        <p>Data points arrive at a resolution determined by the publisher. Most AWS service metrics are standard resolution, published at one-minute granularity, and retained for fifteen months with progressively coarser aggregation as they age. Custom metrics can be published at high resolution, down to one-second granularity, and high-resolution alarms can evaluate on those shorter periods. The retention and resolution rules are worth internalizing because they bound what an alarm can possibly detect: an alarm whose period is five minutes cannot react to a thirty-second spike, no matter how the threshold is set, because the spike is averaged into the five-minute datapoint before the alarm ever sees it.</p>
+        <p>An alarm evaluates a statistic over a period against a threshold, and it does so repeatedly over a number of evaluation periods. The <code>DatapointsToAlarm</code> and <code>EvaluationPeriods</code> pair is the mechanism that controls sensitivity: with three evaluation periods and a datapoints-to-alarm of three, the metric must breach on three consecutive periods before the alarm transitions to ALARM. With three evaluation periods and a datapoints-to-alarm of one, a single breaching period is enough. This is the knob that most candidates overlook, and it is frequently the difference between a design that flaps and one that does not.</p>
+        <p>Alarms have three states, not two. OK and ALARM are the obvious pair, but INSUFFICIENT_DATA is a real state that occurs when the metric has no datapoints for the evaluation window — a newly created alarm, a metric that stopped publishing because the resource was terminated, or a sparse custom metric. Treating INSUFFICIENT_DATA as equivalent to OK is a genuine production hazard, because a resource that has stopped reporting entirely will sit in INSUFFICIENT_DATA and never page anyone. The <code>TreatMissingData</code> setting exists to let you choose whether missing data is treated as breaching, not-breaching, or ignored, and the correct choice depends on whether absence of data means "healthy and idle" or "dead."</p>
+      </section>
+
+      <section class="doc-section" id="decision-boundary">
+        <h2 class="section-heading">3. The Core Decision Boundary: Single-Metric vs Composite</h2>
+        <p>The fork that most scenario questions hinge on is whether a single metric threshold is sufficient to describe the condition you actually care about, or whether the condition is inherently a conjunction of signals. A single-metric alarm answers a narrow question: is this one number outside its expected range? That is the right tool when the metric is a direct proxy for the thing you care about — disk space consumed, queue depth, replication lag. It is the wrong tool when the thing you care about is a user-visible symptom that can be caused by several different underlying conditions, because then any single metric will either fire on conditions that are not actually user-impacting, or fail to fire on conditions that are.</p>
+        <p>Composite alarms exist to express that conjunction. A composite alarm takes a rule expression over the states of other alarms — <code>ALARM(latencyAlarm) AND ALARM(errorRateAlarm)</code> — and enters ALARM only when the expression evaluates true. The important architectural property is that composite alarms do not evaluate metrics at all; they evaluate alarm states. That means they compose recursively, and it also means they inherit the evaluation semantics of their children, including the children's own periods and datapoints-to-alarm settings. A composite alarm cannot be more sensitive than the alarms feeding it.</p>
+        <p>The practical consequence is that composite alarms are the correct answer whenever a scenario describes alert fatigue, a noisy pager, or a requirement to page only on genuine incidents. They are also the correct answer when a scenario describes a condition that is only meaningful in combination — high latency alone might be a slow dependency, but high latency together with elevated error rate is a service degradation. The table below lays out the boundary.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Condition you are describing</th><th>Right tool</th><th>Why</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>A single resource crossing a hard limit (disk full, queue depth, replication lag)</td><td>Single-metric alarm with a static threshold</td><td>The metric is a direct proxy; no correlation needed</td></tr>
+              <tr><td>A user-visible symptom with multiple possible causes</td><td>Composite alarm over the candidate cause alarms</td><td>Expresses the conjunction; suppresses single-cause noise</td></tr>
+              <tr><td>A metric whose normal range varies by time of day or traffic pattern</td><td>Anomaly detection band alarm</td><td>Static thresholds cannot track a moving baseline</td></tr>
+              <tr><td>A condition that should page only if it persists</td><td>Single-metric alarm with multiple evaluation periods</td><td>Persistence is a temporal property, not a correlation</td></tr>
+              <tr><td>A condition that should page only if two independent subsystems agree</td><td>Composite alarm with AND</td><td>Independent signals reduce false-positive rate multiplicatively</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="doc-section" id="config-tradeoffs">
+        <h2 class="section-heading">4. Configuration Modes and Their Tradeoffs</h2>
+        <p>Once you have decided what condition you are describing, the configuration knobs determine how faithfully the alarm tracks it. The first and most consequential choice is the statistic. Average is the default and the most misleading for latency, because a service where ninety-nine percent of requests complete in fifty milliseconds and one percent take ten seconds has an average that looks healthy. Maximum catches the tail but is hypersensitive to a single outlier. Percentile statistics — p90, p99, p99.9 — are the correct choice for latency SLOs, and the exam expects you to reach for them when a scenario mentions tail latency or a small fraction of slow requests. The tradeoff is that percentiles require enough datapoints to be statistically meaningful, so they are a poor fit for low-traffic metrics.</p>
+        <p>The second choice is the period, which sets the resolution of the evaluation. A shorter period detects faster but is noisier, because a single bad minute can breach a one-minute alarm. A longer period is smoother but introduces detection latency proportional to its length. The interaction with the statistic matters: a one-minute maximum is far more volatile than a five-minute average, and choosing both a short period and a maximum statistic produces an alarm that will flap on any transient blip. The usual production pattern is to pair a percentile statistic with a period long enough to be stable, then use evaluation periods to require persistence.</p>
+        <p>The third choice is the threshold type. Static thresholds are simple, auditable, and correct when the metric has a known acceptable range. Anomaly detection bands replace the static number with a model that learns the metric's normal pattern — including daily and weekly seasonality — and alarms when the metric falls outside a configurable number of standard deviations from the predicted band. The tradeoff is legibility: a static threshold can be explained in a runbook in one sentence, while an anomaly band's behavior depends on training data and can be difficult to reason about during an incident. Anomaly detection is the right answer when the metric's baseline genuinely moves with traffic, and the wrong answer when the metric has a hard physical limit that a static threshold expresses more clearly.</p>
+        <p>The fourth choice is the action. An alarm can notify an SNS topic, trigger an Auto Scaling policy, stop or start an instance, or invoke an SSM automation. The design question is whether the action is a notification or a remediation. Remediation actions should be paired with a notification, because an automated action that fires silently is indistinguishable from a bug. And any alarm that drives an automated remediation should have a corresponding alarm on the remediation's own success, or you will eventually discover that your self-healing system has been failing to heal for weeks.</p>
+      </section>
+
+      <section class="doc-section" id="sizing-limits">
+        <h2 class="section-heading">5. Sizing, Limits and Quotas</h2>
+        <p>The numbers that matter for this topic are mostly about resolution and retention, because those bound what an alarm can detect. Standard-resolution metrics are published at one-minute granularity. High-resolution custom metrics can be published at one-second granularity, and alarms on those metrics can evaluate with periods as short as ten seconds or thirty seconds. The practical implication is that sub-minute detection requires a custom metric — you cannot get a ten-second alarm on a standard EC2 metric no matter how you configure it.</p>
+        <p>Retention follows a tiered schedule. Datapoints at one-minute resolution are retained for fifteen days, five-minute datapoints for sixty-three days, one-hour datapoints for four hundred and fifty-five days, and beyond that the data is aggregated further. This matters for capacity planning and for post-incident review: if you want to compare this month's latency against the same month last year, you are looking at hourly aggregates, not the original minute-level data.</p>
+        <p>Alarm evaluation has its own limits. Each alarm evaluates one metric or one metric math expression, and metric math lets you combine up to a bounded number of metrics into a derived series — useful for ratios like error rate as a percentage of total requests, which is a far better alarm target than raw error count. Composite alarms can reference other composite alarms, but the rule expression has a bounded size, so deeply nested hierarchies eventually hit a ceiling. In practice the useful depth is two or three levels: leaf alarms on individual metrics, a middle layer expressing service-level conditions, and a top layer expressing customer-visible impact.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Property</th><th>Value</th><th>Consequence for alarm design</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Standard metric resolution</td><td>1 minute</td><td>Fastest standard alarm period is 60s</td></tr>
+              <tr><td>High-resolution custom metric resolution</td><td>1 second</td><td>Enables 10s/30s alarm periods</td></tr>
+              <tr><td>1-minute datapoint retention</td><td>15 days</td><td>Recent-incident forensics only</td></tr>
+              <tr><td>5-minute datapoint retention</td><td>63 days</td><td>Quarterly trend comparison</td></tr>
+              <tr><td>1-hour datapoint retention</td><td>455 days</td><td>Year-over-year comparison</td></tr>
+              <tr><td>Alarm states</td><td>OK, ALARM, INSUFFICIENT_DATA</td><td>Missing data is a distinct state, not OK</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="doc-section" id="failure-modes">
+        <h2 class="section-heading">6. Failure Modes and What They Look Like in Production</h2>
+        <p>The first failure mode is the alarm that never fires because the metric stopped publishing. This is the INSUFFICIENT_DATA trap, and it is the most dangerous because it is silent. A Lambda function that has been deleted, an EC2 instance that has been terminated, a custom metric publisher that has crashed — all of these produce a metric that simply stops, and an alarm with the default missing-data treatment will sit in INSUFFICIENT_DATA indefinitely without notifying anyone. The symptom is a monitoring gap discovered during an incident, and the first diagnostic move is to check the alarm's state history rather than its current state. The fix is to set <code>TreatMissingData</code> to <code>breaching</code> for metrics where absence means failure, and to add a separate alarm on the publisher's own health.</p>
+        <p>The second failure mode is the flapping alarm. This presents as a pager that fires and clears repeatedly over a short window, and it is almost always a configuration problem rather than a real instability. The usual causes are a period too short for the metric's natural variance, a maximum statistic on a noisy metric, or a threshold set at the edge of the normal range. The diagnostic move is to pull the metric's history over the last week and look at where the threshold sits relative to the distribution — if the threshold is inside the normal band, the alarm is measuring noise. The fix is to widen the period, switch to a percentile statistic, or require multiple evaluation periods.</p>
+        <p>The third failure mode is the alarm that fires correctly but on the wrong thing. This happens when the alarm watches an infrastructure metric that is a poor proxy for the user-visible symptom. CPU utilization on a fleet behind a load balancer is the classic example: the fleet can be at thirty percent CPU while every request is failing, because the failure is in a downstream dependency. The symptom is an incident where the alarms that fired were not the alarms that mattered, and the diagnostic move is to trace backward from the user-visible symptom to the metric that would have detected it earliest. The fix is usually to add a composite alarm at the service level rather than to remove the infrastructure alarms.</p>
+        <p>The fourth failure mode is alarm fatigue itself, which is a failure mode of the monitoring system rather than of the application. It presents as engineers acknowledging pages without investigating, or muting alarms during incidents. It is caused by a pager whose signal-to-noise ratio has degraded, and the fix is structural: composite alarms to express conjunctions, anomaly detection for metrics with moving baselines, and a periodic review of which alarms actually resulted in action. An alarm that has never once led to a human doing something is a candidate for deletion or for demotion to a dashboard.</p>
+      </section>
+
+      <section class="doc-section" id="sre-angle">
+        <h2 class="section-heading">7. The Operational and SRE Angle</h2>
+        <p>From an SRE perspective, alarms are the mechanism that converts an SLO into an actionable signal. An SLO is a target — ninety-nine point nine percent of requests succeed within three hundred milliseconds over a thirty-day window — and the error budget is the amount of failure that target permits. The alarm's job is to fire when the burn rate against that budget is high enough that a human needs to intervene before the budget is exhausted. This framing produces a different alarm design than the infrastructure-centric one: instead of alarming on CPU, you alarm on the ratio of slow requests to total requests, and you alarm on the rate at which the error budget is being consumed rather than on the absolute error count.</p>
+        <p>Multi-window burn-rate alerting is the pattern that follows from this. A fast-burn alert uses a short window and a high burn rate to catch acute outages — the kind that would exhaust a monthly budget in hours. A slow-burn alert uses a longer window and a lower burn rate to catch chronic degradation that would exhaust the budget over days. Both are needed, because a single window either misses slow burns or pages too often on fast ones. In CloudWatch terms this is implemented with metric math over the request and error counts, producing a burn-rate series that a static threshold alarm can watch.</p>
+        <p>The runbook shape follows directly. Every alarm that pages a human should have a runbook entry that names the metric, the threshold, the likely causes in order of probability, and the first diagnostic command for each. The runbook should also state what the alarm does not tell you — an alarm on elevated error rate does not distinguish between a code defect and a dependency outage, and the runbook should say so explicitly so the responder does not waste the first five minutes assuming the wrong cause. Alarms whose runbook entry is empty are, in practice, alarms that will be muted during the next incident.</p>
+        <p>Finally, the alarm configuration itself should be version-controlled. Alarms created by hand in the console drift, and the drift is invisible until an incident. Defining alarms in CloudFormation, Terraform, or CDK means the threshold, the period, and the missing-data treatment are all reviewable in a pull request, and it means a deleted alarm is restored by the next deployment rather than discovered missing during an outage.</p>
+      </section>
+
+      <section class="doc-section" id="gotchas">
+        <h2 class="section-heading">8. Edge Cases and Exam Gotchas</h2>
+        <p>The single most-tested gotcha is that composite alarms evaluate alarm states, not metrics. A question that asks you to reduce alert noise by combining two conditions is pointing at a composite alarm; a question that asks you to alarm on a ratio of two metrics is pointing at metric math on a single alarm. These are different features and the exam distinguishes them. If the scenario describes two independent conditions that must both be true, it is composite. If it describes one derived number, it is metric math.</p>
+        <p>The second gotcha is the INSUFFICIENT_DATA state. Any question that describes a resource being terminated, a publisher failing, or a metric going silent is testing whether you know that the default behavior does not page. The correct answer is almost always to set the missing-data treatment explicitly, and to add an alarm on the publisher itself.</p>
+        <p>The third gotcha is the statistic. A scenario that mentions a small percentage of users experiencing slow responses is describing a tail-latency problem, and the correct statistic is a percentile, not an average. A scenario that mentions a hard capacity limit is describing a maximum or a sum, not an average. The exam rarely names the statistic in the question; it describes the symptom and expects you to infer it.</p>
+        <p>The fourth gotcha is the relationship between alarms and automated actions. An alarm that triggers an Auto Scaling policy is not the same as an alarm that notifies a human, and a scenario that requires both will have an answer that configures both. Similarly, an alarm used as a stop condition on a Fault Injection Service experiment must be a real alarm with a real threshold — the exam will sometimes offer a plausible-sounding but non-existent "stop condition" resource as a distractor.</p>
+        <p>The fifth gotcha is the difference between an alarm and a health check. Route 53 health checks are a separate mechanism with their own evaluation logic, and while an alarm can be used as a health check input, they are not interchangeable. A scenario about DNS failover is asking about health checks; a scenario about paging a human is asking about alarms.</p>
+      </section>
+
+      <section class="doc-section" id="vs-comparison">
+        <h2 class="section-heading">9. This vs. the Services It Gets Confused With</h2>
+        <p>CloudWatch alarms are frequently confused with three other mechanisms, and the exam exploits the confusion. The first is CloudWatch Logs metric filters, which derive a metric from log events rather than from a published metric. A metric filter is the right tool when the signal you care about only exists in log content — a specific error string, a stack trace, a business event — and the resulting metric can then be alarmed on normally. The distinction is that a metric filter is a metric source, not an alarm type.</p>
+        <p>The second is EventBridge rules, which react to events rather than to metric thresholds. An EventBridge rule is the right tool for reacting to a discrete occurrence — an EC2 instance state change, an API call recorded by CloudTrail, a scheduled tick — while an alarm is the right tool for reacting to a continuous measurement crossing a boundary. A scenario that describes reacting to a state change is asking about EventBridge; a scenario that describes reacting to a threshold breach is asking about alarms.</p>
+        <p>The third is AWS Health and Trusted Advisor, which surface account-level and best-practice findings rather than metric conditions. These are complementary rather than competing: a Trusted Advisor check might tell you that an alarm is missing, but it does not replace the alarm.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Mechanism</th><th>Input</th><th>Pick it when…</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>CloudWatch alarm</td><td>A metric or metric math expression</td><td>The condition is a measurement crossing a boundary</td></tr>
+              <tr><td>Composite alarm</td><td>The states of other alarms</td><td>The condition is a conjunction of independent signals</td></tr>
+              <tr><td>Logs metric filter</td><td>Log event content</td><td>The signal only exists in log text</td></tr>
+              <tr><td>EventBridge rule</td><td>An event</td><td>The condition is a discrete occurrence, not a level</td></tr>
+              <tr><td>Route 53 health check</td><td>Endpoint reachability</td><td>The condition drives DNS failover</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="doc-section" id="lab">
+        <h2 class="section-heading">Hands-on Lab: A Composite Alarm That Pages Only on Real Incidents</h2>
+        <div class="card card-green">
+          <p>The goal of this lab is to build the alerting layer for a small service and then deliberately make it noisy, so you can see the difference a composite alarm makes. You will need an AWS account with permission to create CloudWatch alarms, SNS topics, and a Lambda function. Budget roughly forty-five minutes.</p>
+          <p><strong>Step 1 — Create the notification channel.</strong> Create an SNS topic named <code>svc-alerts</code> and subscribe your email to it. Confirm the subscription. Every alarm you create in this lab will publish to this topic, so you have a single place to observe what fires.</p>
+          <p><strong>Step 2 — Produce a metric worth alarming on.</strong> Deploy a small Lambda function behind a function URL that returns a 200 response after a configurable delay, and have it emit a custom metric in the <code>Lab/Service</code> namespace with two dimensions: <code>Service=checkout</code> and <code>Stage=prod</code>. Publish two metrics: <code>RequestLatency</code> in milliseconds and <code>ErrorCount</code> as a count. Use high-resolution publishing so you can evaluate on short periods.</p>
+          <p><strong>Step 3 — Build the naive alarms.</strong> Create a latency alarm with a static threshold of 300 milliseconds on the average statistic, a one-minute period, and one evaluation period. Create an error alarm with a threshold of one error, same period and evaluation settings. Point both at the SNS topic. Now drive traffic that produces occasional slow requests but no errors, and watch the latency alarm flap. This is the failure mode the composite alarm exists to fix.</p>
+          <p><strong>Step 4 — Build the composite alarm.</strong> Create a composite alarm whose rule expression is <code>ALARM("latency-alarm") AND ALARM("error-alarm")</code>. Point it at the same SNS topic, and remove the SNS action from the two child alarms so only the composite pages. Re-run the same traffic pattern. The composite should stay silent through the latency-only spikes.</p>
+          <p><strong>Step 5 — Verify the composite fires on a real incident.</strong> Now drive traffic that produces both elevated latency and errors simultaneously. Confirm the composite transitions to ALARM and that the notification arrives. Check the composite's state history in the console to see the child alarm transitions that led to it.</p>
+          <p><strong>Step 6 — Test the missing-data behavior.</strong> Delete the Lambda function, or stop it from publishing, and observe what happens to both child alarms. With the default missing-data treatment they will move to INSUFFICIENT_DATA and the composite will not fire. Change <code>TreatMissingData</code> to <code>breaching</code> on the error alarm and confirm the composite now fires when the publisher goes silent. This is the single most valuable thing to internalize from the lab.</p>
+          <p><strong>Step 7 — Add an anomaly detection band.</strong> Replace the static latency threshold with an anomaly detection band on the same metric, and drive a traffic pattern with a clear daily shape. Observe how the band tracks the baseline rather than sitting at a fixed number, and note in your own words when you would prefer the band and when you would prefer the static threshold.</p>
+          <p><strong>Step 8 — Write the runbook entry.</strong> For the composite alarm, write a short runbook entry naming the metric, the threshold, the two child conditions, the three most likely causes, and the first diagnostic command for each. Then delete the alarms and recreate them from a CloudFormation template so the configuration is version-controlled.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="quiz">
+        <h2 class="section-heading">Scenario Question Drills</h2>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q1.</strong> On-call engineers are fatigued by alarms firing on isolated latency spikes that self-resolve. What reduces noise while still catching real incidents?</p>
+          <div class="scenario-options" id="opts-d29q1">
             <div class="scenario-option">A. Delete the latency alarm</div>
             <div class="scenario-option">B. A composite alarm requiring both the latency alarm AND the error-rate alarm to be in ALARM state</div>
             <div class="scenario-option">C. Lower the alarm threshold</div>
             <div class="scenario-option">D. Increase the evaluation period to 24 hours</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d29q1', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d29q1"><strong>Correct answer: B.</strong> Composite alarms let you require correlated signals before paging, cutting single-metric false positives while preserving sensitivity to genuine multi-symptom incidents.</div>
         </div>
-        <button class="scenario-reveal-btn" onclick="revealAnswer('d29q0', 1)">Reveal Answer</button>
-        <div class="scenario-explanation" id="exp-d29q0"><strong>Correct answer: B.</strong> Composite alarms let you require correlated signals before paging, cutting single-metric false positives while preserving sensitivity to genuine multi-symptom incidents.</div>
-      </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q2.</strong> A team wants to alarm on the percentage of requests that fail, derived from two separate metrics: total requests and error count. What should they configure?</p>
+          <div class="scenario-options" id="opts-d29q2">
+            <div class="scenario-option">A. A composite alarm combining the two metrics</div>
+            <div class="scenario-option">B. A single alarm using a metric math expression that divides errors by total requests</div>
+            <div class="scenario-option">C. Two independent alarms with the same threshold</div>
+            <div class="scenario-option">D. A CloudWatch Logs metric filter</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d29q2', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d29q2"><strong>Correct answer: B.</strong> Composite alarms evaluate alarm states, not metrics. A derived ratio is a single metric produced by metric math, and it is alarmed on with one alarm.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q3.</strong> An alarm on a custom metric has been sitting in INSUFFICIENT_DATA for three days and no one was paged. The metric's publisher crashed. What should have been configured?</p>
+          <div class="scenario-options" id="opts-d29q3">
+            <div class="scenario-option">A. A shorter alarm period</div>
+            <div class="scenario-option">B. TreatMissingData set to breaching, plus an alarm on the publisher's own health</div>
+            <div class="scenario-option">C. A higher threshold</div>
+            <div class="scenario-option">D. A composite alarm with OR logic</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d29q3', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d29q3"><strong>Correct answer: B.</strong> INSUFFICIENT_DATA is a distinct state and does not page by default. Treating missing data as breaching, plus monitoring the publisher, closes the silent-gap failure mode.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q4.</strong> A latency SLO requires that 99% of requests complete within 300ms. Which statistic should the alarm use?</p>
+          <div class="scenario-options" id="opts-d29q4">
+            <div class="scenario-option">A. Average</div>
+            <div class="scenario-option">B. Maximum</div>
+            <div class="scenario-option">C. p99</div>
+            <div class="scenario-option">D. Sum</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d29q4', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d29q4"><strong>Correct answer: C.</strong> An SLO expressed as a percentile must be alarmed on with the matching percentile statistic. Average hides the tail; maximum is hypersensitive to a single outlier.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q5.</strong> A metric's normal value varies significantly by time of day, and a static threshold either fires during peak hours or misses real problems overnight. What is the appropriate alarm configuration?</p>
+          <div class="scenario-options" id="opts-d29q5">
+            <div class="scenario-option">A. Two static alarms, one for peak and one for off-peak</div>
+            <div class="scenario-option">B. An anomaly detection band alarm</div>
+            <div class="scenario-option">C. A composite alarm with OR logic</div>
+            <div class="scenario-option">D. A metric filter on the logs</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d29q5', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d29q5"><strong>Correct answer: B.</strong> Anomaly detection learns the metric's seasonal baseline and alarms on deviation from the predicted band, which a static threshold cannot track.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q6.</strong> A team needs an alarm that fires only if a metric breaches its threshold on three consecutive one-minute periods. Which settings achieve this?</p>
+          <div class="scenario-options" id="opts-d29q6">
+            <div class="scenario-option">A. Period 60s, EvaluationPeriods 1, DatapointsToAlarm 1</div>
+            <div class="scenario-option">B. Period 60s, EvaluationPeriods 3, DatapointsToAlarm 3</div>
+            <div class="scenario-option">C. Period 180s, EvaluationPeriods 1, DatapointsToAlarm 1</div>
+            <div class="scenario-option">D. Period 60s, EvaluationPeriods 3, DatapointsToAlarm 1</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d29q6', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d29q6"><strong>Correct answer: B.</strong> EvaluationPeriods sets the window and DatapointsToAlarm sets how many of those periods must breach. Requiring all three gives the consecutive-breach behavior.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q7.</strong> A service must be detected as degraded within ten seconds of the condition occurring. What is required?</p>
+          <div class="scenario-options" id="opts-d29q7">
+            <div class="scenario-option">A. A standard-resolution metric with a 10-second period</div>
+            <div class="scenario-option">B. A high-resolution custom metric with a 10-second alarm period</div>
+            <div class="scenario-option">C. A composite alarm over two standard alarms</div>
+            <div class="scenario-option">D. A CloudWatch Logs metric filter</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d29q7', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d29q7"><strong>Correct answer: B.</strong> Standard metrics are published at one-minute granularity, so sub-minute detection requires a high-resolution custom metric and a matching short alarm period.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q8.</strong> An alarm fires correctly but the on-call engineer finds the fleet at 30% CPU with every request failing. What does this indicate about the alarm design?</p>
+          <div class="scenario-options" id="opts-d29q8">
+            <div class="scenario-option">A. The threshold is too low</div>
+            <div class="scenario-option">B. The alarm watches an infrastructure metric that is a poor proxy for the user-visible symptom</div>
+            <div class="scenario-option">C. The period is too short</div>
+            <div class="scenario-option">D. The alarm should be deleted</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d29q8', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d29q8"><strong>Correct answer: B.</strong> CPU utilization is not a proxy for request success. The fix is to add a service-level alarm on the user-visible symptom, not to remove the infrastructure alarm.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q9.</strong> A team wants to react automatically when an EC2 instance transitions to the stopped state. Which mechanism is appropriate?</p>
+          <div class="scenario-options" id="opts-d29q9">
+            <div class="scenario-option">A. A CloudWatch alarm on the instance's CPU metric</div>
+            <div class="scenario-option">B. An EventBridge rule matching the instance state-change event</div>
+            <div class="scenario-option">C. A composite alarm</div>
+            <div class="scenario-option">D. A CloudWatch Logs metric filter</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d29q9', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d29q9"><strong>Correct answer: B.</strong> A state change is a discrete occurrence, which is EventBridge's domain. Alarms react to continuous measurements crossing a boundary.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q10.</strong> A team wants to alarm on occurrences of a specific error string that appears only in application log output. What should they configure?</p>
+          <div class="scenario-options" id="opts-d29q10">
+            <div class="scenario-option">A. A composite alarm over the application's existing alarms</div>
+            <div class="scenario-option">B. A CloudWatch Logs metric filter that produces a metric, then an alarm on that metric</div>
+            <div class="scenario-option">C. An anomaly detection band on the Lambda error metric</div>
+            <div class="scenario-option">D. An EventBridge rule on the log group</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d29q10', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d29q10"><strong>Correct answer: B.</strong> A metric filter derives a metric from log content; the alarm then watches that derived metric normally. The filter is a metric source, not an alarm type.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q11.</strong> A composite alarm references two child alarms, but it never fires even when both children are in ALARM. What is the most likely cause?</p>
+          <div class="scenario-options" id="opts-d29q11">
+            <div class="scenario-option">A. Composite alarms cannot reference more than one child</div>
+            <div class="scenario-option">B. The rule expression uses AND but the scenario requires OR, or the children are not actually both in ALARM at the same evaluation</div>
+            <div class="scenario-option">C. Composite alarms require high-resolution metrics</div>
+            <div class="scenario-option">D. The composite alarm needs its own SNS topic</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d29q11', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d29q11"><strong>Correct answer: B.</strong> Composite alarms evaluate the rule expression over child states at evaluation time. If the children never overlap in ALARM, an AND expression will never be true.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q12.</strong> An alarm drives an automated remediation that restarts a service. What should accompany it?</p>
+          <div class="scenario-options" id="opts-d29q12">
+            <div class="scenario-option">A. Nothing — automated remediation should be silent</div>
+            <div class="scenario-option">B. A notification action, plus an alarm on the remediation's own success</div>
+            <div class="scenario-option">C. A second identical remediation action</div>
+            <div class="scenario-option">D. A longer evaluation period</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d29q12', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d29q12"><strong>Correct answer: B.</strong> A silent automated action is indistinguishable from a bug. Pair remediation with notification and monitor whether the remediation actually worked.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q13.</strong> A team wants to compare this month's p99 latency against the same month last year. What data will they actually be looking at?</p>
+          <div class="scenario-options" id="opts-d29q13">
+            <div class="scenario-option">A. One-minute datapoints, retained for fifteen months</div>
+            <div class="scenario-option">B. One-hour aggregated datapoints, since one-minute data is retained for only fifteen days</div>
+            <div class="scenario-option">C. Raw high-resolution datapoints</div>
+            <div class="scenario-option">D. The data is not retained that long</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d29q13', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d29q13"><strong>Correct answer: B.</strong> Retention is tiered: one-minute data for fifteen days, five-minute for sixty-three days, one-hour for four hundred and fifty-five days. Year-over-year comparison uses hourly aggregates.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q14.</strong> A Fault Injection Service experiment must abort automatically if production stability degrades. What does the experiment template require?</p>
+          <div class="scenario-options" id="opts-d29q14">
+            <div class="scenario-option">A. A manual abort button</div>
+            <div class="scenario-option">B. A stop condition referencing a CloudWatch alarm with a real threshold</div>
+            <div class="scenario-option">C. A composite alarm with OR logic</div>
+            <div class="scenario-option">D. A Route 53 health check</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d29q14', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d29q14"><strong>Correct answer: B.</strong> FIS stop conditions are CloudWatch alarms. The alarm must be a real alarm with a real threshold, and it aborts the experiment when it enters ALARM.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q15.</strong> A team wants to page only when the error budget burn rate is high enough to exhaust a monthly budget within hours. Which pattern fits?</p>
+          <div class="scenario-options" id="opts-d29q15">
+            <div class="scenario-option">A. A static alarm on raw error count</div>
+            <div class="scenario-option">B. A fast-burn alert using a short window and a high burn rate, implemented with metric math over request and error counts</div>
+            <div class="scenario-option">C. A composite alarm over CPU and memory alarms</div>
+            <div class="scenario-option">D. An anomaly detection band on the error count</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d29q15', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d29q15"><strong>Correct answer: B.</strong> Burn-rate alerting derives a rate from request and error counts via metric math, then alarms on a short window with a high rate to catch acute outages.</div>
+        </div>
       </section>
+
+      <section class="doc-section" id="preview">
+        <h2 class="section-heading">Peek into Tomorrow</h2>
+        <div class="card card-purple">
+          <p>Everything in today's material shares one assumption: the metric you are alarming on is a faithful proxy for what the user actually experiences. That assumption is doing a lot of work, and it is worth interrogating before moving on. A fleet can report healthy CPU, healthy memory, healthy error rates at the load balancer, and still be serving a broken login page — because the failure is in a JavaScript bundle, a DNS record, a CDN configuration, or a third-party dependency that no internal metric observes. The alarm fires on the signal it was given, and the signal was never the user's experience in the first place.</p>
+          <p>Tomorrow's topic attacks that gap directly, with scripted probes that run from outside your infrastructure and exercise the actual user flow rather than the infrastructure underneath it. The open question today leaves unresolved is where the boundary sits: if synthetic probes can catch what internal metrics miss, why keep the internal metrics at all, and how do the two layers divide responsibility without duplicating each other's alerts? The answer turns out to be about what each layer can and cannot see, and it reframes the alarm design decisions from today as one half of a two-layer monitoring model.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="sources">
+        <h2 class="section-heading">Sources</h2>
+        <div class="card">
+          <ul class="source-list">
+            <li><a href="https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/AlarmThatSendsEmail.html" target="_blank" rel="noopener">Amazon CloudWatch User Guide — Using Amazon CloudWatch alarms</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/Create_Composite_Alarm.html" target="_blank" rel="noopener">Amazon CloudWatch User Guide — Create a composite alarm</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch_Anomaly_Detection.html" target="_blank" rel="noopener">Amazon CloudWatch User Guide — Using CloudWatch anomaly detection</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/cloudwatch_concepts.html" target="_blank" rel="noopener">Amazon CloudWatch User Guide — Metrics concepts (namespaces, dimensions, resolution, retention)</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/using-metric-math.html" target="_blank" rel="noopener">Amazon CloudWatch User Guide — Using metric math</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/MonitoringLogData.html" target="_blank" rel="noopener">Amazon CloudWatch Logs User Guide — Creating metrics from log events using filters</a></li>
+            <li><a href="https://docs.aws.amazon.com/fis/latest/userguide/stop-conditions.html" target="_blank" rel="noopener">AWS Fault Injection Service User Guide — Stop conditions</a></li>
+            <li><a href="https://docs.aws.amazon.com/wellarchitected/latest/reliability-pillar/welcome.html" target="_blank" rel="noopener">AWS Well-Architected Framework — Reliability Pillar</a></li>
+          </ul>
+        </div>
+      </section>
+
       <div class="day-nav">
         <a href="day-028.html">&larr; Day 28: Week Synthesis — Database Selection Matrix &amp; Scenario Drills</a>
         <button class="btn btn-green" onclick="markComplete(29, 'day-030.html')">Mark Day 29 Complete &rarr;</button>

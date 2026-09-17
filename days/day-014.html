@@ -104,7 +104,7 @@
         <span class="pill pill-green">Phase 1: Multi-Account Governance &amp; Networking</span>
       </div>
       <h1 class="hero-title">Week 2 Synthesis &amp; Networking Lab Exam</h1>
-      <div class="reading-meta">&#128337; ~3 min read &middot; 4 services covered</div>
+      <div class="reading-meta">&#128337; ~48 min read &middot; 4 services covered</div>
       <div class="services-grid">
         <span class="service-tag">TGW</span>
         <span class="service-tag">Direct Connect</span>
@@ -112,30 +112,395 @@
         <span class="service-tag">PrivateLink</span>
       </div>
       <div id="tracker"></div>
-      <section class="doc-section">
-        <h2 class="section-heading">Today's Concept</h2>
+      <section class="doc-section" id="recap">
+        <h2 class="section-heading">Week 2 Recap</h2>
         <div class="card card-accent">
-          <p>Consolidate hybrid connectivity: when to use TGW vs peering vs PrivateLink, DX resiliency patterns, and hybrid DNS resolution. This is one of the highest-weight topic clusters on the exam.</p>
-        </div>
-        <h3 class="sub-heading">Hands-on Lab / Practical Action (45 min)</h3>
-        <div class="card">
-          <p>Complete 20 scenario questions on hybrid connectivity, Transit Gateway design, and DNS routing.</p>
+          <p>Week 2 built a single argument in seven pieces: that connectivity in a multi-account estate is a routing problem before it is a bandwidth problem. Day 8 established Transit Gateway as the regional hub that replaces an unmanageable full mesh of VPC peering, with each attachment associated to one TGW route table and propagating routes into others — the mechanism that makes segmentation possible at all. Day 9 then showed the same service behaving differently across regions: TGW peering runs over the AWS backbone, but peering attachments do not propagate routes, so every path must be added statically, and inter-region MTU is capped at 1500 bytes. Day 10 turned the hub into an inspection point, routing spoke egress through a centralized inspection VPC running Network Firewall with Suricata-compatible rules.</p>
+          <p>Days 11 through 13 moved outward from the AWS-only topology. Direct Connect introduced Private, Transit, and Public VIFs, and the point that resilience requires redundant connections at separate locations with BGP failover rather than a single link. Route 53 Resolver closed the DNS half of the hybrid story with inbound endpoints for on-prem queries into private hosted zones and outbound endpoints plus forwarding rules for the reverse direction. PrivateLink then offered the deliberate contrast: service-level exposure through an ENI-backed interface endpoint, with no peering, no route table changes, and no CIDR conflict. The week's real deliverable is the decision boundary between those four tools, which is what the rest of this page drills.</p>
         </div>
       </section>
-      <section class="doc-section">
-        <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
-        
-      <div class="scenario-card">
-        <p class="scenario-question"><strong>Q1.</strong> When should you choose PrivateLink over Transit Gateway for cross-account connectivity?</p>
-        <div class="scenario-options" id="opts-d14q0">
-            <div class="scenario-option">A. When you need full bidirectional network-level reachability between VPCs</div>
-            <div class="scenario-option">B. When exposing a single specific service to many consumers without merging networks or worrying about CIDR overlap</div>
-            <div class="scenario-option">C. When connecting on-prem to AWS</div>
-            <div class="scenario-option">D. Never — TGW always replaces PrivateLink</div>
+      <section class="doc-section" id="decision-matrix">
+        <h2 class="section-heading">The Connectivity Decision Matrix</h2>
+        <p>Almost every networking scenario on this exam reduces to one question asked in different clothing: what is the smallest connectivity primitive that satisfies the requirement? Candidates reach for Transit Gateway because it is the most capable answer, but capability is not free — a TGW attachment implies route table design, propagation decisions, and a shared routing domain that every connected VPC now participates in. PrivateLink, by contrast, creates no shared routing domain at all; the consumer VPC gets an elastic network interface with a private IP, and the only traffic that can flow is traffic to the service behind that endpoint. The exam rewards the architect who can articulate why the narrower primitive is correct, not the one who reaches for the hub by default.</p>
+        <p>The second question is whether the requirement is network-level or service-level. Network-level means the consumer needs to reach many things in the provider's network, or needs bidirectional reachability, or needs to be reachable itself. Service-level means the consumer needs exactly one API, one endpoint, one port. That distinction is what separates TGW from PrivateLink in practice, and it is also what makes PrivateLink the only viable answer when CIDR ranges overlap, because overlapping ranges make route-based connectivity impossible by definition. The table below is the compressed form of that reasoning; the subsections that follow unpack each row.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Requirement</th><th>Best fit</th><th>Why the others fail</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Many VPCs need broad mutual or shared-services reachability</td><td>Transit Gateway</td><td>Peering is O(n²) and PrivateLink exposes only one service</td></tr>
+              <tr><td>Two VPCs, same region, few routes, no hub wanted</td><td>VPC peering</td><td>TGW adds cost and route table management for no benefit</td></tr>
+              <tr><td>Expose one service to many consumer accounts</td><td>PrivateLink</td><td>TGW shares the whole network, not one endpoint</td></tr>
+              <tr><td>Consumer and provider CIDRs overlap</td><td>PrivateLink</td><td>Peering and TGW both require non-overlapping ranges</td></tr>
+              <tr><td>On-prem to many VPCs over one private link</td><td>DX with a Transit VIF</td><td>Private VIF reaches one VPC; Public VIF is for public endpoints</td></tr>
+              <tr><td>On-prem to a single VPC, minimal scope</td><td>DX with a Private VIF</td><td>A Transit VIF pulls in TGW route tables unnecessarily</td></tr>
+              <tr><td>On-prem resolvers must resolve AWS private zones</td><td>Resolver inbound endpoint</td><td>Outbound endpoints resolve the opposite direction</td></tr>
+              <tr><td>AWS resources must resolve on-prem names</td><td>Resolver outbound endpoint + forwarding rule</td><td>Inbound endpoints do not forward queries outward</td></tr>
+            </tbody>
+          </table>
         </div>
-        <button class="scenario-reveal-btn" onclick="revealAnswer('d14q0', 1)">Reveal Answer</button>
-        <div class="scenario-explanation" id="exp-d14q0"><strong>Correct answer: B.</strong> PrivateLink is service-level exposure (one service, many consumers, no shared routing); TGW is network-level connectivity for broad multi-VPC/on-prem routing.</div>
-      </div>
+      </section>
+      <section class="doc-section" id="tgw-vs-peering-vs-privatelink">
+        <h2 class="section-heading">TGW vs. Peering vs. PrivateLink</h2>
+        <p>The three AWS-native options differ in what they share. VPC peering shares a route between exactly two VPCs and nothing else — no transitive routing, no shared route tables, no third party. Transit Gateway shares a routing domain: every attached VPC can, subject to route table design, reach every other attached VPC, and the hub becomes the place where policy lives. PrivateLink shares neither routes nor a routing domain; it shares a single service endpoint, and the consumer's only knowledge of the provider is an ENI with a private IP in its own subnets. Once you frame the three that way, the scaling behavior falls out immediately. Peering grows as the square of the VPC count, TGW grows linearly but concentrates risk and cost in one regional resource, and PrivateLink grows linearly per service with no coupling between consumers at all.</p>
+        <p>The exam's favorite trap is a scenario that mentions many accounts and a single shared service, which reads like a TGW question but is actually a PrivateLink question. The tell is the word "service" or a specific API, port, or endpoint. A second trap runs the other way: a scenario describes overlapping CIDRs and a need for broad connectivity, which is unsatisfiable — the correct answer is usually to re-address one side, or to accept PrivateLink's narrower scope. A third trap involves transitive reachability through peering, which does not exist; if VPC A peers with B and B peers with C, A cannot reach C, and the fix is a TGW rather than more peering.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Dimension</th><th>VPC peering</th><th>Transit Gateway</th><th>PrivateLink</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>What is shared</td><td>One route between two VPCs</td><td>A routing domain across attachments</td><td>One service endpoint (ENI)</td></tr>
+              <tr><td>Transitive routing</td><td>No</td><td>Yes, by route table design</td><td>Not applicable</td></tr>
+              <tr><td>CIDR overlap tolerated</td><td>No</td><td>No</td><td>Yes</td></tr>
+              <tr><td>Cross-region</td><td>Yes (inter-region peering)</td><td>Yes, via TGW peering with static routes</td><td>Yes, via endpoint services in the provider region</td></tr>
+              <tr><td>On-prem integration</td><td>Not directly</td><td>Yes, via Transit VIF or VPN</td><td>No</td></tr>
+              <tr><td>Primary cost driver</td><td>Data transfer</td><td>Attachment-hours plus data processing</td><td>Endpoint-hours plus data processing</td></tr>
+              <tr><td>Blast radius of a mistake</td><td>One pair of VPCs</td><td>Every VPC on the affected route table</td><td>One consumer's access to one service</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+      <section class="doc-section" id="dx-resiliency">
+        <h2 class="section-heading">Direct Connect Resiliency Patterns</h2>
+        <p>Direct Connect questions are almost never about the VIF types; they are about what happens when a link, a device, or an entire location fails. The exam expects you to know that a single connection is a single point of failure regardless of its bandwidth, and that the AWS resiliency model is expressed in terms of diversity: separate connections, terminating on separate devices, at separate DX locations. Two connections at the same location can share a device and therefore share a failure domain, which is why the highest-resiliency answer almost always names two locations. BGP is the mechanism that makes the failover automatic — path preference via AS PATH prepending or local preference determines which link carries traffic while both are healthy, and withdrawal of routes handles the failure case.</p>
+        <p>The second layer is what happens when both DX paths are unavailable. A VPN backup over the internet is the standard answer for that residual case, and it is worth being precise about why: it is not there to carry production load, it is there to keep control-plane and management access alive while the DX paths are restored. The exam also tests the VIF choice as a scope decision rather than a resiliency decision. A Private VIF terminates on a virtual private gateway and reaches exactly one VPC, which is the right scope for a single-VPC hybrid workload. A Transit VIF terminates on a Transit Gateway and inherits whatever reachability the TGW route tables provide, which is the right scope when on-prem needs to reach many VPCs. A Public VIF is for AWS public service endpoints and does not participate in VPC routing at all.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Design</th><th>Survives</th><th>Does not survive</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Single DX connection</td><td>Nothing meaningful</td><td>Device failure, location failure, fiber cut</td></tr>
+              <tr><td>Two connections, same location</td><td>Single connection failure</td><td>Shared device or location failure</td></tr>
+              <tr><td>Two connections, two locations</td><td>Device and location failure</td><td>Simultaneous multi-location event</td></tr>
+              <tr><td>Two locations plus VPN backup</td><td>All of the above, with degraded capacity</td><td>Nothing short of a full regional event</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+      <section class="doc-section" id="hybrid-dns">
+        <h2 class="section-heading">Hybrid DNS Resolution Paths</h2>
+        <p>Hybrid DNS is where most candidates lose points, because the two endpoint types are named from the perspective of the AWS VPC rather than the query. A Resolver inbound endpoint accepts queries from outside AWS and answers them from the VPC's private hosted zones — it is the door on-prem resolvers knock on. A Resolver outbound endpoint sends queries from AWS to a destination you specify, and it only does anything when paired with a forwarding rule that matches a domain and names the target resolver IPs. The direction naming is the whole trap: inbound means queries coming in, outbound means queries going out, and a scenario that describes on-prem servers resolving an AWS private zone is an inbound question no matter how it is phrased.</p>
+        <p>The transport underneath matters too. Resolver endpoints are reachable from on-prem only if there is a network path — Direct Connect or VPN — and the endpoint's ENIs live in subnets you choose, which means the on-prem resolver IPs must be routable to those subnets and the security groups on the endpoint must permit DNS. A common production failure is a correctly configured forwarding rule with no working path, which presents as intermittent resolution timeouts rather than clean failures. The second common failure is a forwarding rule that matches too broadly and captures queries that should have been answered locally, which presents as slow resolution for names that never needed to leave the VPC.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Direction</th><th>Endpoint</th><th>Supporting config</th><th>Typical scenario phrasing</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>On-prem to AWS</td><td>Inbound endpoint</td><td>On-prem conditional forwarder pointing at endpoint IPs</td><td>"On-prem servers must resolve names in a private hosted zone"</td></tr>
+              <tr><td>AWS to on-prem</td><td>Outbound endpoint</td><td>Forwarding rule naming on-prem resolver IPs</td><td>"EC2 instances must resolve corp.internal"</td></tr>
+              <tr><td>AWS to AWS, cross-VPC</td><td>None required</td><td>Private hosted zone associated to the VPCs</td><td>"Two VPCs must share a private zone"</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+      <section class="doc-section" id="lab">
+        <h2 class="section-heading">Hands-on Lab / Practical Action (45 min)</h2>
+        <div class="card card-green">
+          <p>Build the smallest topology that exercises all four decision boundaries at once, then break it deliberately. Start with three VPCs in one region: a shared-services VPC, a production VPC, and a development VPC, each with non-overlapping CIDRs. Attach all three to a single Transit Gateway, then create two TGW route tables — one for production and one for development — and associate each spoke with its own table. Propagate only the shared-services attachment into both tables, and propagate nothing between production and development. Verify from an instance in production that shared services is reachable and development is not, and confirm the reverse from development. This is the segmentation pattern from Day 8, and the point of rebuilding it is to feel how much of the isolation lives in route table association rather than in security groups.</p>
+          <p>Next, add the service-level path. Deploy a simple listener behind a Network Load Balancer in the shared-services VPC, create an endpoint service for it, and consume it from the development VPC through an interface endpoint. Confirm that development can reach the service on its port while still having no route to the shared-services VPC's other subnets — that contrast is the entire TGW-versus-PrivateLink argument in one test. Then add the hybrid DNS half: create a Resolver outbound endpoint in the shared-services VPC, add a forwarding rule for a fake domain such as corp.internal pointing at a resolver you control, and confirm queries leave the VPC. Create an inbound endpoint and confirm a query from outside the VPC resolves a record in a private hosted zone. Finally, write down for each of the four paths you built which single configuration change would break it, and what the symptom would look like in each case. That list is the runbook shape the exam expects you to reason about.</p>
+        </div>
+      </section>
+      <section class="doc-section" id="quiz">
+        <h2 class="section-heading">Mixed Scenario Quiz (25 questions)</h2>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q1.</strong> A company has 40 VPCs across three accounts that all need to reach a shared-services VPC, but production VPCs must never reach development VPCs. What is the most operationally sustainable design?</p>
+          <div class="scenario-options" id="opts-d14q1">
+            <div class="scenario-option">A. Full mesh VPC peering between all 40 VPCs</div>
+            <div class="scenario-option">B. A single Transit Gateway with separate route tables for production and development, each propagating only the shared-services attachment</div>
+            <div class="scenario-option">C. A PrivateLink endpoint in every VPC pointing at every other VPC</div>
+            <div class="scenario-option">D. Security groups alone, with all VPCs peered</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d14q1', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d14q1"><strong>Correct answer: B.</strong> TGW route table segmentation gives linear scaling with explicit isolation, unlike a peering mesh which is O(n²) and offers no segmentation primitive.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q2.</strong> Two VPCs in the same region need to exchange traffic on a small number of routes, and the team wants the lowest possible cost and no shared routing domain. What should they use?</p>
+          <div class="scenario-options" id="opts-d14q2">
+            <div class="scenario-option">A. Transit Gateway</div>
+            <div class="scenario-option">B. VPC peering</div>
+            <div class="scenario-option">C. PrivateLink endpoint service</div>
+            <div class="scenario-option">D. Direct Connect with a Private VIF</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d14q2', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d14q2"><strong>Correct answer: B.</strong> For a small number of same-region VPCs, peering is the cheapest and simplest option; TGW adds attachment and processing cost for reachability that is not needed.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q3.</strong> A SaaS provider must expose a single HTTPS API to 200 customer VPCs, and several customers have CIDR ranges that overlap the provider's. What is the correct approach?</p>
+          <div class="scenario-options" id="opts-d14q3">
+            <div class="scenario-option">A. VPC peering with each customer</div>
+            <div class="scenario-option">B. A Transit Gateway shared through AWS RAM</div>
+            <div class="scenario-option">C. A PrivateLink endpoint service consumed via interface endpoints</div>
+            <div class="scenario-option">D. Direct Connect from each customer</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d14q3', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d14q3"><strong>Correct answer: C.</strong> PrivateLink exposes one service without merging route tables or CIDRs, so overlapping ranges are irrelevant — peering and TGW both require non-overlapping ranges.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q4.</strong> After creating a Transit Gateway peering attachment between us-east-1 and eu-west-1, spoke VPCs in each region still cannot reach each other. What is the most likely cause?</p>
+          <div class="scenario-options" id="opts-d14q4">
+            <div class="scenario-option">A. TGW peering does not support cross-region traffic</div>
+            <div class="scenario-option">B. Peering attachments do not propagate routes, so static routes must be added to each TGW route table</div>
+            <div class="scenario-option">C. The TGWs are in different Availability Zones</div>
+            <div class="scenario-option">D. Security groups block inter-region traffic by default</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d14q4', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d14q4"><strong>Correct answer: B.</strong> Unlike VPC and TGW attachments, peering attachments require manually created static routes in each TGW route table — automatic propagation is not supported.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q5.</strong> A workload transfers large files between two regions through peered Transit Gateways and is seeing throughput well below expectations with no packet loss. What should be checked first?</p>
+          <div class="scenario-options" id="opts-d14q5">
+            <div class="scenario-option">A. Whether the MTU is capped at 1500 bytes across inter-region TGW peering</div>
+            <div class="scenario-option">B. Whether the VPCs are in the same Availability Zone</div>
+            <div class="scenario-option">C. Whether PrivateLink would be faster</div>
+            <div class="scenario-option">D. Whether the TGW route tables are propagating routes</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d14q5', 0)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d14q5"><strong>Correct answer: A.</strong> Inter-region TGW peering caps MTU at 1500 bytes, which reduces throughput for large transfers compared with the higher MTU available within a region.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q6.</strong> An organization wants all internet-bound traffic from 30 spoke VPCs inspected by a single firewall with a consistent rule set. What is the standard pattern?</p>
+          <div class="scenario-options" id="opts-d14q6">
+            <div class="scenario-option">A. Deploy AWS Network Firewall in each spoke VPC</div>
+            <div class="scenario-option">B. A centralized inspection VPC attached to the Transit Gateway, with spoke route tables sending 0.0.0.0/0 to the TGW</div>
+            <div class="scenario-option">C. NACLs on every spoke subnet</div>
+            <div class="scenario-option">D. A NAT Gateway per spoke with logging enabled</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d14q6', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d14q6"><strong>Correct answer: B.</strong> The centralized inspection VPC pattern routes all spoke egress through TGW into one Network Firewall, avoiding per-VPC duplication and keeping rules consistent.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q7.</strong> A Network Firewall rule set must inspect TLS traffic for a specific set of domains without decrypting all traffic. Which capability applies?</p>
+          <div class="scenario-options" id="opts-d14q7">
+            <div class="scenario-option">A. Stateless rule groups only</div>
+            <div class="scenario-option">B. Suricata-compatible stateful rules with domain-based matching</div>
+            <div class="scenario-option">C. VPC Flow Logs</div>
+            <div class="scenario-option">D. Route 53 Resolver DNS Firewall</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d14q7', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d14q7"><strong>Correct answer: B.</strong> Network Firewall's stateful engine uses Suricata-compatible rules, which support domain-based matching for TLS inspection without full decryption.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q8.</strong> A company needs a mission-critical hybrid connection with the highest practical resiliency. What should be provisioned?</p>
+          <div class="scenario-options" id="opts-d14q8">
+            <div class="scenario-option">A. One 10 Gbps Direct Connect connection</div>
+            <div class="scenario-option">B. Two Direct Connect connections at two different locations, on separate devices, with BGP failover and a VPN backup</div>
+            <div class="scenario-option">C. Two connections at the same location</div>
+            <div class="scenario-option">D. A Public VIF only</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d14q8', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d14q8"><strong>Correct answer: B.</strong> AWS's DX resiliency model requires diversity across locations and devices with BGP failover; a VPN backup covers the residual case where both DX paths are unavailable.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q9.</strong> On-premises needs to reach workloads in 25 VPCs over a single Direct Connect connection. Which VIF type is appropriate?</p>
+          <div class="scenario-options" id="opts-d14q9">
+            <div class="scenario-option">A. Private VIF</div>
+            <div class="scenario-option">B. Transit VIF</div>
+            <div class="scenario-option">C. Public VIF</div>
+            <div class="scenario-option">D. Hosted VIF</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d14q9', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d14q9"><strong>Correct answer: B.</strong> A Transit VIF terminates on a Transit Gateway and inherits its route tables, providing reachability to many VPCs; a Private VIF reaches exactly one VPC.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q10.</strong> A single-VPC hybrid workload needs the simplest possible Direct Connect termination with no shared routing domain. Which VIF should be used?</p>
+          <div class="scenario-options" id="opts-d14q10">
+            <div class="scenario-option">A. Private VIF to a virtual private gateway</div>
+            <div class="scenario-option">B. Transit VIF to a Transit Gateway</div>
+            <div class="scenario-option">C. Public VIF</div>
+            <div class="scenario-option">D. A VPN over the DX connection</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d14q10', 0)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d14q10"><strong>Correct answer: A.</strong> A Private VIF terminates on a virtual private gateway and reaches exactly one VPC, which is the minimal scope for a single-VPC hybrid workload.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q11.</strong> Two Direct Connect connections are active at the same location and both fail simultaneously during a device maintenance event. What design flaw does this reveal?</p>
+          <div class="scenario-options" id="opts-d14q11">
+            <div class="scenario-option">A. The connections should have used Public VIFs</div>
+            <div class="scenario-option">B. Both connections shared a failure domain because they terminated at the same location and potentially the same device</div>
+            <div class="scenario-option">C. BGP was misconfigured</div>
+            <div class="scenario-option">D. The connections needed Link Aggregation</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d14q11', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d14q11"><strong>Correct answer: B.</strong> Diversity requires separate locations and separate devices; two connections at one location can share a device and therefore share a failure domain.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q12.</strong> On-premises DNS servers must resolve records in an AWS private hosted zone. What must be configured?</p>
+          <div class="scenario-options" id="opts-d14q12">
+            <div class="scenario-option">A. A Route 53 Resolver outbound endpoint</div>
+            <div class="scenario-option">B. A Route 53 Resolver inbound endpoint, with on-prem DNS forwarding queries to it</div>
+            <div class="scenario-option">C. A public hosted zone</div>
+            <div class="scenario-option">D. A NAT Gateway with DNS forwarding enabled</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d14q12', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d14q12"><strong>Correct answer: B.</strong> Inbound endpoints accept queries from outside AWS and answer them from the VPC's private hosted zones; outbound endpoints resolve the opposite direction.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q13.</strong> EC2 instances in a VPC must resolve names in an on-premises domain over Direct Connect. What is required?</p>
+          <div class="scenario-options" id="opts-d14q13">
+            <div class="scenario-option">A. A Resolver inbound endpoint</div>
+            <div class="scenario-option">B. A Resolver outbound endpoint plus a forwarding rule naming the on-prem resolver IPs</div>
+            <div class="scenario-option">C. A private hosted zone associated with the VPC</div>
+            <div class="scenario-option">D. A public hosted zone with a CNAME</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d14q13', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d14q13"><strong>Correct answer: B.</strong> Outbound endpoints send queries from AWS to a destination, and they only act when paired with a forwarding rule that matches a domain and names target resolver IPs.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q14.</strong> A forwarding rule is correctly configured but on-prem name resolution from AWS fails intermittently. What is the most likely cause?</p>
+          <div class="scenario-options" id="opts-d14q14">
+            <div class="scenario-option">A. The rule matches too many domains</div>
+            <div class="scenario-option">B. There is no working network path from the Resolver endpoint subnets to the on-prem resolver IPs, or the endpoint security group does not permit DNS</div>
+            <div class="scenario-option">C. The private hosted zone is not associated</div>
+            <div class="scenario-option">D. Resolver does not support conditional forwarding</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d14q14', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d14q14"><strong>Correct answer: B.</strong> Resolver endpoints are only reachable if there is a network path and the endpoint security groups permit DNS; a correct rule with no path presents as intermittent timeouts.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q15.</strong> Two VPCs in the same account need to share a private hosted zone so that each resolves the same internal names. What is required?</p>
+          <div class="scenario-options" id="opts-d14q15">
+            <div class="scenario-option">A. A Resolver inbound endpoint in each VPC</div>
+            <div class="scenario-option">B. Associating the private hosted zone with both VPCs</div>
+            <div class="scenario-option">C. A Resolver outbound endpoint with a forwarding rule</div>
+            <div class="scenario-option">D. VPC peering plus a public hosted zone</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d14q15', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d14q15"><strong>Correct answer: B.</strong> Cross-VPC private zone sharing within AWS is done by associating the hosted zone with each VPC; Resolver endpoints are only needed when queries cross the AWS boundary.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q16.</strong> A consumer VPC needs to reach exactly one API in a provider VPC, and the provider does not want the consumer to see any other subnet. What should be used?</p>
+          <div class="scenario-options" id="opts-d14q16">
+            <div class="scenario-option">A. VPC peering with restrictive security groups</div>
+            <div class="scenario-option">B. A PrivateLink endpoint service consumed via an interface endpoint</div>
+            <div class="scenario-option">C. A Transit Gateway with a dedicated route table</div>
+            <div class="scenario-option">D. A Direct Connect Private VIF</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d14q16', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d14q16"><strong>Correct answer: B.</strong> PrivateLink exposes only the service behind the endpoint; the consumer has no route to any other subnet in the provider VPC.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q17.</strong> Which statement about S3 and DynamoDB access from a VPC is correct?</p>
+          <div class="scenario-options" id="opts-d14q17">
+            <div class="scenario-option">A. Both require an interface endpoint</div>
+            <div class="scenario-option">B. Both support gateway endpoints, which use route table entries and carry no hourly endpoint charge</div>
+            <div class="scenario-option">C. Neither supports private access</div>
+            <div class="scenario-option">D. Both require a NAT Gateway</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d14q17', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d14q17"><strong>Correct answer: B.</strong> Gateway endpoints exist only for S3 and DynamoDB, work through route table entries rather than ENIs, and are free — unlike interface endpoints.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q18.</strong> A team wants to expose an internal service to consumers in other accounts without any consumer being able to initiate connections to the provider's other resources. Which property of PrivateLink makes this true?</p>
+          <div class="scenario-options" id="opts-d14q18">
+            <div class="scenario-option">A. It uses security groups on the provider side only</div>
+            <div class="scenario-option">B. The consumer only receives an ENI with a private IP for the specific service, with no shared routing domain</div>
+            <div class="scenario-option">C. It encrypts all traffic with a customer-managed key</div>
+            <div class="scenario-option">D. It requires VPC peering to be disabled</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d14q18', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d14q18"><strong>Correct answer: B.</strong> PrivateLink shares a single service endpoint, not a routing domain, so the consumer's reachability is limited to that endpoint by construction.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q19.</strong> VPC A is peered with VPC B, and VPC B is peered with VPC C. Instances in A cannot reach instances in C. What is the correct explanation?</p>
+          <div class="scenario-options" id="opts-d14q19">
+            <div class="scenario-option">A. A security group is blocking the traffic</div>
+            <div class="scenario-option">B. VPC peering is not transitive, so A has no route to C</div>
+            <div class="scenario-option">C. The route tables need a 0.0.0.0/0 entry</div>
+            <div class="scenario-option">D. Peering requires a Transit Gateway to function</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d14q19', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d14q19"><strong>Correct answer: B.</strong> Peering shares one route between exactly two VPCs and provides no transitive routing; the fix is a Transit Gateway rather than additional peering.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q20.</strong> A central network account owns a VPC and wants application accounts to launch resources into its subnets without owning the VPC. What enables this?</p>
+          <div class="scenario-options" id="opts-d14q20">
+            <div class="scenario-option">A. VPC peering between the network account and each application account</div>
+            <div class="scenario-option">B. Sharing the subnets through AWS Resource Access Manager</div>
+            <div class="scenario-option">C. A PrivateLink endpoint service per application account</div>
+            <div class="scenario-option">D. Copying the VPC configuration into each account</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d14q20', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d14q20"><strong>Correct answer: B.</strong> RAM subnet sharing lets many accounts launch resources into subnets owned by a single central VPC, avoiding per-account VPCs and peering.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q21.</strong> A Transit Gateway route table has the shared-services attachment associated but not propagated. What is the effect?</p>
+          <div class="scenario-options" id="opts-d14q21">
+            <div class="scenario-option">A. The attachment cannot send or receive any traffic</div>
+            <div class="scenario-option">B. The attachment can use the route table's routes, but its own routes are not added to that table</div>
+            <div class="scenario-option">C. The attachment is automatically deleted</div>
+            <div class="scenario-option">D. Propagation is required for association to work</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d14q21', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d14q21"><strong>Correct answer: B.</strong> Association determines which route table an attachment uses; propagation determines whether that attachment's routes are added to the table. They are independent settings.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q22.</strong> A company wants to reduce the number of Direct Connect connections while increasing aggregate throughput beyond a single connection's capacity. What should they use?</p>
+          <div class="scenario-options" id="opts-d14q22">
+            <div class="scenario-option">A. A Public VIF</div>
+            <div class="scenario-option">B. A Link Aggregation Group bundling multiple connections</div>
+            <div class="scenario-option">C. A Transit Gateway peering attachment</div>
+            <div class="scenario-option">D. A VPN over the existing connection</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d14q22', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d14q22"><strong>Correct answer: B.</strong> A LAG bundles multiple physical connections into one logical connection, increasing aggregate throughput and providing link-level redundancy.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q23.</strong> An inspection VPC uses Network Firewall, and after a route change, spoke VPCs can reach the internet but traffic is no longer inspected. What is the most likely cause?</p>
+          <div class="scenario-options" id="opts-d14q23">
+            <div class="scenario-option">A. The firewall policy was deleted</div>
+            <div class="scenario-option">B. Spoke route tables no longer direct 0.0.0.0/0 to the Transit Gateway, bypassing the inspection VPC</div>
+            <div class="scenario-option">C. Suricata rules expired</div>
+            <div class="scenario-option">D. The firewall needs a public IP</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d14q23', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d14q23"><strong>Correct answer: B.</strong> The inspection pattern depends entirely on spoke route tables sending egress to the TGW; a route change that points 0.0.0.0/0 elsewhere silently bypasses inspection.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q24.</strong> Which combination best describes a mature hybrid connectivity baseline for a multi-account enterprise?</p>
+          <div class="scenario-options" id="opts-d14q24">
+            <div class="scenario-option">A. VPC peering between every pair of VPCs plus a single DX connection</div>
+            <div class="scenario-option">B. A Transit Gateway hub with segmented route tables, redundant Direct Connect at two locations, Resolver endpoints for hybrid DNS, and PrivateLink for service-level exposure</div>
+            <div class="scenario-option">C. PrivateLink for all connectivity, including on-prem</div>
+            <div class="scenario-option">D. A single shared VPC for all workloads</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d14q24', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d14q24"><strong>Correct answer: B.</strong> Each tool covers a different scope: TGW for network-level reachability, redundant DX for hybrid transport, Resolver for DNS, and PrivateLink for narrow service exposure.</div>
+        </div>
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q25.</strong> A scenario states that two companies with overlapping CIDRs need full bidirectional network-level reachability between their VPCs. What is the correct architectural response?</p>
+          <div class="scenario-options" id="opts-d14q25">
+            <div class="scenario-option">A. Use Transit Gateway peering, which tolerates overlap</div>
+            <div class="scenario-option">B. The requirement is unsatisfiable as stated — either re-address one side or narrow the requirement to service-level exposure via PrivateLink</div>
+            <div class="scenario-option">C. Use VPC peering with a longer prefix</div>
+            <div class="scenario-option">D. Use a Public VIF</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d14q25', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d14q25"><strong>Correct answer: B.</strong> Route-based connectivity requires non-overlapping ranges, so full network-level reachability with overlap is impossible; the options are re-addressing or reducing scope to PrivateLink.</div>
+        </div>
+      </section>
+      <section class="doc-section" id="preview">
+        <h2 class="section-heading">Looking Ahead</h2>
+        <div class="card card-purple">
+          <p>Everything this week assumed a network that already exists and a workload that already runs somewhere. The open question the week leaves unresolved is what happens when the compute itself is the thing being designed — when there is no VPC to attach, no instance to place, and no host to patch. Day 15 moves into Phase 2 with Amazon ECS on Fargate, where the unit of deployment is a task definition rather than an instance, and where the networking model changes in a way that matters: awsvpc mode gives every task its own elastic network interface and its own security group, so the per-workload isolation this week achieved through route tables and endpoint policies becomes a property of the task itself.</p>
+          <p>That shift has a direct consequence for the connectivity decisions just reviewed. When each task carries its own ENI, the security group becomes the primary segmentation primitive at the workload layer, and the question of which subnets a task can be placed in becomes a placement decision rather than a routing one. The hybrid paths built this week still carry the traffic, but the thing generating it is now ephemeral and independently addressed. The next day's material is where the governance and networking scaffolding from Phase 1 stops being the subject and starts being the substrate.</p>
+        </div>
+      </section>
+      <section class="doc-section" id="sources">
+        <h2 class="section-heading">Sources</h2>
+        <div class="card">
+          <ul class="source-list">
+            <li><a href="https://docs.aws.amazon.com/vpc/latest/tgw/what-is-transit-gateway.html" target="_blank">AWS Transit Gateway — official documentation</a></li>
+            <li><a href="https://docs.aws.amazon.com/directconnect/latest/UserGuide/Welcome.html" target="_blank">AWS Direct Connect — official documentation</a></li>
+            <li><a href="https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/resolver.html" target="_blank">Route 53 Resolver — official documentation</a></li>
+            <li><a href="https://docs.aws.amazon.com/vpc/latest/privatelink/what-is-privatelink.html" target="_blank">AWS PrivateLink — official documentation</a></li>
+            <li><a href="https://docs.aws.amazon.com/network-firewall/latest/developerguide/what-is-aws-network-firewall.html" target="_blank">AWS Network Firewall — official documentation</a></li>
+            <li><a href="https://docs.aws.amazon.com/whitepapers/latest/building-scalable-secure-multi-vpc-network-infrastructure/welcome.html" target="_blank">Building a Scalable and Secure Multi-VPC AWS Network Infrastructure — AWS whitepaper</a></li>
+          </ul>
+        </div>
       </section>
       <div class="day-nav">
         <a href="day-013.html">&larr; Day 13: AWS PrivateLink &amp; VPC Peering Comparison</a>

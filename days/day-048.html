@@ -104,7 +104,7 @@
         <span class="pill pill-green">Phase 4: Migration, Hybrid &amp; Cost Optimization</span>
       </div>
       <h1 class="hero-title">AWS Storage Gateway — File, Volume &amp; Tape Gateways</h1>
-      <div class="reading-meta">&#128337; ~3 min read &middot; 4 services covered</div>
+      <div class="reading-meta">&#128337; ~58 min read &middot; 4 services covered</div>
       <div class="services-grid">
         <span class="service-tag">Storage Gateway</span>
         <span class="service-tag">File Gateway</span>
@@ -112,30 +112,335 @@
         <span class="service-tag">Tape Gateway</span>
       </div>
       <div id="tracker"></div>
-      <section class="doc-section">
-        <h2 class="section-heading">Today's Concept</h2>
+      <section class="doc-section" id="recap">
+        <h2 class="section-heading">Recap: Where DataSync Left Us</h2>
         <div class="card card-accent">
-          <p>File Gateway presents S3 as an NFS/SMB share with local caching for low-latency access to hot data. Volume Gateway provides iSCSI block storage backed by S3, in cached (primary data in S3, hot data cached locally) or stored (primary data on-prem, async backup to S3) modes. Tape Gateway is a virtual tape library (VTL) replacing physical backup tape infrastructure.</p>
-        </div>
-        <h3 class="sub-heading">Hands-on Lab / Practical Action (45 min)</h3>
-        <div class="card">
-          <p>Compare cached vs stored Volume Gateway modes for an on-prem application requiring low-latency local reads but durable cloud backup.</p>
+          <p>DataSync gave us a managed, scheduled, integrity-validated path for moving files and objects between on-prem NFS/SMB/HDFS sources and AWS storage targets like S3, EFS, and FSx. It is a transfer engine: you point it at a source and a destination, it copies, it verifies, and it throttles bandwidth so the migration does not starve production traffic. Crucially, it is not database-aware — it moves bytes in a filesystem or object namespace, not rows in a transaction log.</p>
+          <p>Storage Gateway extends that same hybrid-storage premise in a different direction. Where DataSync is a batch mover that runs on a schedule and then stops, Storage Gateway is a long-lived appliance that keeps presenting a familiar on-premises storage interface — NFS, SMB, iSCSI, or virtual tape — while the durable copy of the data lives in AWS. The on-prem application never learns that its storage is in the cloud. That is the extension: DataSync answers "how do I get this data to AWS," and Storage Gateway answers "how do I keep using this data as if it never left."</p>
         </div>
       </section>
-      <section class="doc-section">
-        <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
-        
-      <div class="scenario-card">
-        <p class="scenario-question"><strong>Q1.</strong> An enterprise wants to eliminate its physical backup tape infrastructure while keeping existing backup software unchanged.</p>
-        <div class="scenario-options" id="opts-d48q0">
+
+      <section class="doc-section" id="why-on-exam">
+        <h2 class="section-heading">1. Why Storage Gateway Is on the Exam</h2>
+        <p>Storage Gateway shows up in SAP-C02 scenarios that describe a hybrid storage requirement without ever naming the service. The tell is a workload that must keep running on-premises, must keep using a protocol it already speaks, and must have its durable copy in AWS for durability, cost, or disaster recovery. A file server that needs to shrink its local footprint but keep serving SMB shares. A database that needs iSCSI block storage but whose backups should land in S3. A backup team that wants to retire physical tape libraries without retraining anyone or changing backup software. Each of those is a Storage Gateway question wearing a costume.</p>
+        <p>The domain mapping is mostly Domain 3 (Migration and Modernization) with a strong secondary pull into Domain 2 (Resilient Architectures) and Domain 4 (Cost Optimization). The migration framing is obvious: Storage Gateway is one of the standard answers for hybrid storage during and after a migration, and it frequently appears alongside DataSync, Snow Family, and Direct Connect in the same scenario. The resilience framing is subtler and more interesting — the cached versus stored Volume Gateway decision is fundamentally a question about where your authoritative copy lives and what happens when the network between on-prem and AWS goes away. The cost framing is about avoiding a full data-center storage refresh by tiering cold data into S3 while keeping hot data local.</p>
+        <p>The exam also uses Storage Gateway as a distractor against services that sound similar but solve different problems. DataSync moves data once or on a schedule; Storage Gateway presents storage continuously. AWS Backup protects AWS resources; Tape Gateway presents a virtual tape library to on-prem backup software. S3 File Gateway is not the same thing as mounting an S3 bucket with a third-party FUSE driver, and the exam expects you to know why the managed appliance exists. When a scenario says "the application cannot be modified" and "the data must be durable in AWS," Storage Gateway is usually the intended answer.</p>
+      </section>
+
+      <section class="doc-section" id="mechanism">
+        <h2 class="section-heading">2. How the Appliance Actually Works</h2>
+        <p>Every Storage Gateway deployment starts with a gateway appliance — a VM (VMware ESXi, Microsoft Hyper-V, or Linux KVM) or an EC2 instance — that you deploy on-premises or in AWS. The appliance is the protocol translator and the cache. It registers with the Storage Gateway service, which is a regional control plane that manages the gateway's configuration, credentials, and the mapping between the local presentation layer and the AWS storage backend. The data path, importantly, does not flow through the control plane; the appliance talks directly to S3, EBS snapshots, or the virtual tape backend using credentials the service provisions for it.</p>
+        <p>The appliance maintains a local cache on dedicated disks you attach to it. That cache is not a copy of everything — it is a working set. When an application reads a block or a file that is not cached, the appliance fetches it from AWS, serves it, and retains it according to the cache eviction policy. Writes go to the cache first and are uploaded asynchronously. This is why the cache disk sizing matters so much: too small and you thrash, constantly evicting and re-fetching; too large and you have paid for local storage you did not need. The upload buffer is a separate disk, and it holds writes that have not yet been acknowledged by AWS — if the upload buffer fills, writes to the gateway start failing, which is the single most common production incident with this service.</p>
+        <p>File Gateway exposes S3 buckets as NFS v3/v4.1 or SMB shares. Each file becomes an S3 object, and each S3 object becomes a file; metadata such as POSIX permissions is stored as object metadata or in a separate metadata store depending on the configuration. Volume Gateway exposes iSCSI targets backed by S3, with point-in-time snapshots stored as EBS snapshots. Tape Gateway exposes an iSCSI virtual tape library that backup software sees as physical tape drives and slots, with virtual tapes stored in S3 and archived to Glacier classes. All three share the same appliance, cache, and upload-buffer architecture; only the presentation protocol and the backend mapping differ.</p>
+      </section>
+
+      <section class="doc-section" id="decision-boundary">
+        <h2 class="section-heading">3. The Core Decision Boundary: File, Block, or Tape</h2>
+        <p>The fork every Storage Gateway scenario hinges on is what the on-premises application actually speaks. This is not a preference question — it is a hard constraint. An application that opens files by path cannot use Volume Gateway, and an application that writes raw blocks to a device cannot use File Gateway. Backup software that expects tape drives cannot use either. The exam will describe the workload's protocol indirectly ("the application writes to a mounted filesystem," "the database requires raw block devices," "the existing backup product writes to tape") and expect you to map that to the correct gateway type.</p>
+        <p>The second-order decision, once you have picked the gateway type, is where the authoritative copy lives. For File Gateway there is no choice — S3 is authoritative and the cache is purely a performance layer. For Volume Gateway there is a real choice between cached and stored modes, and that choice determines your recovery behavior when the network fails. For Tape Gateway the virtual tapes are authoritative in S3, with the local appliance holding only the working cache and the tape metadata.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Gateway type</th><th>Protocol presented</th><th>AWS backend</th><th>Authoritative copy</th><th>Typical workload</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>File Gateway</td><td>NFS v3/v4.1, SMB</td><td>S3 (objects)</td><td>S3</td><td>File shares, content repositories, media assets, home directories</td></tr>
+              <tr><td>Volume Gateway (cached)</td><td>iSCSI block</td><td>S3 + EBS snapshots</td><td>S3</td><td>Primary data too large for local storage; low-latency access to a hot subset</td></tr>
+              <tr><td>Volume Gateway (stored)</td><td>iSCSI block</td><td>S3 + EBS snapshots</td><td>On-premises</td><td>Full dataset must stay local; cloud used for durable snapshots and DR</td></tr>
+              <tr><td>Tape Gateway</td><td>iSCSI VTL</td><td>S3 + Glacier classes</td><td>S3</td><td>Replacing physical tape libraries without changing backup software</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The exam pattern here is that the scenario will give you the protocol and the durability requirement, and the correct answer falls out of the table. If the scenario mentions "the application cannot be modified" and "files," it is File Gateway. If it mentions "block storage" and "the full dataset must remain on-premises," it is stored mode. If it mentions "block storage" and "the dataset is too large to keep locally," it is cached mode. If it mentions "backup software" and "tape," it is Tape Gateway.</p>
+      </section>
+
+      <section class="doc-section" id="config-tradeoffs">
+        <h2 class="section-heading">4. Configuration Modes and Their Tradeoffs</h2>
+        <p>Cached and stored Volume Gateway modes are the configuration decision the exam tests most often, and the difference is entirely about which copy is authoritative. In cached mode, the primary data lives in S3 and the gateway keeps only the recently accessed working set locally. Reads that hit the cache are fast; reads that miss go to S3 and incur network latency. Writes go to the cache and are uploaded asynchronously. The local storage requirement is proportional to your working set, not your dataset, which is what makes cached mode attractive for large datasets with a small hot subset. The tradeoff is that a network outage degrades you to whatever is in cache — you can still serve cached reads and accept writes into the upload buffer, but you cannot read uncached data until connectivity returns.</p>
+        <p>In stored mode, the primary data lives on-premises on the gateway's storage volumes and is uploaded to S3 asynchronously as EBS snapshots. The full dataset is local, so reads never depend on the network and latency is predictable. The cloud copy exists for durability and disaster recovery, not for serving reads. The tradeoff is that you must provision local storage for the entire dataset, which defeats the "shrink the data center footprint" motivation but satisfies workloads that cannot tolerate network-dependent reads. Stored mode is the right answer when the scenario says the dataset must remain on-premises for latency, compliance, or because the application cannot tolerate a cache miss penalty.</p>
+        <p>File Gateway has fewer knobs but two that matter: the cache size and the S3 storage class. The cache size determines your hit rate; the storage class determines your cost. Because File Gateway writes objects directly to S3, you can attach a lifecycle policy to the bucket and let cold files transition to Standard-IA or Glacier classes automatically — the gateway does not need to know or care. Tape Gateway's main configuration choice is the virtual tape size and the archive tier, since virtual tapes that are ejected can be archived to Glacier Flexible Retrieval or Deep Archive, which is where the cost savings over physical tape actually come from.</p>
+      </section>
+
+      <section class="doc-section" id="sizing-limits">
+        <h2 class="section-heading">5. Sizing, Limits, and Quotas</h2>
+        <p>Storage Gateway sizing is dominated by three numbers: cache size, upload buffer size, and the number of volumes or shares per gateway. AWS publishes recommended cache sizing based on working set, and the general guidance is that the cache should be large enough to hold the actively accessed portion of your dataset plus headroom for eviction churn. Undersizing the cache is the most common cause of poor performance, and it manifests as high read latency rather than an outright error, which makes it easy to misdiagnose as a network problem.</p>
+        <p>The upload buffer is the more dangerous of the two. It holds writes that have been acknowledged locally but not yet durably stored in AWS. If the buffer fills — because the network is slow, because the gateway is throttled, or because write volume spiked — the gateway stops accepting writes and the on-premises application sees I/O errors. AWS recommends sizing the upload buffer generously relative to your peak write rate and the expected duration of a network interruption. This is the number that determines how long your gateway can ride out a Direct Connect or VPN outage without failing writes.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Dimension</th><th>Guidance</th><th>What happens if you get it wrong</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Cache disk</td><td>Size to the working set plus headroom; more cache means higher hit rate</td><td>Undersized cache causes high read latency and constant eviction</td></tr>
+              <tr><td>Upload buffer</td><td>Size to peak write rate times tolerable outage duration</td><td>Full buffer causes write failures and application I/O errors</td></tr>
+              <tr><td>Volumes per gateway</td><td>Bounded per gateway type; scale out with additional gateways</td><td>Exceeding limits requires a second appliance and a second cache</td></tr>
+              <tr><td>Virtual tape size</td><td>Match the tape size your backup software expects</td><td>Mismatched tape sizes break backup job scheduling</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>Beyond the appliance-level numbers, there are service quotas on the number of gateways per account per region, the number of volumes and shares per gateway, and the aggregate throughput a single gateway can sustain. The practical implication for exam scenarios is that a very large deployment is usually described as multiple gateways rather than one enormous gateway, and that throughput is bounded by the appliance and the network path, not by S3. If a scenario describes a workload that needs more throughput than a single gateway can provide, the answer is to scale out gateways or to move the workload to a different service entirely.</p>
+      </section>
+
+      <section class="doc-section" id="failure-modes">
+        <h2 class="section-heading">6. Failure Modes and What They Look Like in Production</h2>
+        <p>The most common production failure is the upload buffer filling, and it presents as the on-premises application suddenly getting I/O errors on writes that had been working fine. The first diagnostic move is to check the gateway's CloudWatch metrics for the upload buffer utilization and the cache hit rate, then check whether the network path to AWS is degraded. If the buffer is full because of a network outage, the fix is to restore connectivity; if it is full because write volume exceeded the buffer's capacity to drain, the fix is to resize the buffer or add bandwidth. Either way, the application has already seen errors, so the incident is about recovery and prevention, not just diagnosis.</p>
+        <p>The second failure mode is cache thrashing, which looks like unexplained read latency with no error. The gateway is evicting data faster than it can be usefully retained, so a high proportion of reads miss the cache and go to S3. The symptom is a cache hit rate that has dropped and read latency that has climbed, often correlated with a change in access patterns rather than a change in infrastructure. The diagnostic move is to look at the cache hit rate metric over time and correlate it with application behavior. The fix is usually to enlarge the cache or to accept that the workload's access pattern is not cache-friendly and should not be using cached mode.</p>
+        <p>The third failure mode is the gateway appliance itself failing — the VM crashes, the host fails, or the cache disks are lost. For File Gateway and cached Volume Gateway, the authoritative data is in S3, so recovery means redeploying the appliance and reattaching it to the same backend; the cache is rebuilt from S3 as data is accessed. For stored Volume Gateway, the authoritative data was on the failed appliance's volumes, so recovery depends on the EBS snapshots that were uploaded to AWS. This is the failure mode that makes the cached-versus-stored decision a resilience decision, not just a performance one, and it is exactly the kind of reasoning the exam rewards.</p>
+      </section>
+
+      <section class="doc-section" id="sre-angle">
+        <h2 class="section-heading">7. The Operational and SRE Angle</h2>
+        <p>Storage Gateway publishes a well-defined set of CloudWatch metrics per gateway, and the ones that matter for an SLO are cache hit rate, upload buffer utilization, and the various latency and throughput metrics. A reasonable operational posture is to alarm on upload buffer utilization crossing a threshold well before it reaches capacity, because the buffer filling is the leading indicator of an application-visible failure. Alarming on cache hit rate is more subtle — a low hit rate is a performance problem, not an availability problem, so it belongs in a dashboard and a capacity review rather than a pager.</p>
+        <p>The runbook shape for a Storage Gateway incident is fairly consistent. First, determine whether the problem is on the appliance, on the network path, or in AWS. The gateway's own metrics and the CloudTrail/CloudWatch data for the backend will usually separate these quickly. Second, determine whether the authoritative data is safe — for File Gateway and cached mode it is in S3, for stored mode it is on the appliance and in snapshots. Third, decide whether to fail over to a standby appliance or to restore from snapshots. The reason this runbook is worth rehearsing is that the failure modes are asymmetric: a File Gateway failure is a redeploy, while a stored Volume Gateway failure is a restore, and the two have very different RTOs.</p>
+        <p>From an SLO perspective, the interesting question is what availability target a Storage Gateway deployment can actually support. The gateway is a single appliance in most deployments, which makes it a single point of failure unless you deploy a second gateway and manage failover yourself. AWS does not provide automatic gateway failover; the high-availability pattern is two gateways with the same backend and a manual or scripted cutover. That means the realistic SLO for a single-gateway deployment is bounded by the appliance's own reliability, and any scenario that demands high availability from Storage Gateway is really asking you to design the failover, not to assume the service provides it.</p>
+      </section>
+
+      <section class="doc-section" id="gotchas">
+        <h2 class="section-heading">8. Edge Cases and Exam Gotchas</h2>
+        <p>The first gotcha is that File Gateway does not support all S3 features transparently. Object versioning, lifecycle policies, and storage class transitions work at the bucket level, but the gateway's view of a file is not the same as S3's view of an object, and operations that depend on object-level semantics may not behave the way a filesystem user expects. The exam rarely tests the fine details here, but it does test the conceptual point that File Gateway is a filesystem presentation over an object store, not a filesystem that happens to be backed by S3.</p>
+        <p>The second gotcha is the cached-versus-stored confusion in scenarios that mention both latency and durability. A scenario that says "the application requires low-latency local reads" and "the data must be durable in AWS" is not automatically stored mode — cached mode also provides low-latency reads for the cached working set, and it provides durability in S3. The distinguishing question is whether the application can tolerate a cache miss going to the network. If it cannot, stored mode; if it can, cached mode is cheaper and smaller.</p>
+        <p>The third gotcha is Tape Gateway's relationship to AWS Backup. Tape Gateway is for on-premises backup software that writes to tape; AWS Backup is for AWS resources. They are not alternatives, and a scenario that describes protecting EC2 instances and RDS databases is an AWS Backup question, not a Tape Gateway question. The fourth gotcha is that Storage Gateway is regional — the gateway registers to a region, and the backend S3 bucket or EBS snapshots live in that region. Cross-region durability requires S3 replication or snapshot copying, which is a separate configuration. The fifth is that the gateway appliance needs a reliable, low-latency network path to AWS; a gateway behind a flaky VPN will have a flaky upload buffer, and no amount of cache tuning fixes that.</p>
+      </section>
+
+      <section class="doc-section" id="vs-comparison">
+        <h2 class="section-heading">9. Storage Gateway vs. the Services It Gets Confused With</h2>
+        <p>The services most often confused with Storage Gateway are DataSync, AWS Backup, S3 Transfer Acceleration, and the Snow Family. The distinction is almost always about whether the requirement is continuous presentation of storage or one-time or scheduled movement of data. Storage Gateway presents storage; the others move it. A scenario that says "the application must continue to read and write its data using its existing protocol" is Storage Gateway. A scenario that says "the data must be copied to AWS" is DataSync, Snow, or Transfer Acceleration depending on volume and network.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Service</th><th>What it does</th><th>Pick it when…</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Storage Gateway</td><td>Presents on-prem storage backed by AWS, continuously</td><td>The application must keep using its existing protocol and the durable copy should live in AWS</td></tr>
+              <tr><td>DataSync</td><td>Scheduled or one-time file/object transfer</td><td>You need to move data to AWS on a schedule with integrity validation and bandwidth control</td></tr>
+              <tr><td>AWS Backup</td><td>Policy-based backup of AWS resources</td><td>You are protecting EC2, RDS, DynamoDB, EFS, or similar AWS-native resources</td></tr>
+              <tr><td>Snow Family</td><td>Physical offline data transfer</td><td>The network is the bottleneck and the dataset is too large to transfer online in the available time</td></tr>
+              <tr><td>S3 Transfer Acceleration</td><td>Accelerated online upload to S3</td><td>You need faster online uploads from distributed clients and the network path is the constraint</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The rule of thumb to carry into the exam is that Storage Gateway is the only one of these that keeps a live, protocol-compatible storage interface in front of the application. Everything else is a mover or a protector. When a scenario's constraint is "the application cannot be changed," that is the signal that you need a presentation layer, and Storage Gateway is the AWS-managed presentation layer for hybrid storage.</p>
+      </section>
+
+      <section class="doc-section" id="lab">
+        <h2 class="section-heading">Hands-on Lab: Cached vs. Stored Volume Gateway (60 min)</h2>
+        <div class="card card-green">
+          <p><strong>Objective.</strong> Deploy a Volume Gateway in both cached and stored modes against the same workload profile, measure the read-latency and durability differences, and produce a written recommendation for an on-premises application that requires low-latency local reads but durable cloud backup.</p>
+          <p><strong>Step 1 — Establish the workload profile.</strong> Before deploying anything, write down the workload's characteristics: total dataset size, working set size (the portion accessed in a typical day), peak read rate, peak write rate, and the maximum tolerable duration of a network outage. These five numbers drive every subsequent decision, and the lab is only meaningful if you commit to them up front. For this exercise, assume a 2 TB dataset with a 200 GB working set, 500 IOPS peak read, 200 IOPS peak write, and a 4-hour tolerable outage.</p>
+          <p><strong>Step 2 — Deploy the cached-mode gateway.</strong> Launch a Storage Gateway VM (or an EC2 instance for a lab-only deployment), attach a cache disk sized to roughly 1.5x the working set, and attach an upload buffer sized to absorb 4 hours of peak writes. Create a 2 TB cached volume and present it over iSCSI to a test client. Format it, populate it with a synthetic dataset that matches the profile, and run a read workload that touches the working set repeatedly and the cold data occasionally.</p>
+          <p><strong>Step 3 — Measure cached mode.</strong> Record the cache hit rate, read latency for cache hits versus cache misses, and the upload buffer utilization under the write workload. Then simulate a network outage by blocking the gateway's path to AWS and observe what happens: cached reads should continue, uncached reads should fail or hang, and writes should accumulate in the buffer until it fills. Note the exact time from outage start to first write failure — that is your real tolerable outage duration, and it is almost certainly shorter than the 4 hours you sized for unless you sized the buffer generously.</p>
+          <p><strong>Step 4 — Deploy the stored-mode gateway.</strong> Deploy a second gateway with local storage sized to the full 2 TB dataset and an upload buffer sized the same way. Present a 2 TB stored volume, populate it with the same dataset, and run the same read workload. Record read latency for the full dataset — it should be flat and network-independent. Then simulate the same network outage and observe that reads continue unaffected while snapshots stop uploading.</p>
+          <p><strong>Step 5 — Compare and decide.</strong> Build a table with the two modes side by side: local storage required, read latency profile, behavior during a network outage, recovery procedure if the appliance is lost, and cost. The cached-mode gateway needs far less local storage and recovers by redeploying against S3, but it degrades during an outage and has a cache-miss latency penalty. The stored-mode gateway needs full local storage and recovers from EBS snapshots, but it is network-independent for reads. Write a one-paragraph recommendation for the stated workload and justify it against the five numbers from Step 1.</p>
+          <p><strong>Step 6 — Clean up.</strong> Delete the volumes, deregister the gateways, and remove the S3 buckets and EBS snapshots created during the lab. Storage Gateway charges for the gateway, the storage, and the snapshots, so leaving the lab running is an easy way to accumulate cost.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="quiz">
+        <h2 class="section-heading">Scenario Question Drills (15 questions)</h2>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q1.</strong> An enterprise wants to eliminate its physical backup tape infrastructure while keeping its existing backup software unchanged. Which Storage Gateway type fits?</p>
+          <div class="scenario-options" id="opts-d48q1">
             <div class="scenario-option">A. File Gateway</div>
             <div class="scenario-option">B. Volume Gateway (stored mode)</div>
             <div class="scenario-option">C. Tape Gateway (Virtual Tape Library)</div>
             <div class="scenario-option">D. AWS Backup only</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d48q1', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d48q1"><strong>Correct answer: C.</strong> Tape Gateway presents a virtual tape library interface compatible with existing backup software, letting you retire physical tape hardware without changing backup workflows.</div>
         </div>
-        <button class="scenario-reveal-btn" onclick="revealAnswer('d48q0', 2)">Reveal Answer</button>
-        <div class="scenario-explanation" id="exp-d48q0"><strong>Correct answer: C.</strong> Tape Gateway presents a virtual tape library interface compatible with existing backup software, letting you retire physical tape hardware without changing backup workflows.</div>
-      </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q2.</strong> An on-premises application writes to a mounted filesystem over SMB and cannot be modified. The company wants the durable copy of the data in S3 with lifecycle tiering to Glacier. What should they deploy?</p>
+          <div class="scenario-options" id="opts-d48q2">
+            <div class="scenario-option">A. Volume Gateway in cached mode</div>
+            <div class="scenario-option">B. File Gateway presenting an S3 bucket as an SMB share</div>
+            <div class="scenario-option">C. Tape Gateway</div>
+            <div class="scenario-option">D. AWS DataSync on a nightly schedule</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d48q2', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d48q2"><strong>Correct answer: B.</strong> File Gateway presents S3 as an NFS/SMB share, so the unmodified application keeps using SMB while objects land in S3 where lifecycle policies can tier them.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q3.</strong> A database requires raw iSCSI block storage. The dataset is 40 TB but only about 2 TB is actively accessed, and the company wants to minimize on-premises storage. Which configuration fits?</p>
+          <div class="scenario-options" id="opts-d48q3">
+            <div class="scenario-option">A. Volume Gateway in stored mode</div>
+            <div class="scenario-option">B. Volume Gateway in cached mode</div>
+            <div class="scenario-option">C. File Gateway</div>
+            <div class="scenario-option">D. Tape Gateway</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d48q3', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d48q3"><strong>Correct answer: B.</strong> Cached mode keeps only the working set locally and stores primary data in S3, which matches a large dataset with a small hot subset and minimizes local storage.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q4.</strong> A workload requires iSCSI block storage, and the application cannot tolerate any read that depends on the network path to AWS. The full dataset must remain on-premises. Which configuration fits?</p>
+          <div class="scenario-options" id="opts-d48q4">
+            <div class="scenario-option">A. Volume Gateway in cached mode</div>
+            <div class="scenario-option">B. Volume Gateway in stored mode</div>
+            <div class="scenario-option">C. File Gateway with a large cache</div>
+            <div class="scenario-option">D. S3 with Transfer Acceleration</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d48q4', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d48q4"><strong>Correct answer: B.</strong> Stored mode keeps the primary data on-premises and uploads snapshots to AWS asynchronously, so reads never depend on the network.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q5.</strong> A Storage Gateway deployment is suddenly returning I/O errors on writes from the on-premises application. The network path to AWS has been degraded for several hours. What is the most likely cause?</p>
+          <div class="scenario-options" id="opts-d48q5">
+            <div class="scenario-option">A. The cache disk has failed</div>
+            <div class="scenario-option">B. The upload buffer has filled because writes could not drain to AWS</div>
+            <div class="scenario-option">C. The S3 bucket was deleted</div>
+            <div class="scenario-option">D. The gateway needs a software update</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d48q5', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d48q5"><strong>Correct answer: B.</strong> The upload buffer holds writes not yet durably stored in AWS; when the network degrades and the buffer fills, the gateway stops accepting writes and the application sees I/O errors.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q6.</strong> Read latency on a cached-mode Volume Gateway has climbed steadily with no errors, and the cache hit rate has dropped. What is the most likely explanation?</p>
+          <div class="scenario-options" id="opts-d48q6">
+            <div class="scenario-option">A. The upload buffer is too small</div>
+            <div class="scenario-option">B. The cache is thrashing because the working set has grown beyond the cache disk</div>
+            <div class="scenario-option">C. S3 is throttling the gateway</div>
+            <div class="scenario-option">D. The iSCSI initiator is misconfigured</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d48q6', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d48q6"><strong>Correct answer: B.</strong> A falling hit rate with rising read latency is the signature of cache thrashing — the working set no longer fits and reads are missing to S3.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q7.</strong> A company needs high availability for a File Gateway deployment. What does AWS provide automatically?</p>
+          <div class="scenario-options" id="opts-d48q7">
+            <div class="scenario-option">A. Automatic gateway failover across Availability Zones</div>
+            <div class="scenario-option">B. Nothing — high availability requires deploying a second gateway and managing failover yourself</div>
+            <div class="scenario-option">C. Multi-AZ standby gateways provisioned by the service</div>
+            <div class="scenario-option">D. Automatic failover to a second region</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d48q7', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d48q7"><strong>Correct answer: B.</strong> Storage Gateway does not provide automatic gateway failover; the HA pattern is two gateways against the same backend with a manual or scripted cutover.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q8.</strong> A stored-mode Volume Gateway appliance is destroyed and its local disks are unrecoverable. Where does recovery come from?</p>
+          <div class="scenario-options" id="opts-d48q8">
+            <div class="scenario-option">A. The gateway's local cache</div>
+            <div class="scenario-option">B. EBS snapshots uploaded to AWS from the stored volume</div>
+            <div class="scenario-option">C. The S3 bucket's object versions</div>
+            <div class="scenario-option">D. There is no recovery path</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d48q8', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d48q8"><strong>Correct answer: B.</strong> In stored mode the authoritative data is on-premises, so recovery depends on the EBS snapshots the gateway uploaded to AWS.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q9.</strong> Which Storage Gateway type stores virtual tapes in S3 and can archive ejected tapes to Glacier classes?</p>
+          <div class="scenario-options" id="opts-d48q9">
+            <div class="scenario-option">A. File Gateway</div>
+            <div class="scenario-option">B. Volume Gateway in cached mode</div>
+            <div class="scenario-option">C. Tape Gateway</div>
+            <div class="scenario-option">D. Volume Gateway in stored mode</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d48q9', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d48q9"><strong>Correct answer: C.</strong> Tape Gateway stores virtual tapes in S3 and can archive ejected tapes to Glacier Flexible Retrieval or Deep Archive, which is where the cost savings over physical tape come from.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q10.</strong> A scenario describes protecting EC2 instances, RDS databases, and DynamoDB tables with policy-based backup schedules and cross-account copies. Which service is intended?</p>
+          <div class="scenario-options" id="opts-d48q10">
+            <div class="scenario-option">A. Tape Gateway</div>
+            <div class="scenario-option">B. AWS Backup</div>
+            <div class="scenario-option">C. File Gateway</div>
+            <div class="scenario-option">D. Volume Gateway in stored mode</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d48q10', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d48q10"><strong>Correct answer: B.</strong> AWS Backup protects AWS-native resources with policy-based schedules and cross-account copies; Tape Gateway is for on-premises backup software writing to tape.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q11.</strong> A company wants cold files on a File Gateway share to automatically move to cheaper S3 storage classes without changing the application. What is the correct approach?</p>
+          <div class="scenario-options" id="opts-d48q11">
+            <div class="scenario-option">A. Configure the gateway to move files between shares</div>
+            <div class="scenario-option">B. Attach an S3 lifecycle policy to the bucket backing the share</div>
+            <div class="scenario-option">C. Use Tape Gateway instead</div>
+            <div class="scenario-option">D. Enable S3 Transfer Acceleration</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d48q11', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d48q11"><strong>Correct answer: B.</strong> File Gateway writes objects directly to S3, so a bucket lifecycle policy handles tiering transparently without any gateway or application change.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q12.</strong> Which statement best describes the difference between DataSync and Storage Gateway?</p>
+          <div class="scenario-options" id="opts-d48q12">
+            <div class="scenario-option">A. DataSync presents storage continuously; Storage Gateway moves data on a schedule</div>
+            <div class="scenario-option">B. DataSync moves data on a schedule or one time; Storage Gateway presents storage continuously</div>
+            <div class="scenario-option">C. They are interchangeable</div>
+            <div class="scenario-option">D. DataSync only works with databases</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d48q12', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d48q12"><strong>Correct answer: B.</strong> DataSync is a mover — scheduled or one-time transfer with integrity validation — while Storage Gateway keeps a live, protocol-compatible storage interface in front of the application.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q13.</strong> A gateway's upload buffer is sized for 4 hours of peak writes, but during a network outage writes fail after 45 minutes. What is the most likely explanation?</p>
+          <div class="scenario-options" id="opts-d48q13">
+            <div class="scenario-option">A. The cache disk is too small</div>
+            <div class="scenario-option">B. The buffer was sized against average rather than peak write rate, or the outage coincided with a write spike</div>
+            <div class="scenario-option">C. S3 rejected the writes</div>
+            <div class="scenario-option">D. The gateway needs more iSCSI targets</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d48q13', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d48q13"><strong>Correct answer: B.</strong> Buffer sizing must be based on peak write rate times tolerable outage duration; sizing against average write rate understates the buffer needed and shortens the real outage tolerance.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q14.</strong> A company needs cross-region durability for data written through a File Gateway. What must be configured?</p>
+          <div class="scenario-options" id="opts-d48q14">
+            <div class="scenario-option">A. Nothing — Storage Gateway replicates across regions automatically</div>
+            <div class="scenario-option">B. S3 Cross-Region Replication on the bucket backing the share</div>
+            <div class="scenario-option">C. A second gateway in the target region</div>
+            <div class="scenario-option">D. Tape Gateway archiving</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d48q14', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d48q14"><strong>Correct answer: B.</strong> Storage Gateway is regional; cross-region durability requires S3 Cross-Region Replication (or snapshot copying for Volume Gateway) as a separate configuration.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q15.</strong> Which of the following is the strongest signal that a scenario is asking for Storage Gateway rather than DataSync or Snow Family?</p>
+          <div class="scenario-options" id="opts-d48q15">
+            <div class="scenario-option">A. The dataset is very large</div>
+            <div class="scenario-option">B. The application cannot be modified and must keep using its existing storage protocol</div>
+            <div class="scenario-option">C. The network is the bottleneck</div>
+            <div class="scenario-option">D. The data must be encrypted in transit</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d48q15', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d48q15"><strong>Correct answer: B.</strong> "The application cannot be modified" is the signal that you need a presentation layer rather than a mover, and Storage Gateway is the AWS-managed presentation layer for hybrid storage.</div>
+        </div>
+      </section>
+
+      <section class="doc-section" id="preview">
+        <h2 class="section-heading">Peek into Tomorrow</h2>
+        <div class="card card-purple">
+          <p>Everything in this day assumed the network path to AWS is good enough to keep the gateway's cache and upload buffer healthy. That assumption is doing a lot of work. A cached-mode Volume Gateway with a 200 GB working set and a 4-hour upload buffer is only as durable as the Direct Connect or VPN link underneath it, and the failure mode we walked through — writes failing after the buffer fills — is really a statement about how much network outage the design can absorb. The open question is what you do when the network is not merely degraded but is the actual bottleneck: when the dataset is too large to transfer online in the time available, or when there is no viable uplink at all.</p>
+          <p>Storage Gateway does not answer that question, because it is a continuous-presentation service, not a bulk mover. The Snow Family does, and the interesting part is the sizing decision: a Snowball Edge Storage Optimized device carries roughly 80 TB usable, a Compute Optimized device adds GPU for edge processing, and Snowmobile exists for exabyte-scale engagements where even a fleet of Snowballs is impractical. The question tomorrow's material resolves is how to choose between those devices — and between offline transfer and a hybrid pattern where Snowball handles the bulk historical dataset while the network handles the ongoing delta.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="sources">
+        <h2 class="section-heading">Sources</h2>
+        <div class="card">
+          <ul class="source-list">
+            <li><a href="https://docs.aws.amazon.com/storagegateway/latest/userguide/WhatIsStorageGateway.html" target="_blank">AWS Storage Gateway User Guide — What Is AWS Storage Gateway?</a></li>
+            <li><a href="https://docs.aws.amazon.com/storagegateway/latest/userguide/StorageGatewayConcepts.html" target="_blank">AWS Storage Gateway User Guide — Storage Gateway Concepts</a></li>
+            <li><a href="https://docs.aws.amazon.com/storagegateway/latest/userguide/volume-gateway.html" target="_blank">AWS Storage Gateway User Guide — Volume Gateway</a></li>
+            <li><a href="https://docs.aws.amazon.com/storagegateway/latest/userguide/FileGateway.html" target="_blank">AWS Storage Gateway User Guide — File Gateway</a></li>
+            <li><a href="https://docs.aws.amazon.com/storagegateway/latest/userguide/tape-gateway.html" target="_blank">AWS Storage Gateway User Guide — Tape Gateway</a></li>
+            <li><a href="https://docs.aws.amazon.com/storagegateway/latest/userguide/MaintenanceManagingResource.html" target="_blank">AWS Storage Gateway User Guide — Managing Your Storage Gateway Resources</a></li>
+            <li><a href="https://docs.aws.amazon.com/storagegateway/latest/userguide/monitoring-overview.html" target="_blank">AWS Storage Gateway User Guide — Monitoring Your Storage Gateway</a></li>
+            <li><a href="https://docs.aws.amazon.com/whitepapers/latest/hybrid-cloud-storage-architectures/hybrid-cloud-storage-architectures.html" target="_blank">AWS Whitepaper — Hybrid Cloud Storage Architectures</a></li>
+          </ul>
+        </div>
       </section>
       <div class="day-nav">
         <a href="day-047.html">&larr; Day 47: AWS DataSync — Hybrid File &amp; Object Transfer</a>

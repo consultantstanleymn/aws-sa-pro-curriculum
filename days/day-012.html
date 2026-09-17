@@ -104,36 +104,354 @@
         <span class="pill pill-green">Phase 1: Multi-Account Governance &amp; Networking</span>
       </div>
       <h1 class="hero-title">AWS Route 53 Resolver (Hybrid DNS)</h1>
-      <div class="reading-meta">&#128337; ~3 min read &middot; 2 services covered</div>
+      <div class="reading-meta">&#128337; ~58 min read &middot; 2 services covered</div>
       <div class="services-grid">
         <span class="service-tag">Route 53 Resolver</span>
         <span class="service-tag">Inbound/Outbound Endpoints</span>
       </div>
       <div id="tracker"></div>
-      <section class="doc-section">
-        <h2 class="section-heading">Today's Concept</h2>
+
+      <section class="doc-section" id="recap">
+        <h2 class="section-heading">Recap: From Private Links to Private Names</h2>
         <div class="card card-accent">
-          <p>Route 53 Resolver enables hybrid DNS: Inbound endpoints let on-prem resolvers query AWS-hosted private hosted zones; Outbound endpoints + forwarding rules let AWS resources resolve on-prem domain names, routed over Direct Connect or VPN.</p>
-        </div>
-        <h3 class="sub-heading">Hands-on Lab / Practical Action (45 min)</h3>
-        <div class="card">
-          <p>Configure a conditional forwarding rule sending queries for corp.internal to an on-prem DNS server via a Resolver outbound endpoint.</p>
+          <p>Day 11 established that Direct Connect gives you a dedicated private path into AWS, and that the VIF you choose determines what that path can reach: a Private VIF terminates on a single VPC, a Transit VIF terminates on a Transit Gateway and therefore reaches many VPCs, and a Public VIF reaches AWS public service endpoints. It also established that resilience is a property of the physical design, not the logical one — redundant connections at separate DX locations with BGP failover, not a single link with a backup configuration on paper.</p>
+          <p>Today extends that material in a direction the VIF discussion deliberately left open. A Transit VIF gives you IP reachability between on-premises networks and every VPC attached to the Transit Gateway, and BGP failover gives you a path that survives a link failure. Neither of those things gives you name resolution. An on-premises application that can ping a database's private IP address still cannot connect to it if the connection string uses a hostname, and an EC2 instance that can reach an on-premises server over the Transit VIF still cannot resolve <code>corp.internal</code> to an address. Route 53 Resolver is the piece that closes that gap, and it is the reason hybrid connectivity questions on the exam almost always have a DNS component hiding inside them.</p>
         </div>
       </section>
-      <section class="doc-section">
-        <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
-        
-      <div class="scenario-card">
-        <p class="scenario-question"><strong>Q1.</strong> On-prem servers need to resolve names in a private Route 53 hosted zone. What do you configure?</p>
-        <div class="scenario-options" id="opts-d12q0">
-            <div class="scenario-option">A. A Route 53 Resolver outbound endpoint</div>
-            <div class="scenario-option">B. A Route 53 Resolver inbound endpoint, with on-prem DNS forwarding queries to it</div>
-            <div class="scenario-option">C. A public hosted zone instead</div>
-            <div class="scenario-option">D. NAT Gateway DNS forwarding</div>
+
+      <section class="doc-section" id="why-on-exam">
+        <h2 class="section-heading">1. Why Hybrid DNS Is a Recurring Exam Problem</h2>
+        <p>Hybrid DNS shows up on the SAP-C02 exam because it is the point where three otherwise independent design decisions collide: network topology, identity of names, and failure domain. A candidate who has memorized that Transit Gateway connects VPCs and that Direct Connect connects on-premises can still fail a question that asks why an application works from one subnet but not another, or why a migration cutover succeeded for IP-based connections and failed for hostname-based ones. The exam uses DNS as a discriminator precisely because it is invisible in a network diagram. Two architectures that look identical on a whiteboard behave completely differently depending on whether name resolution was designed or assumed.</p>
+        <p>The domain mapping is mostly Domain 1, the organizational complexity and hybrid connectivity domain, but the topic bleeds into Domain 2 as well. Any resilience question that involves a secondary region, a standby data center, or a failover runbook has a DNS dependency, because failover that changes an IP address without changing the name is not failover from the application's perspective. Route 53 Resolver also appears in migration scenarios, where the question is how to keep on-premises clients resolving the same names before, during, and after a cutover without editing application configuration. The recurring shape of the question is a constraint that rules out the obvious answer: you cannot use a public hosted zone because the names must not be publicly resolvable, you cannot edit every client's <code>/etc/hosts</code>, and you cannot put a NAT gateway in the path because the traffic must stay on private connectivity.</p>
+        <p>What makes the topic tractable is that the AWS-side mechanism is small. There are two endpoint types, one rule type, and a handful of quotas. The complexity is entirely in the direction of the query and in the routing that carries it. Once you can state, for any given query, which resolver asks which resolver and over which path, the exam questions become mechanical. The rest of this lesson is organized around building that directional intuition, because almost every wrong answer on a hybrid DNS question comes from reversing the direction of an endpoint.</p>
+      </section>
+
+      <section class="doc-section" id="mechanism">
+        <h2 class="section-heading">2. How Resolver Actually Answers a Query</h2>
+        <p>Every VPC has a Route 53 Resolver, and it is not something you create. It is reachable at the VPC CIDR base plus two — the classic <code>10.0.0.2</code> for a <code>10.0.0.0/16</code> VPC — and it is the resolver that every EC2 instance uses by default through the DHCP option set. This resolver answers queries for names in private hosted zones associated with the VPC, resolves public names by recursing against the internet, and, critically, is the component that Resolver endpoints extend. The endpoints do not replace the VPC resolver; they give it a way to talk to resolvers outside the VPC.</p>
+        <p>An inbound endpoint is a set of elastic network interfaces, one per subnet you specify, each with an IP address from that subnet. On-premises DNS servers are configured to forward queries for AWS-hosted names to those IP addresses. The query arrives at the ENI, is handed to the VPC resolver, and is answered from the private hosted zone associated with the VPC. The direction is on-premises to AWS. An outbound endpoint is also a set of ENIs, but it works the other way: the VPC resolver, when it encounters a name that matches a Resolver rule, forwards the query from those ENIs to the target IP addresses named in the rule. The direction is AWS to on-premises. Both endpoint types are regional constructs, both require at least two IP addresses for availability, and both are billed per endpoint-hour plus per query.</p>
+        <p>The rule type that matters for hybrid DNS is the forwarding rule, which pairs a domain name with a list of target IP addresses and optionally a port. Rules are associated with VPCs, and association is what makes the rule visible to that VPC's resolver. A rule for <code>corp.internal</code> with targets pointing at two on-premises DNS servers means that any query from an associated VPC for a name ending in <code>corp.internal</code> is forwarded out through the outbound endpoint rather than being recursed publicly. This is why the mechanism is described as conditional forwarding: the rule is a condition, and only matching queries take the outbound path. Everything else follows the default behavior.</p>
+        <p>The path the forwarded query takes is the part candidates most often get wrong. The outbound endpoint's ENIs live in your VPC subnets, so the query leaves the VPC as ordinary IP traffic from those ENI addresses. It reaches the on-premises resolver only if the route tables and the hybrid connectivity — the Transit VIF or the VPN attachment from Day 11 — actually carry traffic from those subnets to the on-premises DNS server addresses. A correctly configured Resolver rule with a broken route is indistinguishable from a rule that does not exist, and the failure looks like a timeout rather than a resolution error.</p>
+      </section>
+
+      <section class="doc-section" id="decision-boundary">
+        <h2 class="section-heading">3. The Core Decision Boundary: Which Direction Is the Query Going?</h2>
+        <p>Nearly every hybrid DNS scenario reduces to a single question: who is asking, and where does the answer live? If the asker is on-premises and the answer lives in a private hosted zone in AWS, you need an inbound endpoint. If the asker is in AWS and the answer lives on-premises, you need an outbound endpoint plus a forwarding rule. The two are not interchangeable, they are not alternatives to each other, and a design that needs both directions needs both endpoints. The exam exploits this by describing a scenario in terms of the application rather than the query direction, so the first move is always to restate the scenario as a query.</p>
+        <p>The second-order decision is whether the on-premises side is even capable of forwarding. An inbound endpoint only works if the on-premises DNS servers can be configured with a conditional forwarder pointing at the endpoint IPs. In an environment where the on-premises DNS is a managed appliance the team does not control, that may be impossible, and the design has to change — for example, by resolving the AWS names through a different mechanism entirely. The exam rarely states this constraint explicitly, but it appears as a phrase like "the on-premises DNS team will not modify their configuration," which is a signal that the inbound endpoint answer is wrong.</p>
+        <p>The third decision is scope. Resolver rules are associated with VPCs, and a rule associated with one VPC does not apply to another. In a multi-account landing zone, the standard pattern is to create the outbound endpoint and the rules in a central networking account, then share the rules with workload accounts using AWS RAM — the same sharing mechanism from Day 6. This is why hybrid DNS questions often have a multi-account flavor: the endpoint is expensive and should exist once, but the rules need to be visible everywhere.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Scenario shape</th><th>Direction</th><th>Component</th><th>Where it lives</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>On-prem app resolves <code>db.prod.internal</code> in a private hosted zone</td><td>On-prem &rarr; AWS</td><td>Inbound endpoint</td><td>VPC that owns the zone</td></tr>
+              <tr><td>EC2 instance resolves <code>erp.corp.internal</code> on-prem</td><td>AWS &rarr; on-prem</td><td>Outbound endpoint + forwarding rule</td><td>Central networking VPC</td></tr>
+              <tr><td>Both directions needed</td><td>Bidirectional</td><td>Both endpoint types</td><td>Central networking VPC</td></tr>
+              <tr><td>On-prem DNS cannot be modified</td><td>On-prem &rarr; AWS</td><td>Not solvable with inbound endpoint</td><td>Redesign required</td></tr>
+              <tr><td>Many accounts need the same on-prem names</td><td>AWS &rarr; on-prem</td><td>Outbound endpoint + RAM-shared rules</td><td>Central networking account</td></tr>
+            </tbody>
+          </table>
         </div>
-        <button class="scenario-reveal-btn" onclick="revealAnswer('d12q0', 1)">Reveal Answer</button>
-        <div class="scenario-explanation" id="exp-d12q0"><strong>Correct answer: B.</strong> Inbound endpoints expose AWS private DNS to on-prem resolvers; outbound endpoints do the reverse (AWS resolving on-prem names).</div>
-      </div>
+      </section>
+
+      <section class="doc-section" id="config-tradeoffs">
+        <h2 class="section-heading">4. Endpoint Configuration and What Each Choice Costs</h2>
+        <p>The first configuration decision is how many IP addresses to give an endpoint and in which subnets. AWS requires at least two IP addresses per endpoint for availability, and the guidance is to place them in different Availability Zones. This is not a formality: an endpoint with both addresses in one AZ is a single-AZ dependency for every DNS query in the environment, and DNS failure is unusually total because it breaks new connections rather than degrading existing ones. The cost of the second AZ is one more ENI and one more IP address, which is trivial next to the blast radius of a zonal DNS outage.</p>
+        <p>The second decision is the protocol and port. Resolver endpoints support DNS over UDP and TCP on port 53, and they also support DNS over HTTPS on port 443 for outbound rules. The DoH option matters in environments where the on-premises resolver is exposed through a service that only accepts HTTPS, or where the security team requires encrypted DNS on the wire. Choosing DoH changes the target port in the rule and the protocol the on-premises side must accept; it does not change the direction or the rule semantics.</p>
+        <p>The third decision is rule scope and priority. A forwarding rule can be associated with many VPCs, and rules are evaluated by most-specific match, so a rule for <code>corp.internal</code> and a rule for <code>hr.corp.internal</code> can coexist with the more specific one winning. This is how you split a single on-premises namespace across two different DNS servers — for example, sending HR queries to a dedicated resolver while everything else goes to the general one. The tradeoff is operational: every additional rule is another object to keep in sync with the on-premises DNS team's zone delegation, and a stale rule produces timeouts rather than clean failures.</p>
+        <p>The fourth decision is whether to use a single outbound endpoint for everything or to segment by environment. A single endpoint in a shared networking VPC is cheaper and simpler, but it means production and development DNS traffic share a path and a failure domain. Segmenting gives you isolation at the cost of more endpoints and more rules. The exam generally rewards the shared-endpoint answer unless the scenario explicitly calls for isolation, because the question is usually testing whether you know that endpoints are regional and shareable rather than whether you can build the most elaborate design.</p>
+      </section>
+
+      <section class="doc-section" id="sizing-limits">
+        <h2 class="section-heading">5. Sizing, Limits, and the Numbers Worth Knowing</h2>
+        <p>Resolver endpoints are sized by IP address count, not by a throughput tier you select. Each IP address on an endpoint can handle a certain number of queries per second, and the practical guidance is to add addresses when you approach that ceiling rather than to over-provision up front. The relevant published figures are that each Resolver endpoint IP address supports up to 10,000 queries per second, and that an endpoint can have up to six IP addresses. That gives a single endpoint a theoretical ceiling of 60,000 queries per second, which is far beyond most enterprise DNS loads but is worth knowing because it tells you the scaling lever is address count.</p>
+        <p>The quota that catches people is the number of Resolver rules per Region, which is 1,000 by default, and the number of VPC associations per rule, which is also 1,000. Neither is likely to bind in a normal environment, but the association quota matters in a large landing zone where a single shared rule is associated with every VPC in the organization. The other quota worth remembering is that you can have up to 600 inbound and outbound endpoints per Region combined, which is effectively unlimited for design purposes but confirms that endpoints are a per-Region resource.</p>
+        <p>On the pricing side, the model is endpoint-hour plus query volume. Each endpoint IP address is billed per hour whether or not it serves traffic, and each query through an endpoint is billed per million queries. This is the reason the shared-endpoint pattern is the standard recommendation: an endpoint per VPC multiplies the hourly charge by the number of VPCs for no functional benefit, since a single endpoint in a shared VPC can serve rules associated with many VPCs. The exam does not usually ask for exact prices, but it does ask for the design that avoids unnecessary per-VPC endpoints, and the cost model is the justification.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Item</th><th>Default / published value</th><th>Why it matters</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Minimum IP addresses per endpoint</td><td>2</td><td>Availability; place in separate AZs</td></tr>
+              <tr><td>Maximum IP addresses per endpoint</td><td>6</td><td>Scaling lever for query volume</td></tr>
+              <tr><td>Queries per second per endpoint IP</td><td>Up to 10,000</td><td>Determines when to add addresses</td></tr>
+              <tr><td>Resolver rules per Region</td><td>1,000</td><td>Rarely binding; relevant in large orgs</td></tr>
+              <tr><td>VPC associations per rule</td><td>1,000</td><td>Binds in very large landing zones</td></tr>
+              <tr><td>Endpoints per Region (in + out)</td><td>600</td><td>Confirms endpoints are regional</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="doc-section" id="failure-modes">
+        <h2 class="section-heading">6. Failure Modes and What They Look Like in Production</h2>
+        <p>The most common failure is a forwarding rule whose target IP addresses are unreachable from the outbound endpoint's subnets. The symptom is a query timeout rather than an NXDOMAIN, and the diagnostic move is to check the route table for the subnet containing the outbound endpoint ENIs and confirm there is a route to the on-premises DNS server addresses over the Transit Gateway or VPN. This failure is easy to misdiagnose as an on-premises DNS problem because the query does leave AWS; it simply never arrives. A useful first check is to look at the Resolver query logs, which record the query, the rule that matched, and the response code, making the difference between "no rule matched" and "rule matched but target timed out" immediately visible.</p>
+        <p>The second failure is a rule that matches more than intended. A rule for <code>internal</code> will capture <code>anything.internal</code>, including names that should have resolved publicly or from a private hosted zone. The symptom is that a name which used to resolve now times out, and the cause is usually a rule added for one purpose that overlaps an existing namespace. Because rules are evaluated by most-specific match, the fix is either to narrow the rule or to add a more specific rule that restores the intended behavior. This is the DNS equivalent of a route table with an overly broad prefix, and it fails the same way: silently, for a subset of names.</p>
+        <p>The third failure is an endpoint with insufficient IP addresses for the query volume, which manifests as intermittent timeouts under load rather than a consistent failure. Because DNS is usually the first step of every new connection, the application-level symptom is a spike in connection errors that correlates with traffic, not with any single service. The diagnostic move is to look at Resolver endpoint metrics and query logs for throttling, and the fix is to add IP addresses to the endpoint. This failure is worth internalizing because it is the one that looks like an application bug and is actually a capacity problem.</p>
+        <p>The fourth failure is asymmetric resolution, where AWS can resolve on-premises names but on-premises cannot resolve AWS names, or vice versa. This is almost always a missing endpoint in one direction rather than a misconfiguration of an existing one, and it is the failure mode the exam is most likely to describe, because it tests whether you understand that inbound and outbound endpoints are separate components with separate purposes.</p>
+      </section>
+
+      <section class="doc-section" id="sre-angle">
+        <h2 class="section-heading">7. The Operational and SRE Angle</h2>
+        <p>DNS is a dependency of nearly every other service, which makes it a poor candidate for best-effort monitoring. The metrics that matter are the Resolver endpoint metrics: query volume, the count of queries that resulted in a timeout or a SERVFAIL, and the health of the endpoint ENIs themselves. A useful alarm is one on the rate of SERVFAIL responses from an outbound endpoint, because that metric rises before applications start failing and gives you a window to act. A second alarm on the endpoint's query volume relative to its IP address count gives you early warning on the capacity failure described above.</p>
+        <p>Resolver query logging is the operational tool that makes the rest tractable. It can be sent to CloudWatch Logs, S3, or Kinesis Data Firehose, and it records the query name, the query type, the VPC, the rule that matched, and the response code. In an incident, this is the difference between guessing and knowing: you can see whether the query arrived, which rule handled it, and what the target returned. The cost consideration is volume, since every query is logged, so the usual pattern is to log to S3 with a lifecycle policy rather than to CloudWatch Logs for high-volume environments.</p>
+        <p>From an SLO perspective, hybrid DNS is a shared dependency that should have its own availability target, because it is on the critical path for every service that resolves a name across the boundary. The runbook shape follows from the failure modes: first check whether the query is arriving at the endpoint at all, then whether a rule matched, then whether the target was reachable, then whether the endpoint had capacity. That ordering moves from the most common cause to the least, and it maps cleanly onto the query logs, which is what makes it a runbook rather than a checklist.</p>
+        <p>One operational detail worth building in early is a synthetic check that resolves a known on-premises name from a known AWS subnet on a schedule. This is the DNS equivalent of the canary from Day 30: it detects a broken path before an application does, and it distinguishes a DNS failure from an application failure during an incident. Without it, the first signal of a DNS problem is usually a cascade of unrelated application alarms.</p>
+      </section>
+
+      <section class="doc-section" id="gotchas">
+        <h2 class="section-heading">8. Edge Cases and Exam Gotchas</h2>
+        <p>The single most common mistake is reversing the endpoint direction. The mnemonic that works is to name the endpoint after where the query is going, not where it is coming from: an inbound endpoint is inbound to AWS, and an outbound endpoint is outbound from AWS. If the scenario says on-premises clients need to resolve AWS names, the answer contains "inbound." If it says AWS resources need to resolve on-premises names, the answer contains "outbound." Candidates who reason from the perspective of the client rather than the query get this backwards under time pressure.</p>
+        <p>The second gotcha is forgetting that the endpoint is regional. A Resolver endpoint in <code>us-east-1</code> does nothing for a VPC in <code>us-west-2</code>, and a multi-region design needs an endpoint in each Region that has VPCs needing hybrid resolution. This is the same regional-versus-global distinction that appears with Transit Gateway and Direct Connect, and it is a reliable source of wrong answers.</p>
+        <p>The third gotcha is assuming that a private hosted zone is automatically resolvable from on-premises once an inbound endpoint exists. The zone must be associated with the VPC that the inbound endpoint serves, and the on-premises resolver must be configured to forward to the endpoint IPs. Both halves are required, and the exam will describe a scenario where one half is missing.</p>
+        <p>The fourth gotcha is the shared-services account pattern. In a multi-account environment, the outbound endpoint and the rules belong in the central networking account, and the rules are shared with workload accounts via AWS RAM. A design that creates an endpoint in every account is functionally correct but is the wrong answer on cost and operational grounds, and the exam will usually include it as a distractor.</p>
+        <p>The fifth gotcha is the interaction with private hosted zone resolution order. A query for a name that exists both in a private hosted zone and publicly resolves to the private answer from within an associated VPC, which is usually the intent but occasionally is not. If the scenario requires the public answer from inside the VPC, the zone association is the thing to change, not the Resolver rule.</p>
+      </section>
+
+      <section class="doc-section" id="vs-comparison">
+        <h2 class="section-heading">9. Resolver vs. the Alternatives It Gets Confused With</h2>
+        <p>Route 53 Resolver is not the only way to make names resolve across a boundary, and the exam tests whether you can tell the alternatives apart. The most common confusion is with Route 53 private hosted zones themselves. A private hosted zone is the container for the records; Resolver is the mechanism that lets a resolver outside the VPC query those records. Creating a private hosted zone does not make it resolvable from on-premises, and creating an inbound endpoint does not create any records. They are complementary, and a scenario that mentions both is usually testing whether you know which one is missing.</p>
+        <p>The second confusion is with VPC peering and Transit Gateway. Those provide IP reachability, which is necessary but not sufficient for name resolution. A design that connects two VPCs with peering and expects names to resolve across them will fail unless the private hosted zone is associated with both VPCs or a Resolver rule bridges them. The exam uses this by describing a scenario where connectivity is already established and the problem is still that names do not resolve.</p>
+        <p>The third confusion is with the public DNS of the on-premises environment. If the on-premises names are publicly resolvable, no Resolver configuration is needed at all, and the correct answer is to do nothing. The exam will sometimes include a scenario where the names are public and the elaborate hybrid DNS answer is a distractor. The signal is a phrase like "the records are already in a public zone."</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Option</th><th>What it provides</th><th>Pick it when…</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Route 53 private hosted zone</td><td>Record storage, resolvable inside associated VPCs</td><td>You need internal names for AWS resources only</td></tr>
+              <tr><td>Inbound Resolver endpoint</td><td>On-prem &rarr; AWS name resolution</td><td>On-premises clients must resolve AWS private names</td></tr>
+              <tr><td>Outbound Resolver endpoint + rule</td><td>AWS &rarr; on-prem name resolution</td><td>AWS resources must resolve on-premises names</td></tr>
+              <tr><td>VPC peering / Transit Gateway</td><td>IP reachability only</td><td>You need packets to flow, not names to resolve</td></tr>
+              <tr><td>Public DNS records</td><td>Global resolution</td><td>The names are not sensitive and can be public</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The practical rule is to ask what is missing: if packets cannot flow, the answer is a connectivity service; if packets flow but names do not resolve, the answer is a Resolver endpoint in the correct direction; if the names should not be private at all, the answer is a public zone. Most hybrid DNS exam questions are one of those three, and identifying which one is the whole task.</p>
+      </section>
+
+      <section class="doc-section" id="lab">
+        <h2 class="section-heading">Hands-on Lab: Conditional Forwarding to an On-Premises Resolver (45 min)</h2>
+        <div class="card card-green">
+          <p>This lab builds the AWS-to-on-premises direction end to end: an outbound endpoint, a forwarding rule for <code>corp.internal</code>, and the verification that a query from an EC2 instance in a workload VPC actually reaches an on-premises DNS server and returns an answer. It assumes a working hybrid path already exists — a Transit Gateway attachment or a VPN — because the lab is about DNS, not connectivity, and a broken path will make every step look like a DNS failure.</p>
+          <p><strong>Step 1 — Establish the baseline.</strong> From an EC2 instance in the workload VPC, run <code>dig erp.corp.internal</code> and confirm it fails with a timeout or NXDOMAIN. Record the exact failure, because the difference between the two is the difference between "no rule matched" and "rule matched but the target was unreachable," and you will use that distinction later. Also run <code>dig amazon.com</code> to confirm the VPC resolver itself is healthy and recursing normally.</p>
+          <p><strong>Step 2 — Create the outbound endpoint.</strong> In the central networking VPC, create a Route 53 Resolver outbound endpoint and select two subnets in different Availability Zones. Note the IP addresses assigned to the endpoint ENIs; you will need them if you later need to allow this traffic through a firewall or security group. Confirm the endpoint reaches a status of Operational before continuing, since rules associated with a non-operational endpoint will silently fail.</p>
+          <p><strong>Step 3 — Create the forwarding rule.</strong> Create a Resolver rule with the domain name <code>corp.internal</code>, the rule type set to Forward, and two target IP addresses corresponding to the on-premises DNS servers. If your on-premises resolver requires encrypted DNS, set the protocol to DoH and the port to 443; otherwise leave the default UDP/TCP on port 53. Associate the rule with the workload VPC, not just the networking VPC, since association is what makes the rule visible to the resolver that the EC2 instance uses.</p>
+          <p><strong>Step 4 — Verify the path.</strong> From the EC2 instance, run <code>dig erp.corp.internal</code> again. If it resolves, the rule and the path are both working. If it times out, check the route table for the subnets containing the outbound endpoint ENIs and confirm there is a route to the on-premises DNS server addresses over the Transit Gateway or VPN. This is the step where most failures occur, and it is a routing problem rather than a Resolver problem.</p>
+          <p><strong>Step 5 — Enable query logging and inspect it.</strong> Turn on Resolver query logging to CloudWatch Logs for the workload VPC, repeat the query, and find the log entry. Confirm that it records the query name, the rule that matched, and the response code. This is the artifact you will use in an incident, and seeing it once makes the runbook concrete.</p>
+          <p><strong>Step 6 — Test the failure mode deliberately.</strong> Remove one of the two target IP addresses from the rule and repeat the query. With a single target, the query should still succeed; then remove the second target and confirm the query fails with a timeout. This demonstrates that the rule's target list is the availability mechanism for the on-premises side, and it mirrors the two-AZ requirement on the AWS side.</p>
+          <p><strong>Step 7 — Clean up.</strong> Delete the rule, delete the outbound endpoint, and disable query logging. Leaving an endpoint running costs money per hour regardless of traffic, which is itself a lesson about why the shared-endpoint pattern matters.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="quiz">
+        <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q1.</strong> On-premises servers need to resolve names in a private Route 53 hosted zone. What do you configure?</p>
+          <div class="scenario-options" id="opts-d12q1">
+            <div class="scenario-option">A. A Route 53 Resolver outbound endpoint</div>
+            <div class="scenario-option">B. A Route 53 Resolver inbound endpoint, with on-premises DNS forwarding queries to it</div>
+            <div class="scenario-option">C. A public hosted zone instead</div>
+            <div class="scenario-option">D. NAT gateway DNS forwarding</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d12q1', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d12q1"><strong>Correct answer: B.</strong> Inbound endpoints expose AWS private DNS to on-premises resolvers; outbound endpoints do the reverse. The direction of the query determines the endpoint type.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q2.</strong> An EC2 instance in a workload VPC must resolve <code>erp.corp.internal</code>, which is served by an on-premises DNS server. The VPC is connected to on-premises via a Transit Gateway. What is required?</p>
+          <div class="scenario-options" id="opts-d12q2">
+            <div class="scenario-option">A. An inbound Resolver endpoint in the workload VPC</div>
+            <div class="scenario-option">B. An outbound Resolver endpoint plus a forwarding rule for <code>corp.internal</code>, associated with the workload VPC</div>
+            <div class="scenario-option">C. A private hosted zone for <code>corp.internal</code> in the workload VPC</div>
+            <div class="scenario-option">D. Nothing — Transit Gateway resolves names automatically</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d12q2', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d12q2"><strong>Correct answer: B.</strong> The query originates in AWS and the answer lives on-premises, so the outbound direction is required. Transit Gateway provides IP reachability only, never name resolution.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q3.</strong> A forwarding rule for <code>corp.internal</code> is configured with two target IP addresses, but queries from the workload VPC time out. The on-premises DNS servers are confirmed healthy. What is the most likely cause?</p>
+          <div class="scenario-options" id="opts-d12q3">
+            <div class="scenario-option">A. The rule needs to be associated with the VPC that owns the private hosted zone</div>
+            <div class="scenario-option">B. The subnets containing the outbound endpoint ENIs have no route to the on-premises DNS server addresses</div>
+            <div class="scenario-option">C. The endpoint needs a third IP address</div>
+            <div class="scenario-option">D. Resolver rules only work with DNS over HTTPS</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d12q3', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d12q3"><strong>Correct answer: B.</strong> A correctly configured rule with an unreachable target produces a timeout, not an NXDOMAIN. The outbound endpoint's subnets must have a route to the on-premises resolver addresses.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q4.</strong> A company has 40 workload accounts, all of which need to resolve the same on-premises namespace. What is the most cost-effective and operationally sound design?</p>
+          <div class="scenario-options" id="opts-d12q4">
+            <div class="scenario-option">A. Create an outbound endpoint and rule in each of the 40 accounts</div>
+            <div class="scenario-option">B. Create one outbound endpoint and rule in a central networking account and share the rule with the workload accounts via AWS RAM</div>
+            <div class="scenario-option">C. Create an inbound endpoint in each account</div>
+            <div class="scenario-option">D. Use a public hosted zone for the on-premises namespace</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d12q4', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d12q4"><strong>Correct answer: B.</strong> Endpoints are billed per hour per IP address, so a single shared endpoint in a central account avoids multiplying the cost by 40. AWS RAM shares the rule across accounts.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q5.</strong> A Resolver outbound endpoint has two IP addresses, both in the same Availability Zone. What is the risk?</p>
+          <div class="scenario-options" id="opts-d12q5">
+            <div class="scenario-option">A. None — the endpoint is still highly available because it has two addresses</div>
+            <div class="scenario-option">B. The endpoint becomes a single-AZ dependency, so an AZ failure breaks all hybrid name resolution</div>
+            <div class="scenario-option">C. The endpoint will not reach an Operational state</div>
+            <div class="scenario-option">D. Queries will be limited to 10,000 per second total</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d12q5', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d12q5"><strong>Correct answer: B.</strong> Two addresses in one AZ protect against an ENI failure but not against an AZ failure. The standard guidance is to place endpoint IPs in separate AZs.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q6.</strong> An on-premises DNS team refuses to modify their resolver configuration. On-premises clients must resolve AWS private names. What is the correct assessment?</p>
+          <div class="scenario-options" id="opts-d12q6">
+            <div class="scenario-option">A. An inbound endpoint will work without any on-premises change</div>
+            <div class="scenario-option">B. An inbound endpoint requires the on-premises resolver to forward queries to it, so the design is not viable as stated</div>
+            <div class="scenario-option">C. An outbound endpoint will solve it</div>
+            <div class="scenario-option">D. A public hosted zone will solve it</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d12q6', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d12q6"><strong>Correct answer: B.</strong> An inbound endpoint only receives queries if the on-premises resolver is configured to forward to it. Without that change, the endpoint is unreachable from on-premises.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q7.</strong> A forwarding rule for <code>internal</code> was added, and now a name that previously resolved from a private hosted zone times out. What happened?</p>
+          <div class="scenario-options" id="opts-d12q7">
+            <div class="scenario-option">A. The private hosted zone was deleted</div>
+            <div class="scenario-option">B. The broad rule captures names that should have resolved from the private hosted zone, and the forwarded query times out</div>
+            <div class="scenario-option">C. Resolver rules always override private hosted zones and cannot be fixed</div>
+            <div class="scenario-option">D. The endpoint needs more IP addresses</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d12q7', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d12q7"><strong>Correct answer: B.</strong> Rules are evaluated by most-specific match, so an overly broad rule can capture names intended for a private hosted zone. Narrow the rule or add a more specific one.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q8.</strong> Which Resolver feature lets you determine, during an incident, whether a query matched a rule and what the target returned?</p>
+          <div class="scenario-options" id="opts-d12q8">
+            <div class="scenario-option">A. VPC Flow Logs</div>
+            <div class="scenario-option">B. Resolver query logging</div>
+            <div class="scenario-option">C. CloudTrail data events</div>
+            <div class="scenario-option">D. AWS Config</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d12q8', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d12q8"><strong>Correct answer: B.</strong> Resolver query logging records the query name, the rule that matched, and the response code, which is exactly the information needed to distinguish a missing rule from an unreachable target.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q9.</strong> A workload in <code>us-west-2</code> needs to resolve on-premises names, but the only Resolver outbound endpoint is in <code>us-east-1</code>. What is the problem?</p>
+          <div class="scenario-options" id="opts-d12q9">
+            <div class="scenario-option">A. None — Resolver endpoints are global</div>
+            <div class="scenario-option">B. Resolver endpoints are regional, so a second endpoint is required in <code>us-west-2</code></div>
+            <div class="scenario-option">C. The rule must be recreated in <code>us-west-2</code> but the endpoint can stay</div>
+            <div class="scenario-option">D. The endpoint must be converted to an inbound endpoint</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d12q9', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d12q9"><strong>Correct answer: B.</strong> Resolver endpoints are regional resources. A VPC in another Region needs its own endpoint and rules in that Region.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q10.</strong> An application resolves a name that exists both in a private hosted zone and in public DNS. From inside an associated VPC, which answer is returned?</p>
+          <div class="scenario-options" id="opts-d12q10">
+            <div class="scenario-option">A. The public answer, because public DNS takes precedence</div>
+            <div class="scenario-option">B. The private hosted zone answer, because the zone is associated with the VPC</div>
+            <div class="scenario-option">C. Both answers, and the client chooses</div>
+            <div class="scenario-option">D. Neither, because the conflict causes an error</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d12q10', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d12q10"><strong>Correct answer: B.</strong> A private hosted zone associated with the VPC takes precedence for names it contains, which is usually the intent but occasionally is not.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q11.</strong> What is the maximum number of IP addresses a single Resolver endpoint can have, and why does it matter?</p>
+          <div class="scenario-options" id="opts-d12q11">
+            <div class="scenario-option">A. Two, because that is the availability minimum</div>
+            <div class="scenario-option">B. Six, and it is the scaling lever for query volume since each address supports up to 10,000 queries per second</div>
+            <div class="scenario-option">C. Ten, and it is fixed by the VPC CIDR size</div>
+            <div class="scenario-option">D. There is no limit</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d12q11', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d12q11"><strong>Correct answer: B.</strong> An endpoint supports up to six IP addresses, and each address handles up to 10,000 queries per second, so address count is how you scale an endpoint.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q12.</strong> A company needs encrypted DNS on the wire between AWS and an on-premises resolver that only accepts HTTPS. What should they configure?</p>
+          <div class="scenario-options" id="opts-d12q12">
+            <div class="scenario-option">A. A forwarding rule with the protocol set to DoH and the port set to 443</div>
+            <div class="scenario-option">B. An inbound endpoint with TLS termination</div>
+            <div class="scenario-option">C. A VPN connection, which encrypts DNS automatically</div>
+            <div class="scenario-option">D. Resolver does not support encrypted DNS</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d12q12', 0)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d12q12"><strong>Correct answer: A.</strong> Outbound forwarding rules support DNS over HTTPS on port 443, which is the option for on-premises resolvers that only accept HTTPS.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q13.</strong> Two VPCs are connected by peering, and both need to resolve names from a private hosted zone owned by one of them. What is required?</p>
+          <div class="scenario-options" id="opts-d12q13">
+            <div class="scenario-option">A. Nothing — peering propagates DNS automatically</div>
+            <div class="scenario-option">B. Associate the private hosted zone with both VPCs, or bridge them with a Resolver rule</div>
+            <div class="scenario-option">C. Create an inbound endpoint in each VPC</div>
+            <div class="scenario-option">D. Create a public hosted zone instead</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d12q13', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d12q13"><strong>Correct answer: B.</strong> Peering provides IP reachability only. Name resolution requires the zone to be associated with both VPCs or a Resolver rule to bridge them.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q14.</strong> An on-premises application can reach an AWS database by IP address but fails when configured with its hostname. Connectivity is confirmed working. What is the most likely gap?</p>
+          <div class="scenario-options" id="opts-d12q14">
+            <div class="scenario-option">A. The security group is blocking port 53</div>
+            <div class="scenario-option">B. No inbound Resolver endpoint exists, so on-premises cannot resolve the AWS private name</div>
+            <div class="scenario-option">C. The database needs a public endpoint</div>
+            <div class="scenario-option">D. The Transit Gateway needs a new route table</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d12q14', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d12q14"><strong>Correct answer: B.</strong> IP reachability without name resolution is the classic hybrid DNS gap. The on-premises side needs an inbound endpoint to forward queries to.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q15.</strong> A team wants early warning that hybrid DNS is degrading before applications fail. What should they alarm on?</p>
+          <div class="scenario-options" id="opts-d12q15">
+            <div class="scenario-option">A. EC2 CPU utilization in the workload VPC</div>
+            <div class="scenario-option">B. The rate of SERVFAIL responses and query volume relative to endpoint IP address count</div>
+            <div class="scenario-option">C. The number of private hosted zone records</div>
+            <div class="scenario-option">D. CloudTrail API call volume</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d12q15', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d12q15"><strong>Correct answer: B.</strong> SERVFAIL rate rises before applications fail, and query volume against endpoint capacity gives early warning of the throttling failure mode.</div>
+        </div>
+      </section>
+
+      <section class="doc-section" id="preview">
+        <h2 class="section-heading">Peek into Tomorrow</h2>
+        <div class="card card-purple">
+          <p>Today's design assumed that the thing being resolved is a name, and that the network path to the answer already exists. That assumption is comfortable when the two sides of the boundary are your own VPCs and your own data center, because you control the CIDR ranges on both ends and can route between them. It becomes uncomfortable the moment the consumer is a different organization with its own address plan, because now the question is not just how names resolve but whether the two networks can be connected at all without one side renumbering.</p>
+          <p>Tomorrow's topic, PrivateLink, is the answer to that narrower question, and it is narrower in a way that matters. An Interface Endpoint is an ENI in the consumer's VPC that represents a service in the provider's VPC, which means the consumer never needs a route to the provider's CIDR range and the two address spaces can overlap completely without conflict. That property is what makes PrivateLink the standard answer for exposing one microservice to many consumer accounts, and it is also why it is not a general-purpose replacement for Transit Gateway. The open question today leaves behind is where the boundary sits between service-level exposure and network-level connectivity, and tomorrow's comparison of PrivateLink against VPC peering is where that line gets drawn.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="sources">
+        <h2 class="section-heading">Sources</h2>
+        <div class="card">
+          <ul class="source-list">
+            <li><a href="https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/resolver.html" target="_blank" rel="noopener">Amazon Route 53 Developer Guide — Resolving DNS queries between VPCs and your network</a></li>
+            <li><a href="https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/resolver-forwarding-outbound-queries.html" target="_blank" rel="noopener">Route 53 Developer Guide — Forwarding outbound DNS queries to your network</a></li>
+            <li><a href="https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/resolver-forwarding-inbound-queries.html" target="_blank" rel="noopener">Route 53 Developer Guide — Resolving inbound DNS queries from your network</a></li>
+            <li><a href="https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/resolver-dns-firewall.html" target="_blank" rel="noopener">Route 53 Developer Guide — Route 53 Resolver DNS Firewall</a></li>
+            <li><a href="https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/query-logs.html" target="_blank" rel="noopener">Route 53 Developer Guide — Resolver query logging</a></li>
+            <li><a href="https://docs.aws.amazon.com/general/latest/gr/r53.html" target="_blank" rel="noopener">AWS General Reference — Route 53 service quotas</a></li>
+            <li><a href="https://docs.aws.amazon.com/whitepapers/latest/hybrid-cloud-dns-options-for-vpc/hybrid-cloud-dns-options-for-vpc.html" target="_blank" rel="noopener">AWS Whitepaper — Hybrid Cloud DNS Options for Amazon VPC</a></li>
+            <li><a href="https://docs.aws.amazon.com/whitepapers/latest/building-scalable-secure-multi-vpc-network-infrastructure/welcome.html" target="_blank" rel="noopener">AWS Whitepaper — Building a Scalable and Secure Multi-VPC AWS Network Infrastructure</a></li>
+          </ul>
+        </div>
       </section>
       <div class="day-nav">
         <a href="day-011.html">&larr; Day 11: Direct Connect (DX) &amp; DX Gateway</a>

@@ -104,36 +104,353 @@
         <span class="pill pill-green">Phase 4: Migration, Hybrid &amp; Cost Optimization</span>
       </div>
       <h1 class="hero-title">AWS Application Migration Service (MGN) — Lift-and-Shift Rehost</h1>
-      <div class="reading-meta">&#128337; ~3 min read &middot; 2 services covered</div>
+      <div class="reading-meta">&#128337; ~58 min read &middot; 2 services covered</div>
       <div class="services-grid">
         <span class="service-tag">AWS MGN</span>
         <span class="service-tag">Continuous Block-Level Replication</span>
       </div>
       <div id="tracker"></div>
-      <section class="doc-section">
-        <h2 class="section-heading">Today's Concept</h2>
+
+      <section class="doc-section" id="recap">
+        <h2 class="section-heading">Recap: From Inventory to Movement</h2>
         <div class="card card-accent">
-          <p>MGN performs continuous, low-impact block-level replication from source servers (physical, VM, or other clouds) to a staging area in AWS, letting you launch test and cutover instances at any point with minimal downtime — replacing the older CloudEndure/SMS workflow as the standard AWS rehost tool.</p>
-        </div>
-        <h3 class="sub-heading">Hands-on Lab / Practical Action (45 min)</h3>
-        <div class="card">
-          <p>Install the MGN replication agent on a source server, launch a non-disruptive test instance, then perform a cutover with a short maintenance window.</p>
+          <p>Application Discovery Service gave us the inventory half of the migration problem. Agent-based discovery captured process-level network connections, agentless discovery gave us VM-level utilization, and both fed into Migration Hub so the portfolio could be grouped into waves and the target instances right-sized against measured demand rather than vendor spec sheets. That work answers <em>what</em> moves and <em>in what order</em>. It deliberately does not answer <em>how</em> the bytes get from the source server to the target.</p>
+          <p>MGN extends that assessment work directly: the discovery output becomes the input to a replication plan. Every server that discovery flagged as a rehost candidate needs a replication agent, a staging area subnet, and a cutover window, and the utilization data discovery collected is what tells you which instance type the cutover instance should launch as. The dependency mapping matters too, because MGN replicates servers individually — it has no concept of an application group, so the wave boundaries discovery produced are the boundaries you cut over within.</p>
         </div>
       </section>
-      <section class="doc-section">
+
+      <section class="doc-section" id="why-on-exam">
+        <h2 class="section-heading">1. Why This Is on the Exam</h2>
+        <p>Rehost is the least glamorous of the seven migration strategies and, by volume, the one most real migrations actually use. The SAP-C02 exam reflects that reality. Scenarios that describe a data center exit deadline, a portfolio of hundreds of servers, an application that cannot be re-architected inside the timeline, or a mandate to "lift and shift first, modernize later" are almost always testing whether you reach for AWS Application Migration Service rather than proposing a refactor the business cannot absorb. The service maps most directly to Domain 3, Migration and Modernization, but it also surfaces in Domain 2 resilience questions where the answer hinges on whether a cutover can be tested without touching production.</p>
+        <p>The reason MGN is worth a full day rather than a paragraph is that the exam does not ask "what is MGN." It asks you to distinguish MGN from the four or five other services that also move data, and the distinctions are subtle. DataSync moves files. DMS moves database contents. Snowball moves bulk data offline. Storage Gateway keeps data on-premises and tiers it to AWS. MGN moves whole servers — operating system, installed applications, registry, boot configuration, and data volumes — and lands them as bootable EC2 instances. A scenario that says "the application team has no source code and no vendor support" is telling you that only a block-level server replication tool can work, because there is nothing to rebuild.</p>
+        <p>There is also a governance dimension the exam likes to probe. MGN is a service that, by design, copies an entire production server into an AWS account. That means the replication traffic, the staging area, and the cutover instances all need to be inside the account structure and network controls you built in Phase 1. A scenario that pairs MGN with a requirement that replication traffic never traverse the public internet is testing whether you connect the migration tool to the Direct Connect or VPN path rather than assuming the agent will find its own way.</p>
+      </section>
+
+      <section class="doc-section" id="mechanism">
+        <h2 class="section-heading">2. How MGN Actually Works</h2>
+        <p>MGN is a block-level replication system, not a file-copy or image-export tool. You install a lightweight replication agent on the source server — Windows or Linux, physical or virtual, on-premises or in another cloud. The agent installs a kernel-level driver that intercepts writes at the block layer, so every write the operating system issues to disk is captured and forwarded to the MGN replication servers in your AWS account. This is the same continuous data protection model that CloudEndure used, and MGN is the direct successor to that product line as well as to the older Server Migration Service. The interception happens below the filesystem, which is why MGN does not care what filesystem, database engine, or application is running on the server.</p>
+        <p>The destination of that stream is the staging area: a small, automatically provisioned set of EC2 instances and EBS volumes in a subnet you designate, in the target region and account. The staging area is not the migration target. It is a landing zone where the replicated blocks are written into volumes that MGN manages, and it exists so that the source server's data is continuously current in AWS before you decide to do anything with it. Replication is incremental after the initial sync — the agent sends changed blocks, not whole volumes — which is what keeps the ongoing bandwidth cost proportional to write rate rather than to disk size.</p>
+        <p>When you want to see the server running in AWS, you launch a test instance. MGN takes the current state of the replicated volumes, creates an AMI from them, and launches an EC2 instance from that AMI using a launch template you control. The test instance is a real, bootable copy of the server. It is not connected to the source in any way, and it does not affect replication — the agent keeps streaming blocks the whole time. This is the property that makes MGN valuable for planning: you can boot the migrated server, run your acceptance tests, fix the launch template, and repeat, all without a maintenance window. When the test passes, cutover is the same operation with a different label, plus a final sync of the last few blocks and a stop of the source server.</p>
+      </section>
+
+      <section class="doc-section" id="decision-boundary">
+        <h2 class="section-heading">3. The Core Decision Boundary: Rehost or Something Else</h2>
+        <p>Almost every MGN scenario question reduces to a single fork: does the workload need to arrive in AWS as a running server, or does it need to arrive as data that something else will consume? If the answer is a running server, MGN is the tool. If the answer is data, MGN is the wrong tool and the question is really about DataSync, DMS, or the Snow Family. The exam writes distractors that blur this line by describing the workload in terms of what it contains rather than what it is — "a server hosting a 2 TB Oracle database" is a server question, not a database question, unless the scenario explicitly says the database is being migrated to RDS or Aurora.</p>
+        <p>The second half of the boundary is about how much change the business can tolerate. Rehost means the application arrives unchanged, which is fast and low-risk but also means you inherit every piece of technical debt the server had. Replatform means you change one layer — self-managed MySQL becomes RDS, or a self-managed load balancer becomes an ALB — which costs more effort but removes operational burden. Refactor means re-architecting, which is the most expensive and slowest path. MGN is the rehost tool, and the exam expects you to recognize when a scenario's constraints (deadline, no source code, no vendor support, regulatory freeze) eliminate the other two options.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Signal in the scenario</th><th>Strategy</th><th>Tool</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Data center lease expiring, hundreds of servers, no time to re-architect</td><td>Rehost</td><td>AWS MGN</td></tr>
+              <tr><td>Application must keep running on the same OS and middleware, unchanged</td><td>Rehost</td><td>AWS MGN</td></tr>
+              <tr><td>Self-managed database engine being replaced with a managed AWS engine</td><td>Replatform</td><td>AWS DMS (+ SCT if engines differ)</td></tr>
+              <tr><td>File share or object store being copied to S3, EFS, or FSx</td><td>Replatform / Retain</td><td>AWS DataSync</td></tr>
+              <tr><td>Petabyte dataset, no viable network path</td><td>Rehost (data only)</td><td>Snowball Edge / Snowmobile</td></tr>
+              <tr><td>VMware VMs must stay VMware, no conversion to AMI</td><td>Relocate</td><td>VMware Cloud on AWS</td></tr>
+              <tr><td>On-prem application needs low-latency access to AWS services but stays on-prem</td><td>Retain</td><td>Storage Gateway / Outposts</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="doc-section" id="config-tradeoffs">
+        <h2 class="section-heading">4. Configuration Modes and Their Tradeoffs</h2>
+        <p>The knobs that matter in MGN are not about how data is copied — that part is automatic — but about how the cutover instance is constructed and how much of the process you automate. The first and most consequential choice is the launch template. MGN does not guess at instance type, subnet, security groups, or IAM instance profile; it uses a launch template you supply, and every test and cutover instance is launched from it. This is where the discovery data from Day 44 pays off, because the launch template's instance type should be sized from measured utilization, not from the source server's physical CPU count. A common failure is to size the cutover instance identically to the source and then discover the workload is now over-provisioned and over-priced in AWS.</p>
+        <p>The second choice is whether to use the default launch template or per-server overrides. MGN lets you set a default template for the whole source server fleet and then override it for individual servers. In a wave-based migration this matters: a wave of web servers can share a template, while the database server in the same wave needs a different instance family, a different subnet, and possibly a different EBS volume type. Managing this as a small number of templates with targeted overrides is far more maintainable than one template per server, and it is the pattern the exam tends to describe when it asks how to standardize a large migration.</p>
+        <p>The third choice is the cutover lifecycle itself: test, then cut over, then finalize. Test launches an instance without touching the source. Cutover launches an instance and, once you confirm it is healthy, you stop the source server and let MGN perform a final sync of the last changed blocks. Finalize detaches the source server from MGN and stops replication, which is the point of no return — after finalize, the source server is no longer tracked and the staging area resources for it can be cleaned up. The exam likes the distinction between cutover and finalize because it is the difference between "we have moved" and "we have committed."</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Setting</th><th>What it controls</th><th>Cost of getting it wrong</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Launch template</td><td>Instance type, subnet, security groups, IAM profile, tags</td><td>Over-provisioned or unreachable cutover instances</td></tr>
+              <tr><td>Default vs per-server template</td><td>Standardization across a wave</td><td>Template sprawl, drift between servers in the same wave</td></tr>
+              <tr><td>Replication settings (throttling)</td><td>Bandwidth consumed by the agent</td><td>Saturated WAN link, impact on production traffic</td></tr>
+              <tr><td>Staging area subnet</td><td>Where replicated volumes live before cutover</td><td>Replication traffic crossing the public internet</td></tr>
+              <tr><td>Cutover vs finalize</td><td>Whether the source is still tracked</td><td>Premature finalize removes the rollback path</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="doc-section" id="sizing-limits">
+        <h2 class="section-heading">5. Sizing, Limits, and Quotas</h2>
+        <p>Sizing an MGN migration has two independent dimensions: the bandwidth the replication stream consumes, and the compute the cutover instances will need. The bandwidth dimension is governed by the source server's write rate, not its disk size, because replication is incremental after the initial sync. A 4 TB server that writes 20 GB a day costs far less ongoing bandwidth than a 200 GB server that writes 500 GB a day. The initial sync, however, is proportional to the used blocks on disk, and that is the phase where a constrained link becomes the bottleneck. This is the same arithmetic that drives the Snowball-plus-CDC pattern from Day 52: if the initial sync over the available link would take longer than the migration window, the bulk data has to move physically.</p>
+        <p>On the compute side, the cutover instance is an ordinary EC2 instance and is subject to ordinary EC2 quotas — vCPU limits per region, EBS volume limits, and the availability of the instance family you selected in the target Availability Zone. A migration wave that launches fifty cutover instances at once can hit a regional vCPU quota that nobody raised in advance, and the failure looks like a launch error rather than a migration error. The staging area itself consumes a small number of instances and EBS volumes per source server, so a fleet of several hundred servers has a non-trivial standing footprint in the target account even before any cutover happens.</p>
+        <p>The operational limits worth knowing are about the agent and the source server rather than AWS quotas. The agent requires a supported operating system version and kernel, and it needs outbound network access to the MGN replication endpoints — either over the public internet with TLS or over a private path such as Direct Connect or VPN. It also needs to be able to reach the MGN API endpoints for control-plane operations. Servers that cannot install a kernel driver, such as some hardened or appliance-style systems, are not MGN candidates and have to be handled by a different strategy. The exam rarely asks for exact numeric quotas, but it does ask whether you would check them before a large cutover, and the answer is always yes.</p>
+      </section>
+
+      <section class="doc-section" id="failure-modes">
+        <h2 class="section-heading">6. Failure Modes and What They Look Like in Production</h2>
+        <p>The most common production failure is a stalled replication stream, and it presents as a source server whose "last replicated" timestamp stops advancing in the MGN console. The cause is usually network: the agent lost its path to the replication endpoint, a firewall rule changed, or the link saturated and the agent is falling behind faster than it can catch up. The first diagnostic move is to check the agent's own logs on the source server and the replication lag metric in the console, then verify connectivity to the replication endpoint from the source. A stream that is merely lagging is different from one that is broken, and the console distinguishes them.</p>
+        <p>The second failure mode is a cutover instance that launches but does not work. This is almost never an MGN problem — it is a launch template problem. The instance boots but cannot reach its dependencies because the security group is wrong, or it fails to join the domain because the subnet has no route to the domain controllers, or it comes up with the wrong instance type and the application times out under load. The diagnostic move is to compare the test instance's network configuration against the source server's, and to check whether the application has hard-coded references to the source IP address or hostname. Hard-coded IPs are the single most common reason a rehost "works" in test and fails in production.</p>
+        <p>The third failure mode is a cutover that succeeds technically but is discovered to be incomplete. The source server was still writing when the final sync ran, or a dependent server in the same application group was not cut over at the same time, and now the two halves of the application are talking across a split. This is why the dependency mapping from discovery matters: MGN replicates servers one at a time, and the migration team is responsible for cutting over an application group atomically. The symptom is intermittent errors that appear only under specific request paths, which makes it expensive to diagnose after the fact.</p>
+      </section>
+
+      <section class="doc-section" id="sre-angle">
+        <h2 class="section-heading">7. The Operational and SRE Angle</h2>
+        <p>From an SRE perspective, an MGN migration is a change-management event with a rollback path, and it should be treated with the same rigor as a production deployment. The metrics that matter during the replication phase are replication lag and the rate of change on the source server. Lag tells you whether the stream is healthy; the change rate tells you whether the link has enough headroom to catch up after a burst. Both should be alarmed, and the alarm should fire before the lag becomes large enough to threaten the cutover window. A migration that discovers a lag problem on cutover night has already lost.</p>
+        <p>During the cutover itself, the relevant signals are the ones you would monitor for any deployment: application error rate, latency, and dependency health on the new instance, plus the health of the source server as it is drained. The runbook shape is a sequence of gates — confirm replication is current, launch the cutover instance, run smoke tests, stop the source, run the final sync, verify, then finalize. Each gate has a rollback: before the source is stopped, rollback is simply "do nothing and keep the source running." After the source is stopped but before finalize, rollback is "restart the source and re-point traffic." After finalize, rollback means restoring from backup, which is why finalize is the last step and not the first.</p>
+        <p>The SLO implication is that a rehost migration should not be allowed to consume the application's entire error budget. If the cutover is planned as a maintenance window, the window is the budget. If the business requires zero-downtime cutover, then the migration needs a blue/green or weighted-routing pattern on top of MGN — MGN gets the server into AWS, but it does not do traffic shifting. That is a Route 53 or load-balancer concern, and the exam will sometimes combine the two to see whether you understand where MGN's responsibility ends.</p>
+      </section>
+
+      <section class="doc-section" id="gotchas">
+        <h2 class="section-heading">8. Edge Cases and Exam Gotchas</h2>
+        <p>The first gotcha is the assumption that MGN requires downtime. It does not. Replication is continuous and test instances are non-disruptive, so the only downtime is the interval between stopping the source server and confirming the cutover instance is serving traffic. Scenarios that describe a maintenance window measured in hours are usually describing a different tool or a poorly planned cutover, not an MGN limitation. The second gotcha is the assumption that MGN converts the operating system or the application. It does not — it replicates blocks, so the target runs the same OS and the same application, which is precisely why it is the right answer when there is no source code or vendor support.</p>
+        <p>The third gotcha is confusing MGN with DMS. A scenario that says "migrate the database to Aurora" is a DMS scenario even if the database currently runs on a server that MGN could replicate. The distinction is the target: if the target is a managed database service, the data has to be migrated as data, not as blocks. The fourth gotcha is the staging area. Candidates sometimes assume the staging area is the target environment and try to run production traffic against it. It is not — it is a replication buffer, and the cutover instance is the target. The fifth gotcha is finalize. Finalize is irreversible from MGN's perspective, and the exam will sometimes describe a team that finalized prematurely and then needed to roll back.</p>
+        <p>The sixth gotcha is licensing and OS activation. A rehosted Windows server may need re-activation, and commercial software with node-locked or hardware-locked licenses may not run on the new instance without vendor intervention. This is not an MGN limitation but it is a migration-planning issue that the exam expects you to raise. The seventh is the agent itself: it needs a supported kernel and outbound connectivity, and servers that cannot meet those requirements are not MGN candidates. The eighth is the launch template's IAM instance profile — a cutover instance that needs to read from S3 or write to CloudWatch will fail silently if the profile is missing, and the failure looks like an application bug rather than a migration bug.</p>
+      </section>
+
+      <section class="doc-section" id="vs-comparison">
+        <h2 class="section-heading">9. MGN vs. the Services It Gets Confused With</h2>
+        <p>The cleanest way to hold this in memory is to ask what unit of work each service moves. MGN moves a server. DMS moves the contents of a database. DataSync moves files and objects. Snowball moves bulk data physically. Storage Gateway keeps data on-premises and presents it to AWS. VMware Cloud on AWS moves a VM without converting it out of the VMware format. Each of these answers a different question, and the exam's distractors are built by describing a workload in a way that makes two of them sound plausible.</p>
+        <p>The rule that resolves most of these: if the scenario's target is a running EC2 instance that behaves like the source server, pick MGN. If the target is a managed service — RDS, Aurora, S3, EFS, DynamoDB — pick the tool that produces data in that service's format. If the constraint is network capacity rather than application change, pick the offline transfer tool. And if the constraint is that the workload must remain VMware-managed, pick Relocate rather than Rehost.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Service</th><th>Unit moved</th><th>Target</th><th>Pick it when…</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>AWS MGN</td><td>Whole server (block-level)</td><td>EC2 instance from an AMI</td><td>The application must arrive unchanged as a running server</td></tr>
+              <tr><td>AWS DMS</td><td>Database contents (rows, schema objects)</td><td>RDS, Aurora, Redshift, another engine</td><td>The target is a managed database service</td></tr>
+              <tr><td>AWS SCT</td><td>Schema and procedural code</td><td>Converted DDL for a different engine</td><td>Source and target engines differ and stored procedures exist</td></tr>
+              <tr><td>AWS DataSync</td><td>Files and objects</td><td>S3, EFS, FSx</td><td>The workload is a file share, not a server or a database</td></tr>
+              <tr><td>Snowball Edge / Snowmobile</td><td>Bulk data, offline</td><td>S3 (then loaded onward)</td><td>The network cannot move the volume inside the window</td></tr>
+              <tr><td>VMware Cloud on AWS</td><td>VM, unconverted</td><td>VMware SDDC on AWS</td><td>The VM must stay VMware-managed</td></tr>
+              <tr><td>Storage Gateway</td><td>Ongoing data tiering</td><td>S3-backed file/volume/tape</td><td>The workload stays on-premises but needs AWS-backed storage</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="doc-section" id="lab">
+        <h2 class="section-heading">Hands-on Lab: Replicate, Test, and Cut Over a Server (45 min)</h2>
+        <div class="card card-green">
+          <p>This lab walks the full MGN lifecycle against a single source server. If you do not have an on-premises server available, a Linux EC2 instance in a separate VPC works as a stand-in source — the agent behaves the same way, and the exercise still teaches the launch-template and cutover mechanics. Budget roughly 45 minutes, most of which is waiting for the initial replication to complete.</p>
+          <ol>
+            <li><strong>Prepare the target account.</strong> In the target region, initialize MGN from the console. This creates the service-linked role and the default replication settings. Confirm the staging area subnet you want to use exists and has outbound connectivity to the MGN endpoints.</li>
+            <li><strong>Create a launch template.</strong> Build an EC2 launch template with the instance type you intend to use, the target subnet, a security group that permits your test traffic, and an IAM instance profile that grants whatever the application needs (for example, CloudWatch Logs write access). Tag it clearly — you will reuse it for both test and cutover.</li>
+            <li><strong>Install the replication agent.</strong> On the source server, download the agent installer from the MGN console and run it. The installer registers the server with MGN and begins the initial sync. Verify in the console that the server appears with a "Healthy" replication status.</li>
+            <li><strong>Watch the initial sync.</strong> Monitor the replication progress until the initial sync completes and the server shows a low, steady lag. Note the elapsed time — this is your baseline for how long a similar server would take over the same link, and it is the number that tells you whether a larger server would need an offline transfer instead.</li>
+            <li><strong>Launch a test instance.</strong> Select the source server, choose "Launch test instance," and pick your launch template. Wait for the instance to reach running state, then connect to it and verify that the application starts and that its dependencies resolve.</li>
+            <li><strong>Break something on purpose.</strong> Deliberately misconfigure the launch template — remove the security group rule that allows database access, or point it at the wrong subnet — and launch a second test instance. Observe how the failure presents. This is the diagnostic skill the exam assumes you have.</li>
+            <li><strong>Fix and re-test.</strong> Correct the launch template and launch a third test instance. Confirm the application is healthy. Note that none of this touched the source server or interrupted replication.</li>
+            <li><strong>Perform the cutover.</strong> Stop the application on the source server (or stop the server itself), then choose "Launch cutover instance." MGN performs a final sync of the last changed blocks and launches the instance from the same template.</li>
+            <li><strong>Verify and finalize.</strong> Run your smoke tests against the cutover instance. Once satisfied, choose "Finalize cutover" to detach the source server and stop replication. Confirm the source server no longer appears as an active source in the console.</li>
+            <li><strong>Clean up.</strong> Terminate the test and cutover instances, remove the source server from MGN, and delete the staging area resources if you are not continuing with more servers. Record the total elapsed time from agent install to finalize — that is the realistic per-server cost of a rehost.</li>
+          </ol>
+        </div>
+      </section>
+
+      <section class="doc-section" id="quiz">
         <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
-        
+
       <div class="scenario-card">
         <p class="scenario-question"><strong>Q1.</strong> A company needs to rehost 200 on-prem VMs to EC2 as fast as possible with minimal application changes and minimal cutover downtime.</p>
-        <div class="scenario-options" id="opts-d45q0">
+        <div class="scenario-options" id="opts-d45q1">
             <div class="scenario-option">A. AWS DataSync</div>
             <div class="scenario-option">B. AWS Application Migration Service (MGN)</div>
             <div class="scenario-option">C. AWS Schema Conversion Tool</div>
             <div class="scenario-option">D. AWS DMS</div>
         </div>
-        <button class="scenario-reveal-btn" onclick="revealAnswer('d45q0', 1)">Reveal Answer</button>
-        <div class="scenario-explanation" id="exp-d45q0"><strong>Correct answer: B.</strong> MGN is purpose-built for server rehost: continuous replication lets you test extensively and cut over with just minutes of downtime, without re-architecting the application.</div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d45q1', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d45q1"><strong>Correct answer: B.</strong> MGN is purpose-built for server rehost: continuous replication lets you test extensively and cut over with just minutes of downtime, without re-architecting the application.</div>
       </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q2.</strong> An application has no source code available and the vendor that wrote it no longer exists. The business needs it running in AWS within 90 days. Which migration strategy is the only viable one?</p>
+        <div class="scenario-options" id="opts-d45q2">
+            <div class="scenario-option">A. Refactor to a serverless architecture</div>
+            <div class="scenario-option">B. Replatform onto managed services</div>
+            <div class="scenario-option">C. Rehost the server with AWS MGN</div>
+            <div class="scenario-option">D. Repurchase as SaaS</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d45q2', 2)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d45q2"><strong>Correct answer: C.</strong> With no source code and no vendor, the application cannot be rebuilt or re-platformed. Block-level server replication preserves the running system exactly as-is, which is the definition of rehost.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q3.</strong> A migration team wants to validate that a migrated server boots and serves traffic correctly before committing to a cutover, without interrupting the production server. What does MGN provide for this?</p>
+        <div class="scenario-options" id="opts-d45q3">
+            <div class="scenario-option">A. A read replica of the source server</div>
+            <div class="scenario-option">B. A non-disruptive test instance launched from the replicated volumes</div>
+            <div class="scenario-option">C. A snapshot that must be restored manually</div>
+            <div class="scenario-option">D. A staging area that serves production traffic</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d45q3', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d45q3"><strong>Correct answer: B.</strong> MGN's test launch creates a bootable EC2 instance from the current replicated state while replication continues, so validation never touches the source server.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q4.</strong> A cutover instance launches successfully but the application cannot connect to its database. The database is reachable from the source server. What is the most likely cause?</p>
+        <div class="scenario-options" id="opts-d45q4">
+            <div class="scenario-option">A. MGN corrupted the application files during replication</div>
+            <div class="scenario-option">B. The launch template's security group or subnet does not permit the database connection</div>
+            <div class="scenario-option">C. The replication agent is still running on the source</div>
+            <div class="scenario-option">D. The staging area needs to be resized</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d45q4', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d45q4"><strong>Correct answer: B.</strong> A cutover instance that boots but cannot reach dependencies is almost always a launch-template problem — wrong security group, wrong subnet, or missing route — not a replication problem.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q5.</strong> A company must migrate a 6 TB server over a 200 Mbps link and the migration window is two weeks. The server writes about 15 GB per day. What should the team do?</p>
+        <div class="scenario-options" id="opts-d45q5">
+            <div class="scenario-option">A. Start MGN replication immediately and accept that the initial sync will overrun the window</div>
+            <div class="scenario-option">B. Use Snowball Edge for the bulk data, then MGN or DataSync for the ongoing delta</div>
+            <div class="scenario-option">C. Increase the replication agent's thread count</div>
+            <div class="scenario-option">D. Rehost is impossible; the server must be refactored</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d45q5', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d45q5"><strong>Correct answer: B.</strong> The initial sync is proportional to used blocks, and 6 TB over 200 Mbps will not fit the window. Moving the bulk offline and replicating only the small ongoing delta is the standard hybrid pattern.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q6.</strong> What is the difference between performing a cutover and finalizing a cutover in MGN?</p>
+        <div class="scenario-options" id="opts-d45q6">
+            <div class="scenario-option">A. They are the same operation with different names</div>
+            <div class="scenario-option">B. Cutover launches the target instance; finalize detaches the source server and stops replication, removing the rollback path</div>
+            <div class="scenario-option">C. Cutover deletes the source server; finalize deletes the staging area</div>
+            <div class="scenario-option">D. Finalize must be run before cutover</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d45q6', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d45q6"><strong>Correct answer: B.</strong> Cutover is the move; finalize is the commitment. After finalize the source is no longer tracked, so rolling back means restoring from backup rather than restarting the source.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q7.</strong> A migration team is planning a wave of 60 servers and wants to standardize the target configuration while still allowing a few servers to differ. What is the recommended approach?</p>
+        <div class="scenario-options" id="opts-d45q7">
+            <div class="scenario-option">A. Create one launch template per server</div>
+            <div class="scenario-option">B. Use a default launch template for the fleet with per-server overrides where needed</div>
+            <div class="scenario-option">C. Let MGN choose instance types automatically</div>
+            <div class="scenario-option">D. Configure each server manually after cutover</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d45q7', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d45q7"><strong>Correct answer: B.</strong> A default template plus targeted overrides keeps a large migration consistent without creating template sprawl, and it is the pattern that scales to hundreds of servers.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q8.</strong> Replication for a source server has stalled and the "last replicated" timestamp in the console has not advanced for several hours. What is the first diagnostic step?</p>
+        <div class="scenario-options" id="opts-d45q8">
+            <div class="scenario-option">A. Delete and reinstall the agent immediately</div>
+            <div class="scenario-option">B. Check the agent logs on the source server and verify connectivity to the replication endpoint</div>
+            <div class="scenario-option">C. Increase the staging area instance size</div>
+            <div class="scenario-option">D. Finalize the cutover and start over</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d45q8', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d45q8"><strong>Correct answer: B.</strong> A stalled stream is almost always a network path problem. Agent logs plus endpoint connectivity testing distinguishes a broken path from a merely lagging stream.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q9.</strong> A company wants all MGN replication traffic to stay off the public internet. What must be in place?</p>
+        <div class="scenario-options" id="opts-d45q9">
+            <div class="scenario-option">A. Nothing — MGN always uses the public internet</div>
+            <div class="scenario-option">B. A private network path such as Direct Connect or VPN from the source environment to the target VPC, with the agent reaching the MGN endpoints over it</div>
+            <div class="scenario-option">C. A NAT Gateway in the source data center</div>
+            <div class="scenario-option">D. An S3 Gateway Endpoint</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d45q9', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d45q9"><strong>Correct answer: B.</strong> The agent needs outbound access to the MGN replication and API endpoints; routing that over Direct Connect or VPN keeps the traffic private, which is the standard answer for regulated migrations.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q10.</strong> A scenario describes migrating a self-managed Oracle database to Amazon Aurora PostgreSQL. Which tool is the primary answer?</p>
+        <div class="scenario-options" id="opts-d45q10">
+            <div class="scenario-option">A. AWS MGN, because the database runs on a server</div>
+            <div class="scenario-option">B. AWS DMS with AWS SCT for the schema conversion</div>
+            <div class="scenario-option">C. AWS DataSync</div>
+            <div class="scenario-option">D. Snowball Edge</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d45q10', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d45q10"><strong>Correct answer: B.</strong> The target is a managed database service, so the data must be migrated as data. SCT converts the schema and procedural code; DMS moves the rows.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q11.</strong> What does the MGN staging area actually do?</p>
+        <div class="scenario-options" id="opts-d45q11">
+            <div class="scenario-option">A. It serves production traffic during the cutover</div>
+            <div class="scenario-option">B. It is a landing zone where replicated blocks are written before a test or cutover instance is launched</div>
+            <div class="scenario-option">C. It stores backups of the source server</div>
+            <div class="scenario-option">D. It hosts the MGN console</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d45q11', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d45q11"><strong>Correct answer: B.</strong> The staging area is a replication buffer, not a target environment. Cutover instances are launched from AMIs built from the replicated volumes.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q12.</strong> A rehosted Windows server fails to activate after cutover, and a commercial application refuses to start because of a hardware-locked license. What is the correct characterization of this problem?</p>
+        <div class="scenario-options" id="opts-d45q12">
+            <div class="scenario-option">A. An MGN replication defect</div>
+            <div class="scenario-option">B. A migration-planning issue around OS activation and software licensing that must be resolved with the vendor</div>
+            <div class="scenario-option">C. A launch template error</div>
+            <div class="scenario-option">D. A staging area sizing problem</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d45q12', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d45q12"><strong>Correct answer: B.</strong> MGN replicates blocks faithfully; activation and node-locked licensing are planning concerns that must be addressed before cutover, not replication failures.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q13.</strong> A migration wave launches 50 cutover instances simultaneously and several fail with launch errors. What is the most likely cause?</p>
+        <div class="scenario-options" id="opts-d45q13">
+            <div class="scenario-option">A. MGN cannot launch more than 10 instances at once</div>
+            <div class="scenario-option">B. A regional EC2 vCPU quota or EBS volume quota was not raised in advance</div>
+            <div class="scenario-option">C. The replication agents are conflicting</div>
+            <div class="scenario-option">D. The staging area is full</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d45q13', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d45q13"><strong>Correct answer: B.</strong> Cutover instances are ordinary EC2 instances subject to ordinary quotas. Large waves routinely hit vCPU or EBS limits that nobody raised beforehand.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q14.</strong> An application consists of a web tier and an application tier that communicate constantly. The team cuts over the web tier first and leaves the application tier on-premises for a week. What is the likely outcome?</p>
+        <div class="scenario-options" id="opts-d45q14">
+            <div class="scenario-option">A. No impact, since MGN replicates both tiers independently</div>
+            <div class="scenario-option">B. Intermittent errors and latency because the two tiers are split across environments, which is why dependency mapping drives wave boundaries</div>
+            <div class="scenario-option">C. The application tier will automatically replicate itself</div>
+            <div class="scenario-option">D. MGN will refuse to cut over the web tier</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d45q14', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d45q14"><strong>Correct answer: B.</strong> MGN replicates servers individually and has no concept of an application group. Tightly coupled tiers must be cut over together, which is exactly what discovery's dependency mapping is for.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q15.</strong> A team wants a zero-downtime cutover for a customer-facing application. MGN gets the server running in AWS, but what additional capability is required to shift traffic without an outage?</p>
+        <div class="scenario-options" id="opts-d45q15">
+            <div class="scenario-option">A. Nothing — MGN performs traffic shifting automatically</div>
+            <div class="scenario-option">B. A traffic-shifting mechanism such as Route 53 weighted routing or a load balancer with weighted target groups</div>
+            <div class="scenario-option">C. A larger staging area</div>
+            <div class="scenario-option">D. A second replication agent on the target instance</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d45q15', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d45q15"><strong>Correct answer: B.</strong> MGN's responsibility ends at getting a healthy instance running in AWS. Shifting live traffic gradually is a DNS or load-balancer concern layered on top.</div>
+      </div>
+      </section>
+
+      <section class="doc-section" id="preview">
+        <h2 class="section-heading">Peek into Tomorrow</h2>
+        <div class="card card-purple">
+          <p>Everything in this day assumed the target was another server running the same operating system and the same application. That assumption is what makes block-level replication sufficient — there is no translation step, because nothing about the workload changes. The open question is what happens when the target is not a server at all, but a different database engine entirely. A rehosted Oracle instance on EC2 is still Oracle; the moment the business says "move it to Aurora PostgreSQL," the problem stops being about moving bytes and starts being about translating semantics.</p>
+          <p>That translation is where the migration gets genuinely hard, and it is not a bandwidth or cutover-window problem. Oracle's procedural language, its data types, its sequences, and its package structure have no one-to-one equivalent in PostgreSQL, and a tool that reports a high automatic conversion rate is still leaving a remainder that a developer has to rewrite by hand. Tomorrow's topic is that remainder: how a conversion-completeness percentage is produced, what kinds of objects typically fall into the unconverted fraction, and why a migration plan that treats a 95% figure as "done" is the plan that fails in production.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="sources">
+        <h2 class="section-heading">Sources</h2>
+        <div class="card">
+          <ul class="source-list">
+            <li><a href="https://docs.aws.amazon.com/application-migration-service/latest/userguide/what-is-service.html" target="_blank">AWS Application Migration Service — What Is AWS Application Migration Service?</a></li>
+            <li><a href="https://docs.aws.amazon.com/application-migration-service/latest/userguide/launching-test.html" target="_blank">AWS MGN User Guide — Launching Test and Cutover Instances</a></li>
+            <li><a href="https://docs.aws.amazon.com/application-migration-service/latest/userguide/agent-installation.html" target="_blank">AWS MGN User Guide — Installing the AWS Replication Agent</a></li>
+            <li><a href="https://docs.aws.amazon.com/application-migration-service/latest/userguide/network-requirements.html" target="_blank">AWS MGN User Guide — Network Requirements and Staging Area</a></li>
+            <li><a href="https://docs.aws.amazon.com/prescriptive-guidance/latest/migration-rehost/introduction.html" target="_blank">AWS Prescriptive Guidance — Rehost Migration Strategy</a></li>
+            <li><a href="https://docs.aws.amazon.com/whitepapers/latest/aws-migration-whitepaper/the-7-rs-of-migration.html" target="_blank">AWS Migration Whitepaper — The 7 Rs of Migration</a></li>
+            <li><a href="https://docs.aws.amazon.com/dms/latest/userguide/Welcome.html" target="_blank">AWS Database Migration Service — What Is AWS DMS?</a></li>
+            <li><a href="https://docs.aws.amazon.com/wellarchitected/latest/reliability-pillar/welcome.html" target="_blank">AWS Well-Architected Framework — Reliability Pillar</a></li>
+          </ul>
+        </div>
       </section>
       <div class="day-nav">
         <a href="day-044.html">&larr; Day 44: AWS Application Discovery Service — Assessment &amp; Portfolio Analysis</a>

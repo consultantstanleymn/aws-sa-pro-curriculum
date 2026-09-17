@@ -104,37 +104,359 @@
         <span class="pill pill-green">Phase 1: Multi-Account Governance &amp; Networking</span>
       </div>
       <h1 class="hero-title">IAM Permission Boundaries &amp; STS</h1>
-      <div class="reading-meta">&#128337; ~3 min read &middot; 3 services covered</div>
+      <div class="reading-meta">&#128337; ~58 min read &middot; 3 services covered</div>
       <div class="services-grid">
         <span class="service-tag">Permission Boundaries</span>
         <span class="service-tag">AWS STS</span>
         <span class="service-tag">AssumeRoleWithWebIdentity</span>
       </div>
       <div id="tracker"></div>
-      <section class="doc-section">
-        <h2 class="section-heading">Today's Concept</h2>
+
+      <section class="doc-section" id="recap">
+        <h2 class="section-heading">Recap: From Federated Identity to Federated Authorization</h2>
         <div class="card card-accent">
-          <p>A permission boundary is a managed policy that caps the maximum permissions an IAM entity can ever have, even if its attached policies are broader — commonly used so a delegated admin can create roles without being able to escalate beyond the boundary. STS issues short-lived credentials via AssumeRole, AssumeRoleWithWebIdentity (OIDC federation, e.g. EKS IRSA), and AssumeRoleWithSAML.</p>
-        </div>
-        <h3 class="sub-heading">Hands-on Lab / Practical Action (45 min)</h3>
-        <div class="card">
-          <p>Create an IAM delegate-admin role that can create new IAM roles, but only ones scoped inside a permission boundary that blocks IAM/Organizations changes.</p>
+          <p>Day 4 established that IAM Identity Center replaces long-lived per-account IAM users with permission sets mapped to SAML federation from an external IdP such as Entra ID or Okta, auto-provisioning an IAM role into each assigned account. That solved the identity half of the problem: who a human is, and how they prove it once instead of forty times. It did not solve the authorization half. A permission set still resolves to an IAM role with attached policies, and those policies are still written by humans who occasionally write them too broadly.</p>
+          <p>Today extends that thread rather than replacing it. Federation answers "which role does this person get in this account"; permission boundaries answer "what is the worst thing that role could ever do, regardless of what someone attaches to it later." The two compose: an Identity Center permission set can carry a boundary, and the roles that permission set is allowed to create can be forced to carry one too. The same short-lived credential machinery that makes federation work — STS — is also what makes cross-account and workload identity work, which is why the two topics sit on the same day.</p>
         </div>
       </section>
-      <section class="doc-section">
-        <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
-        
+
+      <section class="doc-section" id="why-on-exam">
+        <h2 class="section-heading">1. Why This Is on the Exam</h2>
+        <p>Permission boundaries exist because of a specific organizational shape that shows up constantly in SAP-C02 scenarios: a central platform or security team that wants to delegate IAM administration to application teams without handing over the ability to escalate to full account control. The naive answer — give the app team an IAM policy that allows <code>iam:CreateRole</code> and hope they write good policies — fails the moment someone creates a role with <code>AdministratorAccess</code> attached. The exam tests whether you know the mechanism that makes delegation safe rather than merely discouraged.</p>
+        <p>This maps most directly to Domain 1 (Design Solutions for Organizational Complexity), specifically the task statements around designing a multi-account strategy and applying least-privilege access controls across accounts. It also bleeds into Domain 2 whenever a scenario involves a workload assuming a role to reach another account's resources, because the same STS primitives are in play. The recurring exam pattern is a scenario that describes a delegated administrator, a CI/CD pipeline that creates roles, or a third-party SaaS integration, and asks which control prevents privilege escalation. The distractor set is usually populated with things that sound like controls but are not: MFA enforcement, CloudTrail alerting, SCPs applied to the wrong account, or a Deny statement that has to be maintained on every future role.</p>
+        <p>STS shows up for a different reason. Almost every cross-account and workload-identity pattern on the exam resolves to a call to one of the <code>AssumeRole*</code> APIs, and the exam expects you to know which variant applies to which trust relationship. A Lambda function in account A reading a bucket in account B uses <code>AssumeRole</code>. A Kubernetes pod using IRSA uses <code>AssumeRoleWithWebIdentity</code>. A human arriving through a corporate IdP uses <code>AssumeRoleWithSAML</code>. Getting the variant wrong is a common way to lose a question that otherwise looks straightforward.</p>
+        <p>What makes this topic worth a full day rather than a paragraph is that boundaries and STS are the two halves of the same story. Boundaries constrain what a role can do; STS is how the role is obtained in the first place. A scenario that asks you to design a safe delegation model usually requires both: a boundary that caps the delegated admin, and a trust policy that scopes who can assume the roles being created.</p>
+      </section>
+
+      <section class="doc-section" id="mechanism">
+        <h2 class="section-heading">2. How Permission Boundaries Actually Evaluate</h2>
+        <p>The single most useful mental model is that a permission boundary is not a grant and not a filter applied after the fact. It is a second policy that participates in the same evaluation as the identity-based policy, and the effective permission is the intersection of the two. For an action to be allowed, it must be allowed by an identity-based policy (or a resource-based policy, in the cases where those apply) and it must also be allowed by the boundary. If either side is silent, the action is denied. If either side contains an explicit Deny, the action is denied regardless of what the other side says.</p>
+        <p>That intersection behavior is what makes boundaries useful for delegation. A delegated admin can attach <code>AdministratorAccess</code> to a role they create, and the role will still be unable to do anything the boundary does not permit. The boundary is the ceiling; the attached policy is the floor. The role's actual capability lives somewhere between them, and the boundary is the part the delegator controls. This is why the pattern is sometimes described as "you can hand out any policy you like, because I decide the maximum."</p>
+        <p>There is an important asymmetry to internalize: a boundary can only ever reduce permissions, never add them. If a role has no identity-based policy granting <code>s3:GetObject</code>, adding a boundary that allows <code>s3:GetObject</code> does not grant it. This trips people up because the boundary looks like a policy and is written in the same JSON, but it is evaluated as a constraint rather than a source of authority. The exam occasionally offers a distractor that treats a boundary as a grant, and the correct answer is always that it cannot be.</p>
+        <p>STS sits underneath all of this as the credential-issuing service. When a principal calls <code>AssumeRole</code>, STS evaluates the target role's trust policy to decide whether the caller is allowed to assume it, then returns a set of temporary credentials with a session duration and a session name. Those credentials are themselves subject to the role's identity policies and boundary — the boundary does not disappear because the caller arrived via STS. The trust policy and the boundary are separate controls answering separate questions: the trust policy answers "who may become this role," and the boundary answers "what may this role do once assumed."</p>
+        <p>Session policies add a third layer worth knowing about. When you call <code>AssumeRole</code> you can pass an inline session policy that further restricts the resulting session, and the effective permissions become the intersection of the role's identity policies, the boundary, and the session policy. This is how a single role can be safely shared by many callers with different needs — the role defines the maximum, and each caller narrows it further at assume time. For the exam, the key point is that session policies can only restrict, never expand, exactly like boundaries.</p>
+      </section>
+
+      <section class="doc-section" id="decision-boundary">
+        <h2 class="section-heading">3. The Core Decision Boundary: Boundary vs. Trust Policy vs. SCP</h2>
+        <p>Most scenario questions in this area hinge on which control is the right tool for the stated problem, and the three candidates are easy to conflate because they all look like "a policy that limits something." The fork is about scope and subject. An SCP applies to every principal in an account or OU and is enforced by AWS Organizations. A permission boundary applies to a single IAM user or role and travels with that entity. A trust policy applies to a single role and governs who may assume it, not what it may do afterward.</p>
+        <p>The practical test is to ask what the scenario is trying to constrain. If the requirement is "no one in this OU may use any region except two," that is an SCP, because it must apply to principals that do not exist yet. If the requirement is "this delegated admin may create roles, but none of those roles may ever touch IAM or Organizations," that is a boundary, because the constraint must attach to entities created in the future by a specific principal. If the requirement is "only this specific Lambda execution role may read this bucket," that is a trust policy plus a resource policy, because the question is about who, not what.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Control</th><th>Applies to</th><th>Answers</th><th>Can it grant?</th><th>Typical exam trigger</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>SCP</td><td>All principals in an account/OU</td><td>What is the org-wide ceiling?</td><td>No</td><td>"Across all accounts in the OU"</td></tr>
+              <tr><td>Permission boundary</td><td>One IAM user or role</td><td>What is this entity's ceiling?</td><td>No</td><td>"Delegated admin creates roles"</td></tr>
+              <tr><td>Trust policy</td><td>One role</td><td>Who may assume this role?</td><td>Yes (it is the gate)</td><td>"Cross-account access"</td></tr>
+              <tr><td>Session policy</td><td>One STS session</td><td>What may this session do?</td><td>No</td><td>"Same role, narrower per caller"</td></tr>
+              <tr><td>Identity policy</td><td>One IAM user or role</td><td>What is this entity allowed?</td><td>Yes</td><td>"Attach a policy to the role"</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The second fork, once you have settled on a boundary, is whether the boundary is enforced by convention or by condition. A boundary that the delegated admin is merely asked to attach is not a control; it is a suggestion. The enforceable version adds a condition to the delegated admin's own policy requiring that <code>iam:PermissionsBoundary</code> be present and equal to a specific boundary ARN on every <code>CreateRole</code> and <code>CreateUser</code> call. Without that condition, the delegated admin can simply omit the boundary and create an unbounded role. This distinction between "we told them to" and "the API rejects the call otherwise" is exactly the kind of thing the exam probes.</p>
+      </section>
+
+      <section class="doc-section" id="config-tradeoffs">
+        <h2 class="section-heading">4. Configuration Modes and Their Tradeoffs</h2>
+        <p>There are three broad ways to structure delegated IAM administration, and they differ in how much trust they place in the delegate and how much maintenance they impose on the delegator. The first is no delegation at all: the central team creates every role, and application teams file tickets. This is the most controlled and the least scalable, and it is the correct answer only when the scenario explicitly says the organization is small or the roles are few. It fails the moment the scenario mentions dozens of teams or a self-service requirement.</p>
+        <p>The second is delegation with a mandatory boundary, which is the pattern this day is about. The central team publishes one or more boundary policies, grants application teams a role that can create IAM entities, and attaches a condition that forces the boundary onto everything they create. The tradeoff is that the boundary must be designed well enough to cover legitimate use cases without being so permissive that it defeats the purpose. A boundary that allows <code>iam:*</code> is not a boundary. A boundary that allows nothing but <code>s3:*</code> will break teams that need to create roles for Lambda, ECS, and Step Functions. Getting this right is a design exercise, not a checkbox.</p>
+        <p>The third is delegation through a pipeline or IaC tool rather than through human IAM permissions. Instead of granting humans <code>iam:CreateRole</code>, you grant a CI/CD role the ability to deploy CloudFormation or Terraform that creates roles, and the templates themselves carry the boundary. This shifts the control from an IAM condition to a code review process. It is often the better answer in mature organizations because the boundary becomes visible in the template and reviewable in a pull request, but it requires the scenario to mention an existing pipeline or IaC practice. If the scenario describes humans clicking in the console, the condition-based approach is the answer.</p>
+        <p>Within the boundary itself there are two design styles worth distinguishing. A permissive boundary lists the services the delegate is allowed to touch and denies everything else implicitly by omission. A restrictive boundary starts from a broad allow and adds explicit Deny statements for the dangerous actions — <code>iam:*</code>, <code>organizations:*</code>, <code>account:*</code>, and anything that could be used to remove the boundary itself. The restrictive style is easier to maintain because new AWS services are allowed by default, but it is riskier because a new service that grants indirect privilege escalation will be allowed until someone notices. The permissive style is safer but requires updating every time a team adopts a new service. Most exam scenarios that describe a security-conscious organization are pointing at the restrictive style with explicit denies on IAM and Organizations.</p>
+      </section>
+
+      <section class="doc-section" id="sizing-limits">
+        <h2 class="section-heading">5. Sizing, Limits and Quotas</h2>
+        <p>The numbers that matter here are mostly about how many policies and how much policy text you can attach, because boundaries consume the same quotas as ordinary managed policies. An IAM user or role can have a limited number of managed policies attached, and a permission boundary counts as one of them even though it is set through a separate API parameter. That means adding a boundary to a role that already has the maximum number of attached policies will fail, which is a real operational trap when retrofitting boundaries onto existing roles.</p>
+        <p>Managed policy size is capped, and the boundary is a managed policy, so a boundary that tries to enumerate every allowed action across every service will hit the limit. This is the practical argument for the restrictive style described above: a boundary that denies a short list of dangerous actions is far smaller than one that allows a long list of safe ones. Inline policies have their own separate size limit, and session policies passed to STS are also size-limited, which matters when you are trying to narrow a session at assume time.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Item</th><th>Practical constraint</th><th>Why it bites</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Managed policies per role</td><td>Small fixed count</td><td>Boundary consumes a slot; retrofits fail on already-full roles</td></tr>
+              <tr><td>Managed policy size</td><td>Fixed character limit</td><td>Favors deny-list boundaries over allow-list boundaries</td></tr>
+              <tr><td>Inline policy size</td><td>Separate, smaller limit</td><td>Session policies and inline grants compete for the same budget</td></tr>
+              <tr><td>STS session duration</td><td>Bounded by role max session duration</td><td>Long-running jobs need a refresh strategy, not a longer session</td></tr>
+              <tr><td>Role trust policy size</td><td>Same policy size limit</td><td>Many principals in one trust policy eventually needs conditions instead</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>Session duration deserves its own note because it is a frequent source of production incidents. Temporary credentials expire, and when they do, every call made with them fails with an expired-token error. The maximum session duration is a property of the role, and the caller can request anything up to that maximum. A workload that runs longer than the maximum must refresh its credentials before expiry, which is why the AWS SDKs and the instance metadata service handle refresh automatically for the common cases. Hand-rolled credential caching that ignores expiry is a classic cause of intermittent, hard-to-reproduce failures.</p>
+        <p>Finally, there is a quota dimension that is easy to miss: the number of roles and policies in an account is bounded, and a delegation model that creates a new role per team per environment per service will consume that budget faster than expected. Boundaries do not change this, but they do make it safe to let teams create their own roles, which accelerates the consumption. Organizations that delegate IAM creation usually pair it with a naming convention and a periodic cleanup job for orphaned roles.</p>
+      </section>
+
+      <section class="doc-section" id="failure-modes">
+        <h2 class="section-heading">6. Failure Modes and What They Look Like in Production</h2>
+        <p>The most common failure is the silent one: a boundary was supposed to be attached and was not, because the condition enforcing it was written incorrectly or omitted. The symptom is not an error — it is that everything works, including the thing that was supposed to be blocked. This is why the enforcement condition deserves a test: create a role without the boundary using the delegated admin credentials and confirm the call is rejected. If it succeeds, the control is decorative.</p>
+        <p>The second failure is the opposite: a boundary that is too tight and breaks legitimate workloads in ways that are hard to diagnose. The error surface is an <code>AccessDenied</code> on an action the team believes they have permission for, because their identity policy allows it and the boundary does not. The diagnostic move is to check the boundary first, not the identity policy, because teams almost always look at the policy they wrote and forget the ceiling above it. CloudTrail records the denied call with the principal and action, and the IAM policy simulator can show which policy in the chain produced the deny.</p>
+        <p>The third failure is credential expiry in a long-running process. The symptom is a burst of failures at a regular interval — often exactly the session duration — followed by recovery if the process retries with fresh credentials, or permanent failure if it cached them. The first diagnostic move is to check whether the failing calls cluster around a fixed period after the process started. If they do, it is expiry, not permissions.</p>
+        <p>The fourth failure is a trust policy that is too broad. A role whose trust policy allows an entire account, or worse, uses a wildcard principal, can be assumed by any principal in that account that has <code>sts:AssumeRole</code> permission. This is not a boundary problem, but it is the same class of problem: a control that was meant to be narrow and is not. The symptom is unexpected principals appearing in CloudTrail as having assumed the role, which is exactly what you would alert on.</p>
+        <p>The fifth failure is the confused deputy, where a service is tricked into acting on behalf of a principal it should not. The standard mitigation is an external ID in the trust policy for third-party access, and source-account or source-ARN conditions for service principals. A scenario that describes a SaaS vendor assuming a role in your account without an external ID is describing this failure mode, and the fix is in the trust policy, not the boundary.</p>
+      </section>
+
+      <section class="doc-section" id="sre-angle">
+        <h2 class="section-heading">7. Operational and SRE Angle</h2>
+        <p>From an operations perspective, the interesting property of boundaries and STS is that they change the shape of your alerts. A boundary violation is not a performance signal; it is a security signal, and it belongs in a different alerting path than latency or error rate. The practical approach is to route <code>AccessDenied</code> events that originate from a boundary rather than an identity policy into a security channel, because they usually indicate either a misconfigured workload or someone probing for permissions they do not have. Both are worth a human look, but neither should page the on-call engineer at 3 a.m.</p>
+        <p>Credential expiry, by contrast, is an availability concern and belongs in the normal SRE tooling. The metric to watch is the rate of <code>ExpiredToken</code> errors, which should be zero in a healthy system because the SDKs refresh automatically. A non-zero rate means something is caching credentials by hand, and the fix is to remove the custom caching rather than to lengthen the session. This is a good example of an SLO implication that is easy to miss: a workload can be perfectly healthy from a latency standpoint and still be one expiry cycle away from a partial outage.</p>
+        <p>The runbook shape for a suspected boundary problem is short and worth writing down before you need it. First, identify the principal from the CloudTrail event. Second, list the identity policies attached to it and the boundary attached to it. Third, compare the denied action against both. Fourth, if the action is legitimately needed, decide whether the fix belongs in the identity policy (the team's own policy was incomplete) or in the boundary (the boundary is too tight for a legitimate use case). That last decision is a governance decision, not an operational one, and it should route to whoever owns the boundary rather than being fixed ad hoc by the on-call engineer.</p>
+        <p>There is also a change-management angle. Boundaries are shared infrastructure: one boundary policy may be attached to hundreds of roles across an organization. Editing it is a high-blast-radius change, and it should go through the same review as an SCP change. A useful practice is to version boundaries and roll changes out to a non-production OU first, because a boundary that accidentally denies a commonly used action will break every role that carries it simultaneously.</p>
+      </section>
+
+      <section class="doc-section" id="gotchas">
+        <h2 class="section-heading">8. Edge Cases and Exam Gotchas</h2>
+        <p>The first gotcha is that a boundary cannot grant permissions. Any answer option that describes a boundary as a way to give a role access is wrong, no matter how plausible the surrounding scenario sounds. The boundary is a ceiling, and ceilings do not lift floors.</p>
+        <p>The second is that boundaries do not apply to resource-based policies in the way people expect. A role with a restrictive boundary can still be granted access by a resource policy on an S3 bucket or a KMS key, because resource-based policies are evaluated on the resource side and the boundary constrains the principal's identity-based permissions. This is a subtle point and it is exactly the kind of thing a hard exam question is built on. If the scenario requires that a principal be unable to access a resource even when the resource policy allows it, the boundary alone may not be sufficient.</p>
+        <p>The third is that the management account of an AWS Organization is not subject to SCPs, which means an SCP-based control cannot be used to constrain it. If a scenario asks how to limit what a principal in the management account can do, the answer is a boundary or an identity policy, not an SCP. This connects back to Day 1's point about keeping the management account workload-free.</p>
+        <p>The fourth is the difference between <code>AssumeRole</code> and <code>AssumeRoleWithWebIdentity</code>. The former is for AWS principals and federated users who have already been authenticated by STS; the latter is for OIDC tokens from an external identity provider, which is what IRSA uses. A scenario describing a Kubernetes service account that needs S3 access is describing IRSA, and the answer involves an OIDC provider registered with IAM and a trust policy with a <code>sub</code> condition on the service account.</p>
+        <p>The fifth is that a boundary attached to a role does not automatically apply to roles that role creates. The boundary is a property of the entity, not a heritable trait. If you want created roles to carry a boundary, you must enforce it with a condition on the creating principal's policy. This is the single most commonly missed detail in this topic.</p>
+        <p>The sixth is that session policies and boundaries stack. If a role has a boundary and the caller passes a session policy, the effective permissions are the intersection of all three. An exam question that describes a caller who "narrowed" their session and still cannot perform an action is usually testing whether you know that narrowing can only reduce, never restore, permissions the boundary removed.</p>
+      </section>
+
+      <section class="doc-section" id="vs-comparison">
+        <h2 class="section-heading">9. This vs. the Controls It Gets Confused With</h2>
+        <p>The comparison that matters most is boundary versus SCP, because both are ceilings and both are written as JSON policies. The difference is scope and enforcement point. An SCP is enforced by Organizations at the account boundary and applies to every principal in the account, including principals that do not exist yet. A permission boundary is enforced by IAM at the principal level and applies only to the entity it is attached to. If the requirement is org-wide, use an SCP. If the requirement is per-principal and must survive delegation, use a boundary. If the requirement is both, use both — they compose without conflict, and the effective permission is the intersection of all applicable ceilings.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Requirement</th><th>Pick</th><th>Why not the other</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Cap every account in an OU to two regions</td><td>SCP</td><td>A boundary would have to be attached to every principal individually</td></tr>
+              <tr><td>Let a team create roles but never with IAM access</td><td>Boundary + enforcement condition</td><td>An SCP would also constrain the team's own role, which is broader than needed</td></tr>
+              <tr><td>Allow a specific external account to read one bucket</td><td>Bucket policy + trust policy</td><td>Neither a boundary nor an SCP expresses "who"</td></tr>
+              <tr><td>Give one role different effective permissions per caller</td><td>Session policy at assume time</td><td>A boundary is fixed per role and cannot vary by caller</td></tr>
+              <tr><td>Prevent a compromised workload from touching IAM</td><td>Boundary on the workload role</td><td>An SCP would affect unrelated principals in the same account</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The second comparison is boundary versus identity policy, which is really a question of ownership. The identity policy is written by whoever owns the workload and expresses what the workload needs. The boundary is written by whoever owns the security posture and expresses what no workload should ever be able to do. Keeping those two authorship roles separate is the entire point of the mechanism, and a scenario that describes a central team trying to control application teams' blast radius without reviewing every policy they write is describing exactly this split.</p>
+        <p>The third comparison is STS versus long-lived IAM users, which is less a choice than a default. Temporary credentials from STS are the recommended mechanism for anything that can use them, and long-lived access keys are the fallback for the shrinking set of cases that cannot. A scenario that offers "create an IAM user with an access key" as an option for a workload is almost always offering a distractor, and the correct answer is a role assumed via STS.</p>
+      </section>
+
+      <section class="doc-section" id="lab">
+        <h2 class="section-heading">Hands-on Lab: A Delegated Admin That Cannot Escalate</h2>
+        <div class="card card-green">
+          <p>The goal is to build a delegated IAM administrator whose ability to create roles is real but bounded, and then to prove the bound holds by attempting the escalation it is supposed to prevent. Work in a sandbox account, not a production one, because the lab deliberately creates a principal with <code>iam:CreateRole</code>.</p>
+          <p><strong>1. Write the boundary policy.</strong> Create a customer-managed policy named <code>DeveloperBoundary</code>. Start from a statement that allows a broad set of services the teams legitimately need — <code>s3:*</code>, <code>dynamodb:*</code>, <code>lambda:*</code>, <code>logs:*</code>, <code>ec2:Describe*</code> — and then add explicit Deny statements for <code>iam:*</code>, <code>organizations:*</code>, <code>account:*</code>, and <code>cloudtrail:DeleteTrail</code>. The denies are the important part; the allows exist so the boundary does not break ordinary workloads. Note the policy ARN, because the next step references it.</p>
+          <p><strong>2. Create the delegated admin role.</strong> Create a role named <code>DelegatedIamAdmin</code> with a trust policy that allows your own account to assume it. Attach an identity policy that grants <code>iam:CreateRole</code>, <code>iam:AttachRolePolicy</code>, <code>iam:PutRolePolicy</code>, <code>iam:PassRole</code>, and <code>iam:ListRoles</code>. Do not attach the boundary to this role — the delegated admin is not the entity being bounded; the roles it creates are.</p>
+          <p><strong>3. Add the enforcement condition.</strong> Edit the delegated admin's identity policy so that the <code>iam:CreateRole</code> statement carries a condition requiring <code>iam:PermissionsBoundary</code> to equal the ARN of <code>DeveloperBoundary</code>. The condition key is <code>iam:PermissionsBoundary</code> and the operator is <code>StringEquals</code>. This is the step that turns the boundary from a convention into a control.</p>
+          <p><strong>4. Prove the control works.</strong> Assume <code>DelegatedIamAdmin</code> and attempt to create a role without specifying a permissions boundary. The call should fail with an <code>AccessDenied</code> that names the condition. Then create the same role with the boundary ARN supplied, and confirm it succeeds.</p>
+          <p><strong>5. Prove the boundary holds.</strong> Attach <code>AdministratorAccess</code> to the role you just created, then assume it and attempt <code>iam:CreateUser</code>. It should fail, because the boundary denies <code>iam:*</code> even though the attached policy allows it. This is the demonstration that the delegation is safe: the delegate can hand out any policy they like, and the ceiling still holds.</p>
+          <p><strong>6. Test the session-policy layer.</strong> Assume the bounded role again, this time passing an inline session policy that denies <code>s3:DeleteObject</code>. Confirm that an S3 delete fails, then confirm that removing the session policy does not restore any <code>iam:*</code> action — the boundary still applies. This makes the intersection behavior concrete.</p>
+          <p><strong>7. Clean up and record.</strong> Delete the created role, the delegated admin role, and the boundary policy. Write down the two ARNs and the condition key you used, because the exam expects you to recognize this pattern from a scenario description rather than from the JSON.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="quiz">
+        <h2 class="section-heading">Scenario Question Drills</h2>
+
       <div class="scenario-card">
         <p class="scenario-question"><strong>Q1.</strong> A delegated admin role can create IAM roles for developers. How do you prevent them from creating a role with AdministratorAccess?</p>
-        <div class="scenario-options" id="opts-d5q0">
+        <div class="scenario-options" id="opts-d5q1">
             <div class="scenario-option">A. Attach a Deny statement to every developer role individually</div>
             <div class="scenario-option">B. Require the delegated admin to set a permission boundary on every role they create, capping maximum permissions</div>
             <div class="scenario-option">C. Remove iam:CreateRole entirely</div>
             <div class="scenario-option">D. Use MFA enforcement only</div>
         </div>
-        <button class="scenario-reveal-btn" onclick="revealAnswer('d5q0', 1)">Reveal Answer</button>
-        <div class="scenario-explanation" id="exp-d5q0"><strong>Correct answer: B.</strong> Enforcing a mandatory permission boundary (via a condition requiring iam:PermissionsBoundary on CreateRole) is the standard pattern to prevent privilege escalation by delegated admins.</div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d5q1', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d5q1"><strong>Correct answer: B.</strong> Enforcing a mandatory permission boundary (via a condition requiring iam:PermissionsBoundary on CreateRole) is the standard pattern to prevent privilege escalation by delegated admins.</div>
       </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q2.</strong> A role has a permission boundary that allows only s3:* and dynamodb:*. Its identity policy grants AdministratorAccess. What can the role actually do?</p>
+        <div class="scenario-options" id="opts-d5q2">
+            <div class="scenario-option">A. Everything, because AdministratorAccess overrides the boundary</div>
+            <div class="scenario-option">B. Only S3 and DynamoDB actions, because the effective permission is the intersection of the identity policy and the boundary</div>
+            <div class="scenario-option">C. Nothing, because the two policies conflict</div>
+            <div class="scenario-option">D. Only the actions listed in both policies as explicit Allows, with no denies applied</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d5q2', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d5q2"><strong>Correct answer: B.</strong> A boundary caps the maximum permissions; the effective permission set is the intersection of the identity policy and the boundary, so the broad identity policy cannot exceed the ceiling.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q3.</strong> A security team wants to guarantee that no principal in an entire OU can disable CloudTrail, including principals created next month. What should they use?</p>
+        <div class="scenario-options" id="opts-d5q3">
+            <div class="scenario-option">A. A permission boundary attached to each existing role</div>
+            <div class="scenario-option">B. An SCP on the OU denying cloudtrail:StopLogging and cloudtrail:DeleteTrail</div>
+            <div class="scenario-option">C. A trust policy condition on every role</div>
+            <div class="scenario-option">D. A session policy passed at assume time</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d5q3', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d5q3"><strong>Correct answer: B.</strong> SCPs apply to every principal in the account or OU, including ones that do not exist yet, which is exactly the requirement. A boundary would have to be attached to each principal individually and would not cover future ones.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q4.</strong> A Kubernetes pod running on EKS needs to read from an S3 bucket without any long-lived credentials stored in the cluster. Which STS API and configuration applies?</p>
+        <div class="scenario-options" id="opts-d5q4">
+            <div class="scenario-option">A. AssumeRole with an access key stored in a Kubernetes secret</div>
+            <div class="scenario-option">B. AssumeRoleWithSAML using the cluster's certificate authority</div>
+            <div class="scenario-option">C. AssumeRoleWithWebIdentity using an IAM OIDC provider and a trust policy scoped to the service account subject</div>
+            <div class="scenario-option">D. AssumeRoleWithWebIdentity using the node instance profile</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d5q4', 2)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d5q4"><strong>Correct answer: C.</strong> IRSA registers the cluster's OIDC issuer as an IAM identity provider and the role trust policy conditions on the service account's sub claim, so the pod receives short-lived credentials with no stored secrets.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q5.</strong> A team attaches a permission boundary that allows s3:GetObject to a role that has no identity policy at all. What happens when the role calls GetObject?</p>
+        <div class="scenario-options" id="opts-d5q5">
+            <div class="scenario-option">A. It succeeds, because the boundary allows the action</div>
+            <div class="scenario-option">B. It is denied, because a boundary can only restrict and never grants permissions</div>
+            <div class="scenario-option">C. It succeeds only if the bucket policy also allows it</div>
+            <div class="scenario-option">D. It depends on whether the role is used cross-account</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d5q5', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d5q5"><strong>Correct answer: B.</strong> A permission boundary is a ceiling, not a grant. Without an identity-based policy allowing the action, the call is denied regardless of what the boundary contains.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q6.</strong> A third-party SaaS vendor needs to assume a role in your account to read a specific S3 prefix. What should the trust policy include to prevent the confused deputy problem?</p>
+        <div class="scenario-options" id="opts-d5q6">
+            <div class="scenario-option">A. A wildcard principal so the vendor can rotate its own credentials</div>
+            <div class="scenario-option">B. An sts:ExternalId condition with a value unique to your account, plus a scoped identity policy on the role</div>
+            <div class="scenario-option">C. A permission boundary on the vendor's role in their account</div>
+            <div class="scenario-option">D. An SCP denying sts:AssumeRole in your account</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d5q6', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d5q6"><strong>Correct answer: B.</strong> The external ID is the standard mitigation for third-party cross-account access, ensuring the vendor can only assume the role on behalf of your specific account rather than any customer that guesses the role ARN.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q7.</strong> A long-running batch job that assumes a role starts failing every hour with ExpiredToken errors, then recovers on retry. What is the most likely cause?</p>
+        <div class="scenario-options" id="opts-d5q7">
+            <div class="scenario-option">A. The role's permission boundary is too restrictive</div>
+            <div class="scenario-option">B. The job is caching temporary credentials past their expiry instead of refreshing them</div>
+            <div class="scenario-option">C. The trust policy is missing an external ID</div>
+            <div class="scenario-option">D. The SCP on the account denies sts:AssumeRole</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d5q7', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d5q7"><strong>Correct answer: B.</strong> Failures clustering at a fixed interval equal to the session duration are the signature of hand-rolled credential caching. The fix is to let the SDK refresh credentials rather than lengthening the session.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q8.</strong> A role has a permission boundary denying iam:*. A bucket policy grants that role s3:GetObject on a bucket in another account. Can the role read the object?</p>
+        <div class="scenario-options" id="opts-d5q8">
+            <div class="scenario-option">A. No, because the boundary denies all cross-account access</div>
+            <div class="scenario-option">B. Yes, because the boundary denies iam:* and the bucket policy grants s3:GetObject, which the boundary does not deny</div>
+            <div class="scenario-option">C. No, because resource-based policies are always overridden by boundaries</div>
+            <div class="scenario-option">D. Only if the role also has an identity policy allowing s3:GetObject</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d5q8', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d5q8"><strong>Correct answer: B.</strong> The boundary only denies iam:*, so it does not block s3:GetObject. Resource-based policies are evaluated on the resource side, and a boundary does not automatically override them for actions it does not deny.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q9.</strong> A platform team wants application teams to create their own IAM roles via a CI/CD pipeline, with the boundary enforced by the pipeline templates rather than by IAM conditions. What is the main tradeoff of this approach?</p>
+        <div class="scenario-options" id="opts-d5q9">
+            <div class="scenario-option">A. It is impossible, because CloudFormation cannot attach permission boundaries</div>
+            <div class="scenario-option">B. The control moves from an IAM-enforced condition to a code-review process, which is more visible but depends on review discipline</div>
+            <div class="scenario-option">C. It removes the need for a boundary policy entirely</div>
+            <div class="scenario-option">D. It requires the pipeline role to have AdministratorAccess</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d5q9', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d5q9"><strong>Correct answer: B.</strong> Template-based enforcement makes the boundary reviewable in a pull request, but the guarantee now depends on the review process rather than on the IAM API rejecting an unbounded call.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q10.</strong> A role's trust policy allows an entire external AWS account to assume it. What is the risk, and what is the fix?</p>
+        <div class="scenario-options" id="opts-d5q10">
+            <div class="scenario-option">A. No risk, because the external account's principals still need sts:AssumeRole in their own account</div>
+            <div class="scenario-option">B. Any principal in that account with sts:AssumeRole permission can assume the role; scope the trust policy to specific principals or add conditions</div>
+            <div class="scenario-option">C. The role will fail to assume because account-level trust is not supported</div>
+            <div class="scenario-option">D. The fix is to attach a permission boundary to the role</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d5q10', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d5q10"><strong>Correct answer: B.</strong> Account-level trust is broad by design; any principal in that account with sts:AssumeRole can use it. Narrow the trust policy to specific principals or add conditions such as external ID or source ARN.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q11.</strong> A role has a boundary allowing s3:* and an identity policy allowing s3:* and dynamodb:*. A caller assumes the role with a session policy allowing only s3:GetObject. What can the session do?</p>
+        <div class="scenario-options" id="opts-d5q11">
+            <div class="scenario-option">A. All S3 and DynamoDB actions, because the identity policy is the broadest</div>
+            <div class="scenario-option">B. Only s3:GetObject, because the effective permission is the intersection of the identity policy, the boundary, and the session policy</div>
+            <div class="scenario-option">C. All S3 actions, because the session policy cannot restrict below the boundary</div>
+            <div class="scenario-option">D. Nothing, because three policies cannot be combined</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d5q11', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d5q11"><strong>Correct answer: B.</strong> Session policies, boundaries, and identity policies all intersect. The session policy narrows the session to s3:GetObject, and DynamoDB is excluded because the boundary does not allow it.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q12.</strong> A security review finds that a delegated admin created a role without a permission boundary, even though the team's policy was supposed to require one. What is the most likely root cause?</p>
+        <div class="scenario-options" id="opts-d5q12">
+            <div class="scenario-option">A. Permission boundaries cannot be enforced on CreateRole</div>
+            <div class="scenario-option">B. The iam:PermissionsBoundary condition was missing or written incorrectly on the delegated admin's policy, so the API accepted the unbounded call</div>
+            <div class="scenario-option">C. The boundary policy was deleted</div>
+            <div class="scenario-option">D. The role was created by the management account, which bypasses boundaries</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d5q12', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d5q12"><strong>Correct answer: B.</strong> Without a condition requiring iam:PermissionsBoundary on CreateRole, the delegated admin can simply omit the boundary. The control must be enforced by the API, not by convention.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q13.</strong> Which statement about permission boundaries and SCPs is correct?</p>
+        <div class="scenario-options" id="opts-d5q13">
+            <div class="scenario-option">A. Both can grant permissions when attached to a role</div>
+            <div class="scenario-option">B. Both act as ceilings that can only restrict, and they compose so the effective permission is the intersection of all applicable ceilings</div>
+            <div class="scenario-option">C. SCPs apply per principal and boundaries apply per account</div>
+            <div class="scenario-option">D. A boundary overrides an SCP when they conflict</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d5q13', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d5q13"><strong>Correct answer: B.</strong> Neither control grants permissions. SCPs apply at the account/OU level and boundaries at the principal level, and when both apply the effective permission is the intersection.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q14.</strong> A workload in account A needs to read a DynamoDB table in account B. The table's resource policy grants the workload's role access. What else is required?</p>
+        <div class="scenario-options" id="opts-d5q14">
+            <div class="scenario-option">A. Nothing; the resource policy is sufficient</div>
+            <div class="scenario-option">B. The workload's role must have an identity policy allowing dynamodb:GetItem and the cross-account access must be permitted by both accounts' controls</div>
+            <div class="scenario-option">C. A permission boundary must be attached to the table</div>
+            <div class="scenario-option">D. The table must be in the same OU as the workload</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d5q14', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d5q14"><strong>Correct answer: B.</strong> Cross-account access requires both sides to allow it: the resource policy on the table and an identity-based grant on the calling principal, subject to any SCPs or boundaries in either account.</div>
+      </div>
+
+      <div class="scenario-card">
+        <p class="scenario-question"><strong>Q15.</strong> A team wants a single role that different callers can assume with different effective permissions, without creating a separate role per caller. What is the right mechanism?</p>
+        <div class="scenario-options" id="opts-d5q15">
+            <div class="scenario-option">A. Attach multiple permission boundaries to the role</div>
+            <div class="scenario-option">B. Pass a session policy at assume time so each caller narrows the role's permissions to what they need</div>
+            <div class="scenario-option">C. Use a different trust policy per caller</div>
+            <div class="scenario-option">D. Create an IAM user per caller with the same policies</div>
+        </div>
+        <button class="scenario-reveal-btn" onclick="revealAnswer('d5q15', 1)">Reveal Answer</button>
+        <div class="scenario-explanation" id="exp-d5q15"><strong>Correct answer: B.</strong> Session policies let each caller narrow the effective permissions of a shared role at assume time. A role can only have one boundary, and trust policies govern who may assume, not what they may do.</div>
+      </div>
+      </section>
+
+      <section class="doc-section" id="preview">
+        <h2 class="section-heading">Peek into Tomorrow</h2>
+        <div class="card card-purple">
+          <p>Everything today assumed the network already existed. Boundaries and STS decide who may act and what they may do, but they say nothing about where the resources being acted upon actually live, or who owns the VPC they sit in. That gap becomes concrete the moment an organization decides it wants one centrally managed network rather than a VPC per account, because the central network account then has to hand out pieces of its own infrastructure to accounts that do not own it.</p>
+          <p>The open question is how a central network account shares a subnet with an application account without giving that account control of the VPC, and without the two accounts needing to peer or merge route tables. The same question applies to a Transit Gateway that one account owns and many accounts attach to, and to Route 53 Resolver rules that need to be visible across the organization. Tomorrow's topic answers it with a sharing primitive that sits alongside the identity controls you built today — and the interesting part is how the shared resource's owner retains control while the consumer gets just enough access to launch into it.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="sources">
+        <h2 class="section-heading">Sources</h2>
+        <div class="card">
+          <ul class="source-list">
+            <li><a href="https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies_boundaries.html" target="_blank" rel="noopener">AWS IAM User Guide — Permissions boundaries for IAM entities</a></li>
+            <li><a href="https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_evaluation-logic.html" target="_blank" rel="noopener">AWS IAM User Guide — Policy evaluation logic</a></li>
+            <li><a href="https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_terms-and-concepts.html" target="_blank" rel="noopener">AWS IAM User Guide — IAM roles terminology and concepts</a></li>
+            <li><a href="https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-idp_oidc.html" target="_blank" rel="noopener">AWS IAM User Guide — Creating a role for OpenID Connect federation</a></li>
+            <li><a href="https://docs.aws.amazon.com/STS/latest/APIReference/welcome.html" target="_blank" rel="noopener">AWS STS API Reference</a></li>
+            <li><a href="https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_iam-quotas.html" target="_blank" rel="noopener">AWS IAM User Guide — IAM and AWS STS quotas</a></li>
+            <li><a href="https://docs.aws.amazon.com/IAM/latest/UserGuide/confused-deputy.html" target="_blank" rel="noopener">AWS IAM User Guide — The confused deputy problem</a></li>
+            <li><a href="https://docs.aws.amazon.com/eks/latest/userguide/iam-roles-for-service-accounts.html" target="_blank" rel="noopener">Amazon EKS User Guide — IAM roles for service accounts</a></li>
+            <li><a href="https://docs.aws.amazon.com/wellarchitected/latest/security-pillar/welcome.html" target="_blank" rel="noopener">AWS Well-Architected Framework — Security Pillar</a></li>
+          </ul>
+        </div>
       </section>
       <div class="day-nav">
         <a href="day-004.html">&larr; Day 4: IAM Identity Center (AWS SSO) &amp; Federation</a>

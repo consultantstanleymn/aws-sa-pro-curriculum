@@ -104,37 +104,374 @@
         <span class="pill pill-green">Phase 3: SRE Observability, Resilience &amp; DR</span>
       </div>
       <h1 class="hero-title">Amazon CloudWatch Logs Insights &amp; Centralized Logging</h1>
-      <div class="reading-meta">&#128337; ~3 min read &middot; 3 services covered</div>
+      <div class="reading-meta">&#128337; ~58 min read &middot; 3 services covered</div>
       <div class="services-grid">
         <span class="service-tag">CloudWatch Logs Insights</span>
         <span class="service-tag">Log Subscription Filters</span>
         <span class="service-tag">Centralized Logging Account</span>
       </div>
       <div id="tracker"></div>
-      <section class="doc-section">
-        <h2 class="section-heading">Today's Concept</h2>
+
+      <section class="doc-section" id="recap">
+        <h2 class="section-heading">Recap: From Traces to Logs</h2>
         <div class="card card-accent">
-          <p>Logs Insights provides a query language over CloudWatch Logs for ad-hoc analysis without standing up separate infrastructure. Subscription filters stream logs in real time to a centralized logging account (via Kinesis Data Firehose/Streams) for org-wide search, retention, and SIEM ingestion.</p>
-        </div>
-        <h3 class="sub-heading">Hands-on Lab / Practical Action (45 min)</h3>
-        <div class="card">
-          <p>Write a Logs Insights query extracting the top 10 slowest API requests in the last hour, then configure a subscription filter to forward ERROR-level logs to a central account.</p>
+          <p>X-Ray gave us the shape of a request: a service map that shows which hop is slow, sampling rules that keep trace volume affordable, and annotations and subsegments that let us drill into a specific slow DynamoDB query inside a Lambda invocation. That is a powerful lens, but it is a sampled, structural lens. It tells you that the DynamoDB call inside the checkout function accounts for 340ms of a 900ms p99, and it tells you that the error rate on that hop doubled at 14:05. What it does not tell you is <em>why</em>. The trace carries no stack trace, no exception message, no request payload, no downstream error code. For that you need the log line the application wrote immediately before it gave up.</p>
+          <p>Today extends the observability signal thread by moving from per-hop latency hotspots to the raw event stream underneath them. Logs Insights is the query layer over CloudWatch Logs, and subscription filters are the transport that moves those events out of the account that produced them and into a place where the whole organization can search them. The two halves solve different problems — one is ad-hoc analysis in the account you are already in, the other is durable, org-wide aggregation — and the exam tests whether you can tell which one a scenario is asking for.</p>
         </div>
       </section>
-      <section class="doc-section">
+
+      <section class="doc-section" id="why-on-exam">
+        <h2 class="section-heading">1. Why This Is on the Exam</h2>
+        <p>Centralized logging sits at the intersection of two SAP-C02 domains that are otherwise easy to study separately: Domain 1 (Design Solutions for Organizational Complexity) and Domain 2 (Design for New Solutions, specifically the observability and operational-excellence sub-areas). The organizational-complexity angle is the one that catches people. A multi-account landing zone built with Control Tower produces dozens or hundreds of accounts, each with its own CloudWatch Logs log groups, each with its own retention setting, each with its own IAM boundary around who can read them. An incident that spans three accounts — an API Gateway in the workload account, a Lambda in a shared-services account, and an RDS instance in a data account — produces evidence in three separate places that no single engineer has permission to read. The exam wants to know whether you recognize that as an architecture problem rather than an IAM problem.</p>
+        <p>The second reason this topic appears is that it is a natural place to test whether you understand the difference between a query tool and a pipeline. Logs Insights is a query tool: it runs against log groups that already exist, in the account and region where they exist, and it returns results to whoever is looking at the console. A subscription filter is a pipeline: it is a persistent, always-on configuration attached to a log group that forwards every matching event to a destination. Candidates who have only used Logs Insights in a single account tend to answer "use Logs Insights" for questions that are actually about cross-account aggregation, and that is precisely the distractor the exam is built around.</p>
+        <p>There is also a compliance dimension that shows up in Domain 4 (Continuous Improvement for Existing Solutions) and in the security-adjacent scenarios. Regulated workloads frequently require that logs be retained for a fixed period, that they be immutable once written, and that the team who operates the workload cannot delete the evidence of what they did. A centralized logging account owned by a security team, with the workload accounts holding only write permission to it, is the standard answer. That pattern is built out of the same two primitives — log groups and subscription filters — plus an IAM and Organizations structure around them.</p>
+        <p>Finally, this is one of the few observability topics where cost is a first-class design constraint rather than an afterthought. CloudWatch Logs charges for ingestion, for storage, and for the Insights queries you run against stored data. A naive "send everything everywhere" design can cost more than the compute it is monitoring. The exam does not usually ask you to compute a bill, but it does ask you to choose between designs with obviously different cost profiles, and knowing which knob controls which cost is what makes that choice defensible.</p>
+      </section>
+
+      <section class="doc-section" id="mechanism">
+        <h2 class="section-heading">2. How CloudWatch Logs Actually Works</h2>
+        <p>Everything in this day rests on one data model, so it is worth being precise about it. A log group is a named container that holds log streams. A log stream is an ordered sequence of log events from a single source — in practice, one stream per process, per container, per Lambda execution environment, or per file being tailed. A log event is a timestamp plus a UTF-8 payload, and that is the entire schema. CloudWatch Logs does not parse your payload, does not index individual fields, and does not know that a line beginning with <code>{"level":"ERROR"</code> is different from a line beginning with <code>{"level":"INFO"</code> until you tell it so. This is the single most important fact for understanding why Logs Insights queries look the way they do.</p>
+        <p>When an agent or SDK writes to a log group, the events are durably stored and become queryable. The CloudWatch Logs agent (or the unified CloudWatch agent, or the Lambda service itself, or the ECS/EKS log drivers) batches events and calls the PutLogEvents API. There is a per-stream ordering guarantee and a per-event timestamp, but there is no cross-stream ordering guarantee at all. Two containers writing to the same log group will interleave in whatever order their batches arrived, which is why a Logs Insights query that sorts by <code>@timestamp</code> is reconstructing an approximation of the timeline rather than reading a canonical one. For most debugging this is fine; for reconstructing a distributed transaction across services, it is exactly why you also want X-Ray.</p>
+        <p>Logs Insights is a query engine that runs over one or more log groups within a single region and a single account. You give it a time range and a query written in a purpose-built language, and it scans the matching events, applies your filter and parse stages, and returns aggregated or projected results. The language is pipeline-shaped: a <code>fields</code> clause selects and computes, <code>filter</code> narrows, <code>parse</code> extracts fields out of unstructured text using glob patterns, <code>stats</code> aggregates with functions like <code>count</code>, <code>avg</code>, <code>pct</code>, and <code>sum</code>, and <code>sort</code>/<code>limit</code> shape the output. Because the underlying data is unindexed text, a query that filters on a parsed field still has to scan the events in the time range to extract that field — which is the direct link between query design and query cost.</p>
+        <p>Subscription filters are a completely separate mechanism that happens to live on the same resource. A subscription filter is attached to a log group and declares a filter pattern plus a destination. Every log event that matches the pattern is delivered, in near-real time, to that destination. The destination is one of a small set: a Kinesis Data Streams stream, a Kinesis Data Firehose delivery stream, or a Lambda function. The filter pattern language is not the Insights query language — it is a simpler matching syntax with terms, quoted phrases, and <code>?</code> wildcards, and it is evaluated on the raw event text. This distinction matters because a pattern that works in a subscription filter will not paste into an Insights query and vice versa.</p>
+        <p>The delivery path is asynchronous and best-effort in the sense that it is not transactional with the log write. CloudWatch Logs buffers matching events and forwards them in batches; if the destination is unavailable or throttled, events can be retried and, in pathological cases, dropped. This is why the centralized logging pattern is usually described as near-real-time rather than real-time, and why a design that treats the central account as the system of record for compliance needs to think about the failure window rather than assuming perfect delivery.</p>
+      </section>
+
+      <section class="doc-section" id="decision-boundary">
+        <h2 class="section-heading">3. The Core Decision Boundary: Query In Place vs. Aggregate Centrally</h2>
+        <p>Almost every scenario question on this topic reduces to one fork. Either the logs you need are already in the account and region where you are working, in which case Logs Insights is the right tool and the design question is how to write an efficient query; or the logs you need are spread across accounts, or need to outlive the account that produced them, or need to be readable by a team that does not have access to the producing account, in which case you need a subscription filter and a destination in a central account. The two are not alternatives to each other — a mature design uses both — but a scenario will usually be testing whether you recognize which one the stated constraint demands.</p>
+        <p>The tell is almost always in the constraint language. "An engineer needs to find the slowest requests in the last hour" is a query problem. "The security team needs to search application logs from all 40 accounts from one place" is an aggregation problem. "Logs must be retained for seven years even if the workload account is deleted" is an aggregation problem with a retention twist. "We need to alert when a specific error string appears" is neither, strictly — that is a metric filter, which converts matching log events into a CloudWatch metric you can alarm on, and it is worth knowing as a third option because it is a common distractor.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Requirement</th><th>Right primitive</th><th>Why the others fail</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Ad-hoc search of logs in the account you are in</td><td>Logs Insights query</td><td>Subscription filters move data out; they do not answer questions</td></tr>
+              <tr><td>Org-wide search across many accounts</td><td>Subscription filter to a central destination</td><td>Insights cannot query across accounts or regions</td></tr>
+              <tr><td>Alert when an error pattern appears</td><td>Metric filter + CloudWatch alarm</td><td>Insights is pull-based; it does not evaluate continuously</td></tr>
+              <tr><td>Retain logs beyond the producing account's lifetime</td><td>Subscription filter to S3 via Firehose</td><td>Log group retention is bounded and dies with the account</td></tr>
+              <tr><td>Feed a SIEM or third-party analytics platform</td><td>Subscription filter to Firehose or Kinesis Data Streams</td><td>Insights has no export API for streaming consumers</td></tr>
+              <tr><td>Correlate a request across services</td><td>X-Ray (with logs as supporting detail)</td><td>Logs have no cross-stream ordering guarantee</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>One nuance worth internalizing: Logs Insights can query multiple log groups in a single query, and it can query log groups in a different account if you have been granted cross-account access to them. That is a real capability and it is occasionally the right answer for a small number of accounts. But it does not scale to an organization, it does not survive account deletion, and it requires the querying principal to hold permissions in every producing account — which is exactly the access sprawl a centralized logging account exists to prevent. When a scenario says "40 accounts" or "the security team should not have write access to workload accounts," cross-account Insights queries are the wrong answer even though they are technically possible.</p>
+      </section>
+
+      <section class="doc-section" id="config-tradeoffs">
+        <h2 class="section-heading">4. Configuration Modes and Their Tradeoffs</h2>
+        <p>The first knob is retention, set per log group. The default is "Never expire," which sounds generous and is actually the most expensive setting in the service, because you pay for stored bytes indefinitely. The practical pattern is to set a short retention on high-volume, low-value log groups (application debug logs, load balancer access logs) and a long or infinite retention only on the groups that carry compliance weight. Retention is a per-log-group setting, so a landing-zone design usually enforces it through a Config rule or a Control Tower guardrail rather than trusting each team to pick sensibly.</p>
+        <p>The second knob is the subscription filter's filter pattern, and this is where cost control actually happens. A subscription filter with an empty pattern matches every event and forwards all of it, which means you pay CloudWatch Logs ingestion, plus the destination's ingestion, plus storage at the destination, for every debug line your application emits. A pattern that matches only <code>ERROR</code> and <code>WARN</code> reduces that volume by whatever fraction of your logs are noise — often the large majority. The tradeoff is that you cannot retroactively decide you wanted the INFO lines; if they were filtered out at the subscription, they exist only in the source account's log group, subject to that group's retention. Teams that get this wrong usually discover it during an incident, when the detail they need was filtered away three weeks earlier.</p>
+        <p>The third knob is the destination type, and the choice between Kinesis Data Streams, Kinesis Data Firehose, and Lambda is a genuine architectural fork. Firehose is the default for archival and SIEM ingestion: it buffers, optionally transforms with a Lambda processor, and delivers to S3, OpenSearch, Splunk, Datadog, or a handful of other destinations, with built-in retry and a configurable buffer interval. Kinesis Data Streams is the right choice when you need multiple independent consumers reading the same stream, or when you need to replay a window of events — Firehose is a delivery pipe, not a replayable log. Lambda as a destination is for custom routing or enrichment logic, and it is the most operationally expensive option because you now own the function's concurrency, error handling, and dead-letter behavior.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Destination</th><th>Best for</th><th>What you give up</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Kinesis Data Firehose</td><td>S3 archival, SIEM delivery, managed retry</td><td>No replay; single logical consumer path</td></tr>
+              <tr><td>Kinesis Data Streams</td><td>Multiple consumers, replay, custom processing</td><td>You manage shards, retention, and consumers</td></tr>
+              <tr><td>Lambda</td><td>Custom routing, enrichment, conditional fan-out</td><td>You own concurrency, errors, and DLQ design</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The fourth knob is the cross-account permission model, and it is the one most often gotten wrong in practice. The producing account's log group needs an IAM role or resource policy that allows <code>logs:PutSubscriptionFilter</code> against the destination, and the destination account needs a resource policy that accepts the incoming stream. In an Organizations setup this is usually expressed as a destination in the central account with a policy that allows any account in the organization to write to it, plus an SCP that prevents workload accounts from deleting their own subscription filters. Without that SCP, the pattern has a hole: a compromised workload account can simply remove the filter and stop shipping evidence.</p>
+      </section>
+
+      <section class="doc-section" id="sizing-limits">
+        <h2 class="section-heading">5. Sizing, Limits, and Quotas</h2>
+        <p>The numbers that matter here fall into three groups: limits on the log data itself, limits on queries, and limits on delivery. On the data side, a single log event payload is capped at 256 KB, and a PutLogEvents batch is capped at 1 MB or 10,000 events, whichever comes first. Events larger than the payload cap are truncated, which is a real failure mode for applications that log large JSON documents — the truncation is silent from the application's perspective, and the missing tail is only discovered when someone tries to parse the log line and finds it malformed. The practical mitigation is to log a reference (a request ID, an S3 key) rather than the full payload.</p>
+        <p>On the query side, Logs Insights has a default limit of 50 concurrent queries per account per region, and a single query can scan up to 50 log groups. Query results are capped at 10,000 rows returned to the console, though the <code>stats</code> aggregation runs over the full matched set before that cap applies — which is why an aggregation query is often the right way to answer "how many" questions even when the raw result set is huge. There is also a timeout on query execution; a query that scans an enormous time range across many high-volume log groups can time out rather than return, and the fix is to narrow the time range or the log group set rather than to retry.</p>
+        <p>On the delivery side, the numbers to remember are the Firehose buffer settings and the subscription filter's own throughput behavior. Firehose buffers by size (default 5 MB) and by interval (default 300 seconds), whichever is reached first, so a low-volume log group can take up to five minutes to appear at the destination. Lowering the buffer interval to 60 seconds reduces that latency at the cost of more, smaller S3 objects or more frequent downstream writes. This is the number that determines whether your "near-real-time" claim is honest for a given log group, and it is a common source of confusion when someone expects a log line to appear in the central account within seconds.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Limit</th><th>Value</th><th>Practical consequence</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Max log event size</td><td>256 KB</td><td>Larger events are truncated silently</td></tr>
+              <tr><td>Max PutLogEvents batch</td><td>1 MB / 10,000 events</td><td>Agents batch automatically; custom writers must chunk</td></tr>
+              <tr><td>Concurrent Insights queries</td><td>50 per account per region</td><td>Shared dashboards can contend with ad-hoc queries</td></tr>
+              <tr><td>Log groups per query</td><td>50</td><td>Org-wide search needs aggregation, not a wide query</td></tr>
+              <tr><td>Insights result rows returned</td><td>10,000</td><td>Aggregate with stats rather than returning raw rows</td></tr>
+              <tr><td>Firehose buffer interval</td><td>60-900 s (default 300)</td><td>Sets the floor on end-to-end delivery latency</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>One more number worth carrying: log group retention is configurable from one day up to ten years, or "never expire." There is no retention setting that is both infinite and free, and there is no way to change retention retroactively for events already deleted. If a compliance requirement says seven years, the retention setting has to be set to seven years before the events age out, not after someone notices.</p>
+      </section>
+
+      <section class="doc-section" id="failure-modes">
+        <h2 class="section-heading">6. Failure Modes and What They Look Like in Production</h2>
+        <p>The most common failure is silent: logs stop arriving in the central account and nobody notices, because the workload is healthy and the source log group still has everything. The symptom is a gap in the central destination that only becomes visible during an incident, when someone goes looking for evidence that should be there. The first diagnostic move is to check the subscription filter still exists on the source log group — a filter deleted by a well-meaning cleanup script, or never created because a new log group was added after the Terraform module was written, produces exactly this symptom. The second move is to check the destination's resource policy, because a policy that was correct when written can break when the producing account is moved to a different OU or when an SCP is tightened.</p>
+        <p>The second failure mode is throttling at the destination. Kinesis Data Streams has per-shard write limits, and a log group that suddenly produces a burst — a retry storm, a debug flag left on in production, a runaway loop — can exceed the stream's capacity. The symptom is <code>ThrottlingException</code> in the CloudWatch Logs service metrics and a growing gap between events written and events delivered. Firehose is more forgiving because it buffers and retries, but it has its own limits and a sustained overload will eventually surface as delivery failures to S3. The diagnostic is to compare the source log group's incoming bytes metric against the destination's incoming records metric; a divergence that grows over time is the signature.</p>
+        <p>The third failure mode is the query that never returns. A Logs Insights query over a wide time range against a high-volume log group can run long enough to time out, and the console gives you a generic failure rather than a partial result. This is not a bug; it is the direct consequence of scanning unindexed text. The fix is to narrow the time range first, then the log group set, then to push filtering into the query as early as possible so fewer events reach the expensive <code>parse</code> and <code>stats</code> stages. A query that filters on a parsed field is doing the parse work on every event in range before it can filter, which is the opposite of what you want.</p>
+        <p>The fourth failure mode is the one that hurts most in a regulated environment: the log group's retention expires before the compliance window does. This happens when retention is left at the default and someone later discovers the requirement, or when a log group is created by an application's infrastructure-as-code template that hardcodes a 30-day retention while the compliance requirement is seven years. The symptom is not an error — it is the quiet absence of data from a period that is now unrecoverable. The only real mitigation is enforcement at creation time, via a Config rule or a Control Tower guardrail that rejects log groups without an approved retention setting.</p>
+      </section>
+
+      <section class="doc-section" id="sre-angle">
+        <h2 class="section-heading">7. The Operational and SRE Angle</h2>
+        <p>From an SRE perspective, the logging pipeline is itself a service with an SLO, and it is usually an unmonitored one. The two metrics that matter are delivery latency (how long between an event being written and it being queryable at the destination) and delivery completeness (what fraction of written events arrive). Neither is exposed as a first-class CloudWatch metric, so both have to be constructed. Delivery latency can be approximated by comparing the <code>@timestamp</code> of the newest event in the destination against wall-clock time; completeness is harder and is usually approximated by comparing source incoming-bytes against destination incoming-records on a rolling window, accepting that the two are not directly convertible.</p>
+        <p>The alarms worth having are unglamorous. An alarm on the source log group's <code>IncomingBytes</code> dropping to zero for a sustained period catches the "application stopped logging" case, which is often the first symptom of a deployment that broke the logging configuration. An alarm on the destination's delivery failures catches the throttling case. An alarm on the subscription filter's existence is not directly expressible in CloudWatch, which is why the standard approach is a Config rule that asserts the filter is present on every log group matching a naming convention — a configuration-drift check rather than a metric alarm.</p>
+        <p>The runbook shape follows from the failure modes above. Step one is always "confirm the source is producing," because a surprising fraction of "logs are missing" incidents are actually "the application stopped writing logs." Step two is "confirm the filter exists and matches," which means checking both the filter's presence and its pattern against a known-good sample event. Step three is "confirm the destination is accepting," which means checking the destination's resource policy and its own throttling metrics. Only after those three are exhausted is it worth looking at the query layer, because a query problem and a delivery problem look identical from the console — both produce "I searched and found nothing."</p>
+        <p>There is also a cost-observability angle that belongs in the SRE rotation. CloudWatch Logs spend is dominated by ingestion volume, and ingestion volume is dominated by whatever the noisiest application is doing. A monthly review of per-log-group <code>IncomingBytes</code> against the value that log group actually provided during incidents is a cheap way to find the debug flag that has been on since a release three months ago. This is the same discipline as right-sizing compute, applied to telemetry: the goal is not to log less, it is to stop paying for logs nobody reads.</p>
+      </section>
+
+      <section class="doc-section" id="gotchas">
+        <h2 class="section-heading">8. Edge Cases and Exam Gotchas</h2>
+        <p>The first gotcha is the filter pattern language. It is not regex, it is not the Insights query language, and it does not support the same operators. A pattern of <code>ERROR</code> matches any event containing that term as a word; a pattern of <code>?"ERROR" ?"WARN"</code> matches events containing either; a pattern of <code>[timestamp, request_id, level = "ERROR", ...]</code> matches space-delimited events whose third field is exactly <code>ERROR</code>. Candidates who assume regex semantics write patterns that silently match nothing, and a filter that matches nothing looks exactly like a filter that is working correctly on a quiet log group.</p>
+        <p>The second gotcha is that subscription filters are per-log-group, not per-account. There is no account-level "send all logs to the central account" switch. Every log group that needs to ship has to have its own filter, which means the pattern has to be applied at creation time — usually by the same infrastructure-as-code module that creates the log group, or by a Config-driven remediation. This is the single most common reason a centralized logging design works for the accounts that were onboarded carefully and silently fails for the ones that were not.</p>
+        <p>The third gotcha is the distinction between a metric filter and a subscription filter. Both attach to a log group, both take a filter pattern, and both are commonly confused. A metric filter converts matching events into a CloudWatch metric and does not move the log data anywhere; a subscription filter moves the matching events to a destination and does not create a metric. If a scenario asks for an alarm on an error pattern, the answer is a metric filter. If it asks for the events to be searchable elsewhere, the answer is a subscription filter. Some designs need both, attached to the same log group with the same pattern.</p>
+        <p>The fourth gotcha is region. Logs Insights queries run in one region. A subscription filter delivers to a destination in the same region as the log group, unless you are using a cross-region destination, which is supported for some destination types but adds latency and a second failure domain. A multi-region workload therefore has a multi-region logging problem, and the central logging account needs a destination per region or a cross-region delivery design. Scenarios that mention "all regions" are testing whether you noticed this.</p>
+        <p>The fifth gotcha is the retention default. "Never expire" is the default, and it is the wrong answer for almost every high-volume log group. Conversely, setting a short retention on a log group that carries compliance weight is a data-loss bug that will not surface until an audit. The exam tends to present this as a cost question when it is really a governance question, and the correct answer usually involves enforcing retention through policy rather than choosing a number per log group.</p>
+      </section>
+
+      <section class="doc-section" id="vs-comparison">
+        <h2 class="section-heading">9. This vs. the Services It Gets Confused With</h2>
+        <p>The nearest neighbor is CloudTrail, and the confusion is understandable because both are "logs" and both are commonly centralized. CloudTrail records API activity — who called what, when, from where, and whether it succeeded. CloudWatch Logs records whatever your application chose to write. They answer different questions, they have different retention and integrity models, and a complete audit story needs both. CloudTrail's own organization trail is the mechanism for centralizing API activity across accounts, and it is a separate design from the CloudWatch Logs subscription filter pattern described here. A scenario that says "we need to know who deleted the bucket" is a CloudTrail question; "we need to know why the deletion request failed" is a CloudWatch Logs question.</p>
+        <p>The second neighbor is X-Ray, which we covered yesterday. X-Ray is sampled and structural; CloudWatch Logs is complete and unstructured. X-Ray tells you which hop is slow; logs tell you what the code was doing when it was slow. The two are complementary, and the standard pattern is to correlate them with a shared trace ID that the application writes into its log lines — which is exactly the kind of thing that makes a Logs Insights query useful during an incident, because you can pull every log line for a single failing request across every service that handled it.</p>
+        <p>The third neighbor is OpenSearch Service, which is where a lot of centralized logging designs eventually land. The relationship is that CloudWatch Logs is the collection and transport layer, and OpenSearch is the search and analytics layer. Firehose delivers from one to the other. The decision boundary is scale and query sophistication: Logs Insights is sufficient for ad-hoc investigation and simple aggregation, while OpenSearch is the right answer when you need full-text search across very large volumes, complex dashboards, or long-term retention with fast query. Choosing OpenSearch when Logs Insights would do adds real operational cost, and choosing Logs Insights when the requirement is a searchable multi-year corpus is a design that will not scale.</p>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr><th>Need</th><th>Pick</th><th>Because</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Who did what in the AWS API</td><td>CloudTrail (org trail)</td><td>Logs only contain what the app wrote</td></tr>
+              <tr><td>Which hop in a request is slow</td><td>X-Ray</td><td>Logs have no cross-stream ordering</td></tr>
+              <tr><td>Ad-hoc search of recent app logs</td><td>Logs Insights</td><td>No pipeline to build or pay for</td></tr>
+              <tr><td>Org-wide searchable log corpus</td><td>Subscription filter + Firehose + OpenSearch/S3</td><td>Insights cannot span accounts at scale</td></tr>
+              <tr><td>Alarm on an error string</td><td>Metric filter + alarm</td><td>Subscription filters do not alarm</td></tr>
+              <tr><td>Immutable long-term archive</td><td>Subscription filter + Firehose to S3 with Object Lock</td><td>Log group retention is mutable and bounded</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The rule of thumb: reach for Logs Insights when the question is "what happened in this account recently," and reach for a subscription filter when the question is "how do we make this evidence available to people and systems that are not in this account." The exam rarely asks you to choose one and exclude the other; it asks you to recognize which constraint in the scenario is the binding one.</p>
+      </section>
+
+      <section class="doc-section" id="lab">
+        <h2 class="section-heading">Hands-On Lab: Query, Then Ship (45 min)</h2>
+        <div class="card card-green">
+          <p>This lab has two halves that mirror the decision boundary above. First you will write Logs Insights queries against a log group you control, then you will build the aggregation path that moves a filtered subset of those events into a second account. Do it in a sandbox organization with at least two accounts; if you only have one, create a second account in the same organization and treat it as the central logging account.</p>
+          <p><strong>Step 1 — Produce structured logs.</strong> Create a Lambda function that writes a JSON log line per invocation containing at minimum a request ID, a level, a duration in milliseconds, and a path. Invoke it a few hundred times with a mix of fast and slow paths so you have something to query. Confirm the log group exists and that the events are structured JSON rather than free text; the rest of the lab depends on this.</p>
+          <p><strong>Step 2 — Query the slowest requests.</strong> Open Logs Insights against that log group and write a query that parses the JSON, filters to the last hour, sorts by duration descending, and returns the top 10. The shape is a <code>fields</code> clause that pulls <code>@timestamp</code> and the parsed fields, a <code>parse</code> stage that extracts them from the message, a <code>filter</code> on the time window, and a <code>sort</code> plus <code>limit</code>. Note how long the query takes and how many records it scanned — the console reports both, and that number is your cost signal.</p>
+          <p><strong>Step 3 — Aggregate instead of returning rows.</strong> Rewrite the query to use <code>stats</code> to compute the count, average, and p99 duration grouped by path. Compare the two queries' scanned-record counts. The aggregation returns a handful of rows but scans the same events, which is the point: aggregation controls the size of the answer, not the cost of the scan.</p>
+          <p><strong>Step 4 — Create the central destination.</strong> In the second account, create a Kinesis Data Firehose delivery stream with an S3 bucket as its destination. Set the buffer interval to 60 seconds so you are not waiting five minutes for results. Note the delivery stream ARN; you will need it in the next step.</p>
+          <p><strong>Step 5 — Attach the subscription filter.</strong> Back in the producing account, create a subscription filter on the Lambda's log group with a pattern that matches only error-level events, pointing at the Firehose stream in the other account. You will need to grant CloudWatch Logs permission to write to the stream, which is done with an IAM role that the log group assumes. Verify the filter is listed on the log group.</p>
+          <p><strong>Step 6 — Prove the path end to end.</strong> Invoke the Lambda with a payload that produces an error-level log line, wait for the buffer interval to elapse, and confirm the object appears in the S3 bucket in the central account. Then invoke it with an info-level line and confirm that one does <em>not</em> appear — that negative test is the one that proves your filter pattern is doing what you think.</p>
+          <p><strong>Step 7 — Break it deliberately.</strong> Delete the subscription filter, generate more error events, and confirm nothing new arrives centrally while the source log group still has everything. This is the silent-failure mode from section 6, and seeing it once makes it recognizable in a scenario question. Recreate the filter and confirm delivery resumes.</p>
+          <p><strong>Step 8 — Write the drift check.</strong> Sketch (do not necessarily deploy) a Config rule or a scheduled Lambda that lists log groups in the producing account and asserts each one has a subscription filter attached. This is the control that turns the pattern from "works for the accounts we onboarded carefully" into "works for every account."</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="quiz">
         <h2 class="section-heading">Scenario Question Drills (20 min)</h2>
-        
-      <div class="scenario-card">
-        <p class="scenario-question"><strong>Q1.</strong> An organization wants every account's application logs centrally searchable in a dedicated logging account in near-real time. What's the mechanism?</p>
-        <div class="scenario-options" id="opts-d32q0">
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q1.</strong> An organization wants every account's application logs centrally searchable in a dedicated logging account in near-real time. What's the mechanism?</p>
+          <div class="scenario-options" id="opts-d32q1">
             <div class="scenario-option">A. Manually export logs nightly via S3</div>
             <div class="scenario-option">B. CloudWatch Logs subscription filters streaming to Kinesis Data Firehose in the central logging account</div>
             <div class="scenario-option">C. CloudTrail only</div>
             <div class="scenario-option">D. Increase log retention in each account</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d32q1', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d32q1"><strong>Correct answer: B.</strong> Subscription filters push log events in near-real time to a destination (commonly Kinesis Firehose/Streams) in a centralized account, enabling org-wide log aggregation. Retention settings and CloudTrail do not move application logs between accounts.</div>
         </div>
-        <button class="scenario-reveal-btn" onclick="revealAnswer('d32q0', 1)">Reveal Answer</button>
-        <div class="scenario-explanation" id="exp-d32q0"><strong>Correct answer: B.</strong> Subscription filters push log events in near-real time to a destination (commonly Kinesis Firehose/Streams) in a centralized account, enabling org-wide log aggregation.</div>
-      </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q2.</strong> A security team needs to search application logs from 40 accounts from a single console, and must not hold write permissions in the workload accounts. What is the correct design?</p>
+          <div class="scenario-options" id="opts-d32q2">
+            <div class="scenario-option">A. Grant the security team cross-account read access to every workload log group and query them with Logs Insights</div>
+            <div class="scenario-option">B. Ship logs via subscription filters to a central logging account owned by the security team, with workload accounts holding only write permission</div>
+            <div class="scenario-option">C. Enable CloudTrail organization trail and query that instead</div>
+            <div class="scenario-option">D. Have each workload team email weekly log exports</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d32q2', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d32q2"><strong>Correct answer: B.</strong> Cross-account Insights queries are technically possible but require read permissions in every producing account, which is exactly the access sprawl the centralized account exists to prevent. Shipping to a central account inverts the permission model.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q3.</strong> An application logs a 400 KB JSON document per request. Engineers report that the log lines are unparseable in Logs Insights. What is happening?</p>
+          <div class="scenario-options" id="opts-d32q3">
+            <div class="scenario-option">A. Logs Insights cannot parse JSON</div>
+            <div class="scenario-option">B. The event exceeds the 256 KB per-event limit and is being truncated, producing malformed JSON</div>
+            <div class="scenario-option">C. The log group retention is too short</div>
+            <div class="scenario-option">D. The subscription filter pattern is filtering out the tail</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d32q3', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d32q3"><strong>Correct answer: B.</strong> CloudWatch Logs caps a single event at 256 KB and truncates silently. The fix is to log a reference (request ID, S3 key) rather than the full payload.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q4.</strong> A team wants to be paged when the string <code>OutOfMemoryError</code> appears in application logs. What should they configure?</p>
+          <div class="scenario-options" id="opts-d32q4">
+            <div class="scenario-option">A. A subscription filter to Firehose</div>
+            <div class="scenario-option">B. A metric filter on the log group plus a CloudWatch alarm</div>
+            <div class="scenario-option">C. A Logs Insights query on a schedule</div>
+            <div class="scenario-option">D. An X-Ray sampling rule</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d32q4', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d32q4"><strong>Correct answer: B.</strong> Metric filters convert matching log events into a CloudWatch metric, which can then be alarmed on. Subscription filters move data but do not create metrics or alarms.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q5.</strong> A compliance requirement mandates that application logs be retained for seven years and be immutable once written. Which design satisfies this?</p>
+          <div class="scenario-options" id="opts-d32q5">
+            <div class="scenario-option">A. Set log group retention to seven years in each workload account</div>
+            <div class="scenario-option">B. Ship logs via subscription filter and Firehose to an S3 bucket in a central account with S3 Object Lock enabled</div>
+            <div class="scenario-option">C. Enable CloudTrail with log file validation</div>
+            <div class="scenario-option">D. Increase the Logs Insights query window to seven years</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d32q5', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d32q5"><strong>Correct answer: B.</strong> Log group retention is mutable and dies with the account, so it cannot satisfy immutability. S3 Object Lock in a separate account provides WORM semantics and survives account deletion.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q6.</strong> A Logs Insights query over the last 30 days against a high-volume log group times out. What is the correct first move?</p>
+          <div class="scenario-options" id="opts-d32q6">
+            <div class="scenario-option">A. Retry the query until it succeeds</div>
+            <div class="scenario-option">B. Narrow the time range and the log group set, and push filtering earlier in the query pipeline</div>
+            <div class="scenario-option">C. Increase the log group retention</div>
+            <div class="scenario-option">D. Switch to a subscription filter</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d32q6', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d32q6"><strong>Correct answer: B.</strong> Insights scans unindexed text, so cost and runtime scale with events scanned. Narrowing the range and filtering before expensive parse/stats stages is the fix.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q7.</strong> Logs stopped appearing in the central logging account three weeks ago, but the workload is healthy and the source log group contains everything. What is the most likely cause?</p>
+          <div class="scenario-options" id="opts-d32q7">
+            <div class="scenario-option">A. The application stopped logging</div>
+            <div class="scenario-option">B. The subscription filter was deleted or never created for that log group</div>
+            <div class="scenario-option">C. The central account's S3 bucket is full</div>
+            <div class="scenario-option">D. Logs Insights is down</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d32q7', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d32q7"><strong>Correct answer: B.</strong> Subscription filters are per-log-group, so a new log group created after the IaC module was written, or a filter removed by a cleanup script, produces exactly this silent gap.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q8.</strong> A team needs multiple independent consumers to read the same log stream, including the ability to replay the last 24 hours of events. Which destination type fits?</p>
+          <div class="scenario-options" id="opts-d32q8">
+            <div class="scenario-option">A. Kinesis Data Firehose</div>
+            <div class="scenario-option">B. Kinesis Data Streams</div>
+            <div class="scenario-option">C. Lambda</div>
+            <div class="scenario-option">D. S3 directly</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d32q8', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d32q8"><strong>Correct answer: B.</strong> Firehose is a delivery pipe with no replay and a single logical consumer path. Kinesis Data Streams supports multiple consumers and configurable retention for replay.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q9.</strong> Which statement about the subscription filter pattern language is correct?</p>
+          <div class="scenario-options" id="opts-d32q9">
+            <div class="scenario-option">A. It is the same language as Logs Insights queries</div>
+            <div class="scenario-option">B. It supports full regular expressions</div>
+            <div class="scenario-option">C. It is a simpler term/phrase matching syntax with <code>?</code> wildcards, evaluated on raw event text</div>
+            <div class="scenario-option">D. It only matches on JSON field names</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d32q9', 2)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d32q9"><strong>Correct answer: C.</strong> Filter patterns are not regex and not the Insights query language. Assuming regex semantics produces patterns that silently match nothing.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q10.</strong> A workload runs in three regions and the organization wants all logs in one central account. What must the design account for?</p>
+          <div class="scenario-options" id="opts-d32q10">
+            <div class="scenario-option">A. Nothing — subscription filters are global</div>
+            <div class="scenario-option">B. A destination per region, or a cross-region delivery design, because filters deliver within the log group's region by default</div>
+            <div class="scenario-option">C. Only CloudTrail can cross regions</div>
+            <div class="scenario-option">D. Logs Insights queries can span regions, so no change is needed</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d32q10', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d32q10"><strong>Correct answer: B.</strong> Subscription filters deliver to a destination in the same region as the log group unless cross-region delivery is explicitly configured, which adds latency and a second failure domain.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q11.</strong> A team wants to reduce CloudWatch Logs spend without losing the ability to debug production incidents. What is the most effective first step?</p>
+          <div class="scenario-options" id="opts-d32q11">
+            <div class="scenario-option">A. Delete all log groups older than 30 days</div>
+            <div class="scenario-option">B. Set a short retention on high-volume low-value log groups and tighten subscription filter patterns to exclude debug-level noise</div>
+            <div class="scenario-option">C. Disable Logs Insights queries</div>
+            <div class="scenario-option">D. Move everything to CloudTrail</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d32q11', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d32q11"><strong>Correct answer: B.</strong> Spend is dominated by ingestion and storage. Retention settings and filter patterns are the two knobs that control both, and neither removes the ability to debug what actually matters.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q12.</strong> An engineer needs to correlate every log line from a single failing request across four microservices. What makes this practical?</p>
+          <div class="scenario-options" id="opts-d32q12">
+            <div class="scenario-option">A. Sorting all logs by timestamp across log groups</div>
+            <div class="scenario-option">B. Writing a shared trace/request ID into every log line and filtering on it in Logs Insights</div>
+            <div class="scenario-option">C. Enabling CloudTrail data events</div>
+            <div class="scenario-option">D. Increasing the log event size limit</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d32q12', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d32q12"><strong>Correct answer: B.</strong> Logs have no cross-stream ordering guarantee, so timestamp sorting is an approximation. A shared correlation ID is what makes cross-service reconstruction reliable, and it also links logs to X-Ray traces.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q13.</strong> A new log group is created by an application's Terraform module, but its logs never reach the central account. The module creates the log group and nothing else. What is missing?</p>
+          <div class="scenario-options" id="opts-d32q13">
+            <div class="scenario-option">A. A CloudTrail trail</div>
+            <div class="scenario-option">B. A subscription filter on that log group, plus the IAM role allowing CloudWatch Logs to write to the destination</div>
+            <div class="scenario-option">C. A Logs Insights saved query</div>
+            <div class="scenario-option">D. A metric filter</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d32q13', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d32q13"><strong>Correct answer: B.</strong> There is no account-level switch. Every log group needs its own subscription filter and the associated permission for CloudWatch Logs to deliver to the destination.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q14.</strong> A team needs full-text search across a multi-year log corpus with complex dashboards and fast query at high volume. What is the appropriate architecture?</p>
+          <div class="scenario-options" id="opts-d32q14">
+            <div class="scenario-option">A. Logs Insights with a seven-year query window</div>
+            <div class="scenario-option">B. Subscription filter to Firehose delivering into OpenSearch Service, with S3 as the archive tier</div>
+            <div class="scenario-option">C. CloudTrail organization trail</div>
+            <div class="scenario-option">D. Metric filters on every log group</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d32q14', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d32q14"><strong>Correct answer: B.</strong> Logs Insights is sufficient for ad-hoc investigation and simple aggregation. A searchable multi-year corpus with dashboards is the OpenSearch use case, fed by Firehose from the subscription filter.</div>
+        </div>
+
+        <div class="scenario-card">
+          <p class="scenario-question"><strong>Q15.</strong> A workload account is compromised and the attacker wants to stop evidence from reaching the central logging account. Which control prevents this?</p>
+          <div class="scenario-options" id="opts-d32q15">
+            <div class="scenario-option">A. Enabling Logs Insights saved queries</div>
+            <div class="scenario-option">B. An SCP that denies <code>logs:DeleteSubscriptionFilter</code> and related actions in workload accounts</div>
+            <div class="scenario-option">C. Setting log group retention to never expire</div>
+            <div class="scenario-option">D. Using a Lambda destination instead of Firehose</div>
+          </div>
+          <button class="scenario-reveal-btn" onclick="revealAnswer('d32q15', 1)">Reveal Answer</button>
+          <div class="scenario-explanation" id="exp-d32q15"><strong>Correct answer: B.</strong> Without an SCP preventing filter deletion, a compromised workload account can simply remove its own subscription filter and stop shipping evidence. The SCP is what closes that hole.</div>
+        </div>
+      </section>
+
+      <section class="doc-section" id="preview">
+        <h2 class="section-heading">Peek into Tomorrow</h2>
+        <div class="card card-purple">
+          <p>Everything in this day assumes the system is behaving badly in ways you did not choose. You write a query because something already went wrong, you build a pipeline because an auditor already asked, you alarm on an error string because a customer already complained. The logs are a record of failures that happened on their own schedule, which means the failure modes you are best prepared for are the ones that have already occurred at least once. That is a strange position for an architect to be in: the evidence you have is biased toward the failures you have already survived, and the ones you have not survived are precisely the ones you have no data on.</p>
+          <p>Tomorrow's topic inverts that. Fault Injection Service lets you schedule the failure instead of waiting for it — terminating EC2 instances, stressing CPU and network, failing over an AZ — and the interesting design question is not whether you can inject a fault but how you bound the blast radius while you do it. The mechanism for that bounding is a stop condition tied to a CloudWatch alarm, which raises a question this day's material cannot answer: if the alarm that halts your chaos experiment is built from the same metrics and logs you have been discussing, what happens when the experiment itself degrades the telemetry you are relying on to stop it?</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="sources">
+        <h2 class="section-heading">Sources</h2>
+        <div class="card">
+          <ul class="source-list">
+            <li><a href="https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/AnalyzingLogData.html" target="_blank" rel="noopener">Amazon CloudWatch Logs Insights query syntax</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/SubscriptionFilters.html" target="_blank" rel="noopener">Real-time processing of log data with subscriptions</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/FilterAndPatternSyntax.html" target="_blank" rel="noopener">Filter and pattern syntax for metric filters and subscription filters</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/CloudWatchLogsConcepts.html" target="_blank" rel="noopener">CloudWatch Logs concepts: log groups, streams, and events</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/cloudwatch_limits_cwl.html" target="_blank" rel="noopener">CloudWatch Logs quotas</a></li>
+            <li><a href="https://docs.aws.amazon.com/firehose/latest/dev/buffering.html" target="_blank" rel="noopener">Kinesis Data Firehose buffering hints and intervals</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/CentralizedLogging.html" target="_blank" rel="noopener">Centralized logging across accounts with CloudWatch Logs</a></li>
+            <li><a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-lock.html" target="_blank" rel="noopener">S3 Object Lock for WORM retention</a></li>
+            <li><a href="https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-concepts.html" target="_blank" rel="noopener">CloudTrail concepts (for the CloudTrail vs. CloudWatch Logs boundary)</a></li>
+          </ul>
+        </div>
       </section>
       <div class="day-nav">
         <a href="day-031.html">&larr; Day 31: AWS X-Ray Distributed Tracing</a>
