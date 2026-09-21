@@ -121,6 +121,21 @@
         </div>
       </section>
 
+      <section class="doc-section" id="foundations">
+        <h2 class="section-heading">Foundations You'll Need Today</h2>
+        <div class="card card-sre">
+          <h3 class="sub-heading">Containers and Images</h3>
+          <p>A container is a way of packaging an application together with everything it needs to run — its code, its libraries, its configuration — into a single unit that behaves the same way wherever it is started. The packaged artifact is called an image, and when you actually run an image you get a container. The problem this solves is the classic "it worked on my laptop" failure: instead of installing dependencies by hand on each server and hoping the versions match, you build the image once and run that exact image everywhere. Containers are lighter than virtual machines because they share the host's operating system kernel rather than each booting a full operating system of their own, which is why you can pack many more of them onto the same hardware.</p>
+          <h3 class="sub-heading">Orchestration</h3>
+          <p>Running one container is easy; running hundreds of them across many machines, restarting the ones that crash, replacing them when you deploy a new version, and connecting them to a network and a load balancer is not. An orchestrator is the software that does that bookkeeping for you. It takes a description of what you want — "keep five copies of this image running, give each one a network address, restart any that fail" — and continuously works to make reality match that description. ECS and EKS are AWS's two orchestrators, and the difference between them is mostly about which description format and ecosystem they speak, not about whether they can run containers.</p>
+          <h3 class="sub-heading">Serverless</h3>
+          <p>Serverless does not mean there are no servers; it means you never see or manage them. With a traditional server you rent a machine by the hour whether or not it is doing work, and you are responsible for patching its operating system and keeping it running. With a serverless service like Lambda you hand over a piece of code, and the provider runs it only when something triggers it, bills you for the milliseconds it actually executes, and handles all the underlying machines. The trade is control: you give up the ability to install things at the operating system level or keep a process running indefinitely, and in exchange you stop paying for idle time and stop doing capacity planning.</p>
+          <h3 class="sub-heading">The Three Pricing Models You'll See Named</h3>
+          <p>Almost every cost question in this curriculum comes down to choosing among three ways to pay for compute. On-Demand means paying the full hourly rate with no commitment, which is the most flexible and the most expensive per hour. Commitments — Reserved Instances and Savings Plans — mean promising to spend a certain amount for one or three years in exchange for a meaningful discount, which only makes sense for a workload you know will be running the whole time. Spot means bidding on spare AWS capacity at a steep discount, with the catch that AWS can take the capacity back on short notice when it needs it, so it only suits work that can be interrupted and restarted. The skill being tested is not arithmetic but matching the model to the shape of the traffic.</p>
+          <p>With that grounding, here's why this day exists: the four services covered this week are not four interchangeable ways to run code, and the exam is really asking you to eliminate the ones that violate a stated constraint before you ever compare prices.</p>
+        </div>
+      </section>
+
       <section class="doc-section" id="decision-frame">
         <h2 class="section-heading">The Frame: Three Constraints, Not Four Services</h2>
         <p>Every compute question on SAP-C02 resolves to a ranking of three constraints: how much operational overhead the team is willing to absorb, how much the workload's cost profile matters relative to its traffic shape, and how much control over the runtime the workload actually requires. The four services in this week are not four answers to one question — they are four positions on those three axes, and the exam's job is to give you a scenario where exactly one position is defensible.</p>

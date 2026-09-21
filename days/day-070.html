@@ -119,6 +119,25 @@
         </div>
       </section>
 
+      <section class="doc-section" id="foundations">
+        <h2 class="section-heading">Foundations You'll Need Today</h2>
+        <div class="card card-sre">
+          <h3 class="sub-heading">Regions vs. your own building</h3>
+          <p>Almost every AWS service runs inside a <em>Region</em>, which is a cluster of AWS-owned data centers in some part of the world. When you put data in a Region, the physical hardware holding it belongs to AWS and sits in an AWS facility — you choose the country, not the building. That is fine for most workloads, but some organizations have rules that data must physically remain on their own premises, in a building they control. AWS Outposts exists for exactly that case: AWS ships a rack of its own hardware to your data center, you plug it in, and it runs a subset of AWS services locally while still being managed through the normal AWS console and APIs. Local Zones and Wavelength are different again — they are still AWS-operated facilities, just placed closer to a city or a telecom network edge for lower latency. The distinction that matters today is simply <em>whose building the hardware is in</em>, because that is what a data-residency requirement is actually asking about.</p>
+
+          <h3 class="sub-heading">What a compute commitment actually is</h3>
+          <p>On-demand pricing means you pay by the second for whatever compute you use, with no promise about the future. A <em>commitment</em> is the opposite trade: you promise to spend a certain amount (or run a certain amount of capacity) for one or three years, and in exchange AWS charges you a lower rate. Savings Plans and Reserved Instances are the two families of commitment. The important nuance is scope. A commitment that is locked to one specific instance family in one specific Region earns a deeper discount, because you have given up more flexibility. A commitment that can float across instance families, Regions, and even across services like Lambda and Fargate earns a shallower discount, because AWS carries more of the risk. Neither is "better" in the abstract — the right one depends entirely on whether the workload is genuinely fixed or might move.</p>
+
+          <h3 class="sub-heading">DNS failover and health checks</h3>
+          <p>When users reach your application by a domain name, something has to translate that name into an address, and that something is DNS. Route 53 is AWS's DNS service, and it can be told to hand out different addresses depending on whether a target is healthy. A <em>health check</em> is a probe Route 53 runs against an endpoint on a schedule; if the probe fails, Route 53 stops returning that endpoint's address and starts returning a standby's instead. This is the classic failover mechanism, and it has a well-known weakness: DNS answers get cached by browsers and by the operating systems in between, so a client that already looked up your name may keep using the old address for minutes or hours after the switch. That caching delay is why "just add a health check" is not always the right answer to a failover requirement, and it is the reason services like Global Accelerator exist — they move the failover to the network layer, below DNS, where there is no cache to wait out.</p>
+
+          <h3 class="sub-heading">SCPs are ceilings, not grants</h3>
+          <p>Inside an AWS account, an IAM policy is what <em>allows</em> a user or role to do something — without an allow, nothing is permitted. A Service Control Policy, or SCP, is a different kind of object that attaches to an organizational unit or account in AWS Organizations. An SCP never grants anything. It only sets a maximum: whatever the SCP does not permit is unavailable to every identity in that account, no matter what their IAM policies say. The practical consequence is that permissions are the <em>intersection</em> of the two — an action must be allowed by IAM and not denied by an SCP. This trips people up because an SCP looks like a policy and reads like a policy, but it can only ever take permissions away. If a scenario asks you to give someone access, an SCP is the wrong tool; if it asks you to cap what an entire account can ever do, an SCP is the right one.</p>
+
+          <p>With that grounding, here is what today is actually about: not new architecture, but the exam-day execution and the recurring distractor shapes that cost points even when the underlying knowledge is solid.</p>
+        </div>
+      </section>
+
       <section class="doc-section" id="patterns">
         <h2 class="section-heading">Distractor Patterns — The Twelve That Cost You Points</h2>
         <p>These are the recurring wrong-answer shapes that survived five rounds of distractor analysis. Each entry names the tempting option, explains why it feels right, and gives the specific tell that separates it from the correct answer. Read them as a checklist against your own Day 68 cheat sheet, not as new material.</p>

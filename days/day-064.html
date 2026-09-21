@@ -126,6 +126,35 @@
         </div>
       </section>
 
+      <section class="doc-section" id="foundations">
+        <h2 class="section-heading">Foundations You'll Need Today</h2>
+        <div class="card card-sre">
+          <p>Today's review is about cost, and cost questions on this exam are almost never about arithmetic. They are about commitments, visibility, and accountability — three ideas that only make sense once you know what the underlying billing mechanisms actually are. If you have never bought a discount on AWS, the vocabulary in the patterns below will read as a wall of acronyms. This section builds the five concepts the rest of the day assumes you already have.</p>
+
+          <h3 class="sub-heading">Commitment-Based Discounts: Savings Plans and Reserved Instances</h3>
+          <p>By default, AWS charges you for compute by the hour at what is called On-Demand pricing — you pay for exactly what you use, with no promise about the future, and you pay the highest rate for that freedom. If you are willing to promise that you will spend a certain amount on compute for the next one or three years, AWS will charge you a lower rate for the same machines. That promise is the whole product. A Savings Plan is a commitment to spend a fixed dollar amount per hour on compute; in exchange, the usage you run is billed at a discounted rate until the commitment is used up. A Reserved Instance is a similar promise, but it is attached to a specific instance type rather than to a dollar amount.</p>
+          <p>The important thing to understand is that these are billing arrangements, not machines. Buying a Savings Plan does not create a server, reserve a server, or guarantee that a server will be available when you ask for one. It only changes the price on the bill for usage you were going to run anyway. That distinction is the entire point of Patterns 1, 2, and 13 below, and it is the single most common thing candidates get wrong.</p>
+
+          <h3 class="sub-heading">Spot Capacity and the Two-Minute Interruption Notice</h3>
+          <p>AWS runs far more servers than any single customer needs at any moment, and the spare capacity is sold at a steep discount under the name Spot. The trade-off is that AWS can take the capacity back whenever it needs it for full-price customers. When that happens, your instance receives a two-minute warning and is then terminated. Two minutes is enough time to stop accepting new work and finish or hand off what is in flight; it is not enough time to save a long-running computation that has no checkpoint.</p>
+          <p>This is why Spot is described as suitable for "fault-tolerant" work. A stateless web server behind a load balancer is fault-tolerant because another server can absorb its traffic. A database holding the only copy of your data is not, because losing it loses the data. The exam uses Spot as a distractor by attaching it to workloads that sound cost-sensitive but are not actually restartable.</p>
+
+          <h3 class="sub-heading">Right-Sizing and Utilization Data</h3>
+          <p>Every EC2 instance comes in a size — a number of virtual CPUs and an amount of memory — and you choose that size when you launch it. If you pick a size larger than the workload needs, you pay for capacity you never use. Right-sizing is the practice of measuring how much of the machine the workload actually consumes and moving it to a smaller size that still fits. The measurement is called utilization, and AWS records it automatically as CloudWatch metrics: CPU percentage, memory percentage, network throughput, and so on.</p>
+          <p>Right-sizing matters here because it competes with discounting as a way to lower the bill, and the two are not interchangeable. Discounting reduces the rate you pay for a given size; right-sizing reduces the size. If a fleet is running at ten percent CPU, the larger saving is almost always to shrink the machine first, because a discount on an oversized machine is a discount on waste. The exam tests the ordering explicitly.</p>
+
+          <h3 class="sub-heading">Cost Allocation Tags</h3>
+          <p>A tag is a label you attach to an AWS resource — a key and a value, like <code>CostCenter: 4471</code> or <code>Environment: production</code>. Tags are free-form and you can attach as many as you like. A cost allocation tag is a tag you have specifically activated in the billing console so that AWS will break your bill down along that dimension. Once activated, you can ask "how much did the 4471 cost center spend last month" and get a real answer.</p>
+          <p>The catch is that the answer is only as good as the tagging. If half your resources have no <code>CostCenter</code> tag, half your spend lands in an "untagged" bucket and the report is misleading in a way that is easy to miss. This is why the exam insists that tag enforcement comes before reporting: no reporting tool can attribute spend to a label that was never applied. Patterns 8 and 9 are both versions of this.</p>
+
+          <h3 class="sub-heading">S3 Storage Classes and Retrieval Time</h3>
+          <p>Amazon S3 stores objects — files, essentially — and offers several storage classes that differ in two ways: how much they cost per gigabyte per month, and how quickly you can get an object back when you ask for it. S3 Standard is the most expensive and returns objects immediately. The Glacier classes are far cheaper and take anywhere from minutes to many hours to produce an object once you request it. There is also a class called One Zone-IA that is cheaper because it stores your data in a single Availability Zone rather than replicating it across several.</p>
+          <p>The trap in cost questions is choosing the cheapest class without checking the retrieval requirement. If a scenario says records must be produced within a working day, the cheapest class may be too slow; if it says the data must survive the loss of an Availability Zone, the single-zone class is disqualified no matter how cheap it is. Price is only half the decision, and Patterns 10 and 11 are built on candidates who forget the other half.</p>
+
+          <p>With that grounding — commitments are billing constructs, Spot is interruptible, right-sizing precedes discounting, tags gate reporting, and storage classes trade price against retrieval — here is why Domain 4 questions are written the way they are, and what each distractor is actually testing.</p>
+        </div>
+      </section>
+
       <section class="doc-section" id="patterns">
         <h2 class="section-heading">Distractor Patterns — Domain 4</h2>
         <p>Domain 4 questions rarely ask you to compute a number. They ask you to pick a commitment, a visibility tool, or an accountability mechanism, and the wrong options are engineered to sound either more aggressive or more precise than the right one. The fifteen patterns below are the ones that recur across practice banks. Each entry names the tempting answer, explains why it is tempting, and gives the tell that separates it from the correct choice.</p>

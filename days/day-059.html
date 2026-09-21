@@ -126,6 +126,33 @@
         </div>
       </section>
 
+      <section class="doc-section" id="foundations">
+        <h2 class="section-heading">Foundations You'll Need Today</h2>
+        <div class="card card-sre">
+          <p>Today's material is entirely about how a large company organizes its AWS estate and wires the pieces together. That vocabulary is second nature to someone who has built a VPC by hand, but it is not obvious from the outside, so here is the grounding the rest of this page assumes.</p>
+
+          <h3 class="sub-heading">Accounts, Organizations, and OUs</h3>
+          <p>An AWS account is the fundamental container for everything you do in AWS: it holds your resources, your users, and your bill. A small team might use one account for everything, but a large company does not, because a single account makes it impossible to give one team's engineers access to their own resources without also giving them access to everyone else's. The standard answer is many accounts — one per team, per environment, per business unit — so that access and billing boundaries line up with organizational boundaries.</p>
+          <p>AWS Organizations is the service that ties those accounts together into a hierarchy so they can be managed as a group rather than one at a time. The hierarchy is built from organizational units, or OUs — folders that group accounts by purpose, such as a Security OU for audit accounts or a Workloads OU containing Dev and Prod. The reason the hierarchy matters is that rules attached to an OU apply to every account inside it, including accounts added later. That is the whole point: you write a rule once at the folder level instead of chasing down forty accounts individually.</p>
+
+          <h3 class="sub-heading">Policies: What They Are and What They Do</h3>
+          <p>A policy in AWS is a JSON document that says who is allowed to do what. The one most people meet first is an IAM policy, which is attached to a user, group, or role and grants that identity permission to call specific AWS APIs — for example, allowing a developer to read from an S3 bucket. IAM policies are grants: without one, an identity can do nothing.</p>
+          <p>A service control policy, or SCP, is a different kind of policy that attaches to an OU or account in Organizations rather than to a person. An SCP does not grant anything. It sets a ceiling on what is possible inside the accounts it covers, and anything outside that ceiling is blocked no matter what the IAM policies say. The practical consequence, and the thing today's patterns keep testing, is that effective permission is the overlap between what IAM allows and what the SCP permits — and an explicit Deny in either one always wins. If that distinction feels slippery, hold onto this: IAM says "you may," SCPs say "you may not go beyond here."</p>
+
+          <h3 class="sub-heading">VPCs, CIDR Ranges, and Route Tables</h3>
+          <p>A virtual private cloud, or VPC, is your own private network inside AWS. It is the AWS equivalent of the network a company would build in its own data center: you decide how big it is, carve it into subnets, and control what can talk to what. Every resource that needs network connectivity — a server, a database, a load balancer — lives inside a VPC.</p>
+          <p>The size of a VPC is expressed as a CIDR range, which is shorthand for a block of IP addresses. You will see things like <code>10.0.0.0/16</code>, which means a large block of addresses, and <code>10.0.1.0/24</code>, which means a smaller block carved out of it. The reason CIDR ranges come up constantly in this domain is that two networks can only be joined directly if their address blocks do not overlap. If two companies both built their networks on <code>10.0.0.0/16</code>, every address is ambiguous the moment you connect them, and the connection cannot work. That single constraint drives a surprising number of the design decisions and distractors below.</p>
+          <p>A route table is the set of rules that tells a network where to send traffic. When a packet leaves a resource, the route table is consulted to decide the next hop — stay inside the VPC, go out to the internet, or travel across a connection to another network. If there is no matching route, the traffic is simply dropped. This is why so many networking problems in AWS turn out to be routing problems: the connection exists, the firewalls are open, and nothing works because no route table knows how to get there.</p>
+
+          <h3 class="sub-heading">Connecting Networks: Peering, Transit Gateway, and PrivateLink</h3>
+          <p>Once a company has more than one VPC, those VPCs usually need to talk to each other, and AWS offers several ways to arrange that. VPC peering is a direct one-to-one link between two VPCs. It is simple and fast, but it does not scale: connecting ten VPCs to each other this way means managing dozens of individual links, and it still requires non-overlapping CIDR ranges.</p>
+          <p>AWS Transit Gateway, or TGW, solves the scaling problem by acting as a central hub. Instead of every VPC connecting to every other VPC, each VPC connects once to the TGW, and the TGW decides how traffic flows between them. That decision-making happens through TGW route tables, which work on the same principle as the VPC route tables above — they determine which networks can reach which. Because the hub controls the routing, you can use it to allow some connections and deliberately prevent others, which is exactly the isolation requirement today's patterns keep circling.</p>
+          <p>AWS PrivateLink takes a different approach entirely. Rather than joining two networks, it exposes one specific service in one VPC to consumers in another, without the two networks ever being connected. Because no networks are merged, PrivateLink works even when the CIDR ranges overlap — the constraint that breaks peering and TGW simply does not apply. The trade-off is scope: you get access to that one service, not to the whole network behind it.</p>
+
+          <p>With that grounding, here's why the Domain 1 distractor patterns below are worth memorizing: nearly every wrong answer in this domain is one of these mechanisms applied at the wrong granularity, or a policy type used as though it worked like the other one.</p>
+        </div>
+      </section>
+
       <section class="doc-section" id="patterns">
         <h2 class="section-heading">Domain 1 Distractor Patterns</h2>
         <p>Fourteen patterns, ordered roughly by how often they appear in Domain 1 scenario questions. Read each one against your own Day 58 miss list; if a pattern matches a question you got wrong, that is the one to drill hardest in the quiz below.</p>
