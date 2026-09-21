@@ -323,12 +323,57 @@ function initResumeReading() {
   }, { passive: true });
 }
 
+function initTocScrollSpy() {
+  const tocLinks = Array.from(document.querySelectorAll('.nav-link[href^="#"]'));
+  if (!tocLinks.length) return;
+  const sections = tocLinks
+    .map(link => document.getElementById(link.getAttribute('href').slice(1)))
+    .filter(Boolean);
+  if (!sections.length) return;
+
+  const setActive = (id) => {
+    tocLinks.forEach(link => link.classList.toggle('current', link.getAttribute('href') === '#' + id));
+  };
+
+  if (!('IntersectionObserver' in window)) return;
+  const observer = new IntersectionObserver((entries) => {
+    const visible = entries.filter(e => e.isIntersecting);
+    if (visible.length) {
+      visible.sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
+      setActive(visible[0].target.id);
+    }
+  }, { rootMargin: '-15% 0px -70% 0px', threshold: 0 });
+  sections.forEach(s => observer.observe(s));
+}
+
+function initBackToTop() {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'back-to-top';
+  btn.setAttribute('aria-label', 'Back to top');
+  btn.innerHTML = '&#8593;';
+  btn.addEventListener('click', () => window.scrollTo({ top: 0, behavior: 'smooth' }));
+  document.body.appendChild(btn);
+
+  let ticking = false;
+  window.addEventListener('scroll', () => {
+    if (ticking) return;
+    ticking = true;
+    requestAnimationFrame(() => {
+      btn.classList.toggle('shown', window.scrollY > window.innerHeight * 1.2);
+      ticking = false;
+    });
+  }, { passive: true });
+}
+
 function initReadingTools() {
   applyTheme(getTheme());
   applyScale(getScale());
   ensureMobileControls();
   enhanceTables();
   initResumeReading();
+  initTocScrollSpy();
+  initBackToTop();
   const bar = document.createElement('div');
   bar.className = 'reading-progress';
   bar.id = 'readingProgressBar';

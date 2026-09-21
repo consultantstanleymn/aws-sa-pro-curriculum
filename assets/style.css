@@ -656,11 +656,15 @@ table.data-table td {
 
 .jump-select-wrap {
   min-width: 170px;
+  max-width: 260px;
 }
 
 select.jump-select {
   width: 100%;
-  max-width: none;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--text-main);
 }
 
@@ -673,6 +677,41 @@ select.jump-select {
 
 .reading-tools button {
   color: var(--text-soft);
+}
+
+.back-to-top {
+  position: fixed;
+  left: 20px;
+  bottom: 20px;
+  z-index: 90;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--bg-card) 94%, transparent);
+  backdrop-filter: blur(18px);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-soft);
+  font-size: 1.1rem;
+  cursor: pointer;
+  box-shadow: var(--shadow-card);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(8px);
+  transition: opacity 180ms var(--ease), transform 180ms var(--ease), background 150ms var(--ease);
+}
+
+.back-to-top:hover {
+  background: var(--bg-card-hover);
+  color: var(--text-main);
+}
+
+.back-to-top.shown {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
 }
 
 .resume-reading {
@@ -904,6 +943,7 @@ select.jump-select {
   select.jump-select,
   .scenario-reveal-btn {
     width: 100%;
+    max-width: none;
   }
 
   .btn {

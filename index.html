@@ -33,7 +33,7 @@
       
       <div class="nav-section">
         <div class="nav-section-title">Program Strategy</div>
-        <a href="days/day-056.html" class="nav-link" style="color:var(--accent-orange);font-weight:700;">&#9733; Continue: Day 56 (Today)</a>
+        <a href="days/day-001.html" id="continueSidebarLink" class="nav-link" style="color:var(--accent-orange);font-weight:700;">&#9733; Continue: Day 1</a>
         <a href="#roadmap" class="nav-link">Roadmap &amp; 14-Week Plan</a>
         <a href="#daily-schedule" class="nav-link">Day-by-Day Master Syllabus</a>
         <a href="#exam-strategy" class="nav-link">Exam Technique &amp; Pacing</a>
@@ -481,8 +481,8 @@
                     <td>Week 8</td>
                     <td>Migration, Hybrid &amp; Cost Optimization</td>
                   </tr>
-                  <tr class="today-row" data-day="56">
-                    <td><strong>Day 56</strong> <span class="pill pill-red">TODAY</span></td>
+                  <tr data-day="56">
+                    <td><strong>Day 56</strong></td>
                     <td><a class="day-link" href="days/day-056.html">AWS Database Migration Service (DMS) — Homogeneous &amp; Heterogeneous Migration with CDC</a></td>
                     <td>Week 8</td>
                     <td>Migration, Hybrid &amp; Cost Optimization</td>
@@ -890,6 +890,11 @@
       var cur = getCurrentDay();
       var row = document.querySelector('#dayTableBody tr[data-day="' + cur + '"]');
       if (row) row.classList.add('today-row');
+      var link = document.getElementById('continueSidebarLink');
+      if (link) {
+        link.href = dayHref(cur);
+        link.textContent = '★ Continue: Day ' + cur;
+      }
     })();
 
     function toggleAnswer(id) {
