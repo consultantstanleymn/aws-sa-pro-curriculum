@@ -119,6 +119,27 @@
         </div>
       </section>
 
+      <section class="doc-section" id="foundations">
+        <h2 class="section-heading">Foundations You'll Need Today</h2>
+        <div class="card card-sre">
+          <p>Today's material sits on top of a handful of DynamoDB and AWS fundamentals that the rest of this page will use without stopping to define them. If you have not worked with DynamoDB hands-on, these four ideas are the ones worth having straight before the architecture discussion starts.</p>
+
+          <h3 class="sub-heading">Partition keys and why they decide everything</h3>
+          <p>A DynamoDB table is not stored as one big file on one machine. AWS splits the table's data across many physical servers, called partitions, and the value of the partition key is what decides which partition a given item lands on. Think of it like a filing cabinet with many drawers: the partition key is the label that tells DynamoDB which drawer to open. If you choose a key with lots of distinct values — a user ID, an order ID — items spread evenly across the drawers and each drawer carries a fair share of the traffic. If you choose a key with only a few distinct values, or one value that dominates, then most of your requests pile into a single drawer while the others sit idle. That single overloaded drawer is called a hot partition, and it is the root cause of most DynamoDB performance problems. This matters today because Global Tables replicates the table's partitions into every region, so a badly chosen key does not get better when you add regions — it gets copied.</p>
+
+          <h3 class="sub-heading">Read and write capacity units, and the two capacity modes</h3>
+          <p>DynamoDB charges for throughput rather than for servers. A read capacity unit (RCU) is roughly one strongly consistent read per second of an item up to 4 KB, and a write capacity unit (WCU) is roughly one write per second of an item up to 1 KB. You buy that throughput in one of two ways. In provisioned mode you declare how many RCUs and WCUs the table should have, and you can attach auto scaling so the number rises and falls with demand; you pay for what you reserve. In on-demand mode you declare nothing and DynamoDB scales automatically, charging per request instead. The tradeoff is predictability versus convenience: provisioned is cheaper at a steady, known load, and on-demand is simpler and absorbs unpredictable spikes without you having to guess. Today's material refers to both modes repeatedly, because each Global Tables replica has its own capacity mode and because replicated writes consume write capacity in the receiving region.</p>
+
+          <h3 class="sub-heading">Eventual versus strongly consistent reads</h3>
+          <p>When you write an item to DynamoDB, the write is acknowledged once it is durably stored — but if the table keeps more than one copy of the data for availability, a read that arrives immediately afterward might hit a copy that has not yet caught up. A strongly consistent read waits for the latest copy and always returns the most recent write; an eventually consistent read takes whichever copy answers first and may briefly return older data. Strongly consistent reads cost twice as much in capacity units and are slower, which is why eventually consistent is the default. This distinction is the hinge of today's whole discussion: cross-region replication in Global Tables is asynchronous, so it is inherently eventually consistent, and DAX can only cache eventually consistent reads because a cached value cannot be guaranteed to be the latest one.</p>
+
+          <h3 class="sub-heading">Regions and why distance costs latency</h3>
+          <p>An AWS region is a separate geographic cluster of data centers — us-east-1 in Virginia, eu-central-1 in Frankfurt, and so on. Resources you create live in one region unless you deliberately copy them to another. Data travelling between regions crosses real physical distance and real network hops, which takes measurable time: a round trip between Virginia and Frankfurt is on the order of a tenth of a second, which is enormous compared to the single-digit milliseconds a request takes inside one region. That gap is the entire reason Global Tables exists — it lets a user in Europe read and write against a copy of the data that lives in Europe, instead of every request making the trip to Virginia and back.</p>
+
+          <p>With that grounding, here is why Global Tables and DAX exist and what problem each one actually solves.</p>
+        </div>
+      </section>
+
       <section class="doc-section" id="why-on-exam">
         <h2 class="section-heading">1. Why This Is on the Exam</h2>
         <p>SAP-C02's resilient architectures domain is built around a small number of recurring scenario shapes, and "global application, users in multiple continents, needs low-latency reads and writes, must survive a regional outage" is one of the most common. The exam wants to know whether you can distinguish between the tools that solve latency, the tools that solve availability, and the tools that solve both — and whether you understand that a single service can be the right answer for one of those and the wrong answer for the other. DynamoDB Global Tables and DAX sit on opposite sides of that line, which is precisely why they appear together in so many practice questions.</p>

@@ -120,6 +120,31 @@
         </div>
       </section>
 
+      <section class="doc-section" id="foundations">
+        <h2 class="section-heading">Foundations You'll Need Today</h2>
+        <div class="card card-sre">
+          <p>Today's material assumes a handful of ideas that are easy to take for granted once you have worked with AWS for a while, but which the rest of the day is built on top of. None of them are complicated on their own; the difficulty is that the exam prose uses them as shorthand. Here is the grounding.</p>
+
+          <h3 class="sub-heading">What a relational database engine is, and what "managed" means</h3>
+          <p>A relational database stores data in tables with rows and columns, and it lets you ask questions that combine those tables — "show me every order placed by a customer in this region" — using a query language called SQL. The software that does that work is called the database engine, and the most common ones have names you will see throughout this curriculum: MySQL, PostgreSQL, SQL Server, and Oracle. In the abstract, an engine is just a program that reads and writes files on a disk and answers queries about them.</p>
+          <p>Running that program yourself means installing it on a server, patching the operating system, tuning the disk, taking backups, and figuring out what to do when the server dies at 3 a.m. A <em>managed</em> database service means AWS runs the engine for you: you choose the engine and the size of the machine, and AWS handles the installation, patching, backups, and the mechanics of replacing a failed server. Amazon RDS is the managed version of the engines listed above. The important thing to hold onto is that RDS is still fundamentally "an engine running on a server" — AWS just operates the server for you. Today's topic, Aurora, is different in a way that matters, and that difference is the whole point of the day.</p>
+
+          <h3 class="sub-heading">Regions and Availability Zones</h3>
+          <p>A Region is a geographic area — Northern Virginia, Ireland, Singapore — and it is the unit you pick when you decide where your application lives. Inside each Region are several Availability Zones, usually three or more. An Availability Zone is one or more physically separate data centers with their own power, cooling, and network connections, close enough to each other that data can move between them quickly, but far enough apart that a fire, flood, or power failure in one is unlikely to take out another.</p>
+          <p>This two-level structure is the reason AWS talks about resilience in two different ways. Surviving the loss of an Availability Zone is a local problem: you spread your resources across the AZs inside one Region, and if one fails, the others keep running. Surviving the loss of an entire Region is a much bigger problem: you need a copy of everything in a different geographic area, and moving data that far takes measurably longer. Almost every database question on this exam is really asking which of those two problems you are solving, and the answer determines which mechanism you reach for.</p>
+
+          <h3 class="sub-heading">Replication and replication lag</h3>
+          <p>Replication means keeping a second copy of your data somewhere else so that you still have it if the first copy is lost. The catch is that writing to two places at once is slow and fragile, so most replication is <em>asynchronous</em>: the application writes to the primary copy, the primary acknowledges the write immediately, and the copy is updated a moment later in the background. That gap between the write being acknowledged and the copy catching up is called replication lag.</p>
+          <p>Lag is usually small — milliseconds to a second — but it is never zero, and it has a visible consequence: if you read from the copy immediately after writing to the primary, you may get the old value back. This is why the exam cares so much about lag. When a scenario states a recovery point objective, or RPO, it is really stating how much lag it can tolerate, because lag is exactly the amount of data you would lose if the primary vanished right now.</p>
+
+          <h3 class="sub-heading">Read replicas</h3>
+          <p>Most applications read far more often than they write. A read replica is a copy of the database that is kept in sync with the primary and is used to answer read queries, which takes load off the primary so it can focus on writes. Because the replica is a separate machine, you can add several of them and spread read traffic across all of them — that is what "scaling reads horizontally" means.</p>
+          <p>The tradeoff is the lag described above: a read replica is always slightly behind, so it is fine for browsing a product catalog and not fine for checking whether a payment just cleared. A read replica is also not automatically a replacement for the primary — if the primary fails, something has to decide to promote a replica and point the application at it, and how quickly and cleanly that happens is a major differentiator between database options.</p>
+
+          <p>With that grounding — a managed engine on a server, a Region made of Availability Zones, copies that trail the original by a small but nonzero amount, and replicas that serve reads — here is why Aurora exists and what problem it actually solves.</p>
+        </div>
+      </section>
+
       <section class="doc-section" id="why-on-exam">
         <h2 class="section-heading">1. Why Aurora Is on the Exam</h2>
         <p>Aurora shows up on SAP-C02 for a structural reason: it is the only relational database in the AWS portfolio where the storage layer is a first-class distributed system rather than a single-instance disk that happens to be mirrored. Every other managed relational option — RDS for MySQL, PostgreSQL, SQL Server, Oracle — is fundamentally a database engine running on an EC2 instance with replication bolted on at the engine level. Aurora replaces that with a purpose-built log-structured storage service that the compute nodes write to over a network protocol, and that single architectural decision cascades into almost every behavior the exam tests.</p>

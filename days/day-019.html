@@ -120,6 +120,30 @@
         </div>
       </section>
 
+      <section class="doc-section" id="foundations">
+        <h2 class="section-heading">Foundations You'll Need Today</h2>
+        <div class="card card-sre">
+          <p>Today's material is written for someone who already designs networks and identity in AWS by hand. Before the concurrency discussion makes sense, five ideas need to be in place. None of them are complicated on their own; the difficulty is that the rest of this page uses them as shorthand.</p>
+
+          <h3 class="sub-heading">A VPC, a Subnet, and a Security Group</h3>
+          <p>A VPC (Virtual Private Cloud) is your own private slice of the AWS network, defined by an address range you choose — something like <code>10.0.0.0/16</code>. That range is carved into subnets, each of which lives in a single Availability Zone and holds a block of addresses. A subnet is called "public" if its route table sends traffic destined for the internet to an internet gateway, and "private" if it does not. A security group is a stateful firewall attached to a resource — an EC2 instance, a database, or a Lambda function — that decides which inbound and outbound traffic is allowed. When this page says a function is "attached to a VPC" or "in a private subnet," it means the function's network traffic originates from inside that address range and is filtered by that security group, exactly as if it were an EC2 instance sitting there.</p>
+
+          <h3 class="sub-heading">Why a Private Subnet Has No Internet by Default</h3>
+          <p>Because a private subnet's route table has no path to the internet, anything running inside it can reach other private resources but cannot call a public endpoint — not an AWS API, not a third-party service. To restore outbound-only internet access, you put a NAT gateway in a public subnet and add a route from the private subnet to it. The NAT gateway forwards the traffic out and returns the responses, but nothing on the internet can initiate a connection back in. A VPC endpoint is a different solution to a narrower problem: instead of routing traffic out to the internet and back to an AWS service, it creates a private path directly to that service, so the traffic never leaves the AWS network. Gateway endpoints exist for S3 and DynamoDB and cost nothing; interface endpoints use PrivateLink and cover most other services. This distinction matters today because a VPC-attached Lambda function loses its internet access, and the fix depends on which service it is trying to reach.</p>
+
+          <h3 class="sub-heading">IAM Roles and Why a Function Needs One</h3>
+          <p>An IAM role is an identity that a resource can assume temporarily, rather than a username and password that a person holds. It has two parts: a trust policy, which says who is allowed to assume it, and a permissions policy, which says what the role can then do. A Lambda function is given a role at creation time, and every AWS API call the function makes is authorized against that role's permissions. This is why a function that cannot read from an S3 bucket is usually not a code problem — the role is missing the permission. It is also why the function's role and the function's network configuration are separate concerns: the role controls what the function is allowed to do, and the VPC configuration controls where its traffic can physically go.</p>
+
+          <h3 class="sub-heading">Streams, Shards, and Queues</h3>
+          <p>A stream is an ordered, append-only log of records that multiple consumers can read at their own pace, and it is divided into shards — independent partitions that each hold a slice of the records and can be read in parallel. Kinesis Data Streams and DynamoDB Streams both work this way, and the shard is the unit of both capacity and parallelism. A queue is different: it holds messages until a consumer takes them, and once taken, a message is invisible to other consumers until it is deleted or its visibility timeout expires. SQS is the canonical queue. The practical difference is ordering and replay: a stream preserves order within a shard and lets you re-read old records, while a queue distributes work and does not guarantee order. Today's event source mapping section depends on this distinction, because Lambda's concurrency behaves completely differently against a shard than against a queue.</p>
+
+          <h3 class="sub-heading">What a Cold Start Is</h3>
+          <p>Lambda does not keep a server running for your function. When an invocation arrives, AWS either reuses an already-running copy of your function or creates a brand-new one, which means downloading your code, starting the runtime, and running any initialization code before your handler executes. That setup time is the cold start, and it is why the first request after a quiet period is slower than the thousandth. Everything in today's concurrency discussion — reserved concurrency, provisioned concurrency, execution environments — is a way of controlling how many of those copies exist and whether they are already warm.</p>
+
+          <p>With that grounding, here's why Lambda's concurrency model is the part of the service that actually decides whether a serverless architecture survives contact with production.</p>
+        </div>
+      </section>
+
       <section class="doc-section" id="why-on-exam">
         <h2 class="section-heading">1. Why This Is on the Exam</h2>
         <p>Lambda appears throughout the SAP-C02 blueprint, but the questions that separate a passing score from a failing one are almost never "what is Lambda." They are questions about a serverless component that behaves correctly in a diagram and badly in production: a function that scales to a thousand concurrent executions and takes a relational database down with it, a latency-sensitive API that meets its p99 target in a load test and misses it after every deployment, a stream consumer that silently stops processing because one malformed record poisoned a shard. Each of those is a concurrency, networking, or event-source-mapping question wearing a different costume.</p>

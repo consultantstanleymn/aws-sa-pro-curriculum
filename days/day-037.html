@@ -120,6 +120,27 @@
         </div>
       </section>
 
+      <section class="doc-section" id="foundations">
+        <h2 class="section-heading">Foundations You'll Need Today</h2>
+        <div class="card card-sre">
+          <p>Today's material sits on top of a few ideas that the rest of this curriculum treats as background knowledge. If you have not spent time with DNS, health checks, or the difference between a region and an availability zone, the argument in this day will read as a series of assertions rather than a chain of reasoning. So before we get to ARC, here is the grounding it assumes.</p>
+
+          <h3 class="sub-heading">DNS: turning a name into an address</h3>
+          <p>When you type a website name into a browser, something has to translate that human-readable name into the numeric address of a server that can answer the request. That translation service is DNS, the Domain Name System, and it works like a distributed phone book: your computer asks a resolver, the resolver asks the authoritative name server for that domain, and the answer comes back as an IP address. The important property for today is that the answer is not fixed. The authoritative server can return different addresses at different times, or to different people, and it can attach a "time to live" (TTL) telling resolvers how long they may cache the answer before asking again. That flexibility is what makes DNS-based failover possible at all — and the caching is what makes it slow, which is a tension this day returns to repeatedly.</p>
+
+          <h3 class="sub-heading">Route 53 health checks and failover routing</h3>
+          <p>Amazon Route 53 is AWS's DNS service, and it lets you configure records that behave intelligently rather than just pointing at a fixed address. A health check is a small probe Route 53 runs on a schedule against an endpoint — an HTTP request, a TCP connection — and it records whether that endpoint is answering. A failover routing policy ties two records together: a primary and a secondary. As long as the primary's health check reports healthy, Route 53 returns the primary's address; when the check goes red, Route 53 starts returning the secondary instead. This is the baseline mechanism the entire day is measured against. It works well, and it is also the thing ARC was invented to fix, for reasons that become clear once you understand failure domains.</p>
+
+          <h3 class="sub-heading">Regions and availability zones as separate failure domains</h3>
+          <p>AWS runs its infrastructure in geographic groupings called regions — us-east-1 in Virginia, eu-west-1 in Ireland, and so on — and each region contains several availability zones, which are physically separate data centers with independent power and networking. The reason this matters is that failures come in sizes. A single server can fail, an entire availability zone can lose power, and in rare cases a whole region can be impaired. When architects talk about a "failure domain," they mean the blast radius of a given failure: things inside the same domain tend to fail together. The central argument of this day is that a failover mechanism which lives inside the same failure domain as the thing it is supposed to rescue is not really a failover mechanism, and you cannot see why that is true until you can picture regions and zones as distinct boxes.</p>
+
+          <h3 class="sub-heading">Auto Scaling groups and load balancers</h3>
+          <p>Two more building blocks appear throughout today's discussion of readiness. An Auto Scaling group is a managed collection of identical servers that AWS keeps at a desired count, replacing any that die and adding more when demand rises — so "the standby has capacity" really means "the Auto Scaling group has the number of healthy instances we expect." A load balancer sits in front of those servers and spreads incoming requests across them, and it tracks which ones are currently healthy in something called a target group. When this day talks about a readiness check asserting that a standby region can absorb production traffic, these are the resources being asserted against: the group's instance count and the target group's healthy targets.</p>
+
+          <p>With that grounding — DNS answers that can change, health checks that drive those answers, regions and zones as separate failure domains, and Auto Scaling groups as the thing that represents capacity — here is why Route 53 ARC exists and what problem it actually solves.</p>
+        </div>
+      </section>
+
       <section class="doc-section" id="why-on-exam">
         <h2 class="section-heading">1. Why This Is on the Exam</h2>
         <p>The architectural problem ARC solves is not "how do I fail over between regions" — Route 53 failover routing answers that question and has for years. The problem is that the naive answer has a circular dependency buried in it. If your failover is triggered by a health check, and the health check is evaluated by a control plane that lives in the region that just went dark, then your failover mechanism shares a failure domain with your failure. The same circularity shows up in the human version: an operator paged at 3am, logging into a console that may or may not be reachable, deciding whether to flip DNS, and hoping the standby region has enough running capacity to absorb the traffic it is about to receive. Both versions of the problem are about the reliability of the failover decision itself, and that is the gap ARC was built to close.</p>

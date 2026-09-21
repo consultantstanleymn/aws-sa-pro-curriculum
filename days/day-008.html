@@ -119,6 +119,30 @@
         </div>
       </section>
 
+      <section class="doc-section" id="foundations">
+        <h2 class="section-heading">Foundations You'll Need Today</h2>
+        <div class="card card-sre">
+          <p>Today's material sits on top of a handful of networking ideas that the rest of this curriculum treats as already known. If you have not built a VPC by hand, the words below are the ones that will otherwise make the day read as a wall of jargon. None of them are complicated once the problem each one solves is clear.</p>
+
+          <h3 class="sub-heading">VPCs and CIDR blocks</h3>
+          <p>A Virtual Private Cloud (VPC) is your own private, isolated network inside AWS. It behaves like the network in an office building: it has an address range, and everything you launch into it gets an address from that range. That address range is written in a notation called CIDR, which looks like <code>10.0.0.0/16</code>. The number after the slash says how big the range is — a smaller number means a bigger range. <code>/16</code> gives you roughly 65,000 addresses, <code>/24</code> gives you 256. The practical consequence, and the reason this matters today, is that two networks can only be joined together if their address ranges do not overlap. If two VPCs both use <code>10.0.0.0/16</code>, there is no way to tell which <code>10.0.0.5</code> a packet is meant for, so routing between them is impossible. That single constraint rules out several connectivity options later in the day.</p>
+
+          <h3 class="sub-heading">Subnets and Availability Zones</h3>
+          <p>A subnet is a slice of a VPC's address range, pinned to one physical location. That location is an Availability Zone (AZ) — a separate data center (or group of them) within a region, with independent power and cooling. AWS regions contain multiple AZs precisely so that you can survive one of them failing. When you create a subnet, you choose which AZ it lives in, and everything you launch into that subnet runs in that AZ. This is why the day keeps insisting that a connection should use subnets in more than one AZ: if your connection to the network hub only exists in one AZ, then that AZ going down takes your connectivity with it, even though the hub itself is fine. The hub being highly available does not help you if your doorway to it is in a building that lost power.</p>
+
+          <h3 class="sub-heading">Route tables</h3>
+          <p>A route table is a list of rules that answers one question: given a packet with a particular destination address, where should I send it next? Each rule pairs an address range with a target — "traffic for <code>10.1.0.0/16</code> goes to this connection," "everything else goes to the internet." Every subnet has a route table attached to it, and a packet that matches no rule is dropped. This is the concept the entire day is built on, and the key thing to internalize is that routing is not a single decision made in one place. A packet leaving a server consults its subnet's route table, and then, if it is handed to a central hub, the hub consults its own separate route table. Both have to point the right way. Most "the network is broken" problems in this area are one of those two tables missing a rule.</p>
+
+          <h3 class="sub-heading">VPC peering</h3>
+          <p>VPC peering is the simplest way to connect two VPCs: you create a direct link between them, add a route on each side pointing at the other, and traffic flows. It is cheap, it has no middleman, and for two or three VPCs it is genuinely the right answer. The problem is that it is strictly one-to-one. Ten VPCs that all need to talk to each other need 45 separate peering connections, each with its own routes on both ends. There is also no central place to say "these two may talk, those two may not" — the policy is scattered across every VPC's own route table. Today's service exists largely to replace this arrangement, so it helps to see clearly what it is replacing.</p>
+
+          <h3 class="sub-heading">Security groups and network ACLs</h3>
+          <p>These are the two firewall mechanisms inside a VPC. A security group is attached to a resource — a server, a database — and controls what traffic may reach it. A network ACL is attached to a subnet and controls what traffic may enter or leave that subnet. Both are about permitting or denying traffic to a specific resource or subnet. Neither one knows anything about the shape of the network as a whole, which is why the day keeps saying they are the wrong tool for network isolation. If the requirement is "these two networks must never be able to reach each other," a security group cannot express that, because it only sees the one resource it is attached to. The answer has to live in the routing layer instead.</p>
+
+          <p>With that grounding, here is why Transit Gateway exists and what problem it actually solves.</p>
+        </div>
+      </section>
+
       <section class="doc-section" id="why-on-exam">
         <h2 class="section-heading">1. Why Transit Gateway Is on the Exam</h2>
         <p>The architectural problem Transit Gateway solves is combinatorial. VPC peering is a one-to-one relationship: every pair of VPCs that needs to talk requires its own peering connection, its own route table entries on both sides, and its own non-overlapping CIDR guarantee. Ten VPCs that all need to reach each other is 45 peering connections. Add a second region and you double it. Add an on-premises network and every VPC that needs to reach it needs its own VPN attachment or its own Direct Connect virtual interface. The operational surface grows quadratically while the actual requirement — "these networks need to reach those networks" — stays linear. Peering also has no native segmentation primitive: once two VPCs are peered, the route tables are the only place to express "reachable but not trusted," and route tables are per-VPC, so the policy is scattered across every spoke.</p>

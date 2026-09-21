@@ -119,6 +119,30 @@
         </div>
       </section>
 
+      <section class="doc-section" id="foundations">
+        <h2 class="section-heading">Foundations You'll Need Today</h2>
+        <div class="card card-sre">
+          <p>This lesson is about deciding what to do with each application in a company's estate as it moves to AWS. That decision uses a handful of terms that the rest of the curriculum treats as already known, so it is worth pinning them down first.</p>
+
+          <h3 class="sub-heading">Applications, Workloads and Portfolios</h3>
+          <p>An <strong>application</strong> here means a distinct piece of software that does a job for the business — a customer portal, an internal reporting tool, a payroll system. A <strong>workload</strong> is the same idea viewed from the infrastructure side: the servers, databases, and supporting pieces that together make that application run. A <strong>portfolio</strong> is simply the full collection of applications a company owns. Migration planning happens at the portfolio level because a company rarely moves one application in isolation; it moves dozens or hundreds, and each one needs its own decision about how it will get to AWS.</p>
+
+          <h3 class="sub-heading">EC2 Instances and AMIs</h3>
+          <p>An <strong>EC2 instance</strong> is a virtual server running in AWS. It behaves like a physical server — it has an operating system, CPU, memory, and disk — but it exists as software on AWS hardware rather than as a machine in a rack. An <strong>AMI</strong> (Amazon Machine Image) is the template an instance is created from: it bundles the operating system and any pre-installed software, so launching an instance from an AMI produces a server that is already configured the way you want. When this lesson says a server is "converted to a native EC2 instance or AMI," it means the original server's contents are repackaged so AWS can run them directly, rather than running them inside whatever platform they came from.</p>
+
+          <h3 class="sub-heading">Managed Services vs Self-Managed</h3>
+          <p>A <strong>self-managed</strong> system is one where you install, patch, back up, and scale the software yourself — for example, running MySQL on a server you control. A <strong>managed service</strong> is one where AWS operates the underlying software for you and exposes only the parts you need to configure; Amazon RDS is the managed version of MySQL, so AWS handles patching, backups, and failover while you still design your tables and queries. The distinction matters because moving from self-managed to managed is a real change in who carries the operational burden, even when the application's own code does not change at all.</p>
+
+          <h3 class="sub-heading">Virtualization, Hypervisors and VMware</h3>
+          <p><strong>Virtualization</strong> is the technique of running multiple virtual machines on one physical machine, each believing it has its own hardware. The software layer that makes this possible is the <strong>hypervisor</strong>. <strong>VMware</strong> is the most widely used commercial hypervisor product, and many companies run their entire data center on it. A virtual machine's <strong>format</strong> is the specific file layout the hypervisor uses to store that machine — and formats are not interchangeable, which is why moving a VMware virtual machine to AWS normally requires converting it into something AWS can run natively. That conversion step is exactly what the Relocate strategy avoids.</p>
+
+          <h3 class="sub-heading">SaaS</h3>
+          <p><strong>SaaS</strong> (Software as a Service) means buying a piece of software as a subscription that the vendor hosts and operates, rather than running your own copy. Salesforce, Workday, and Microsoft 365 are familiar examples. When a company replaces its own application with a SaaS product, the application itself stops existing in its current form — what remains is the data, which has to be exported from the old system and loaded into the vendor's. That is why replacing an application with SaaS is a fundamentally different kind of migration from moving it to AWS unchanged.</p>
+
+          <p>With that grounding, here is why the 7 Rs exist and what problem they actually solve.</p>
+        </div>
+      </section>
+
       <section class="doc-section" id="why-on-exam">
         <h2 class="section-heading">1. Why This Is on the Exam</h2>
         <p>The 7 Rs are not a taxonomy exercise. They are the vocabulary SAP-C02 uses to describe the single most common class of scenario in Domain 3 (Migration and Modernization): a company with a portfolio of applications, a hard constraint, and a set of plausible-sounding migration options that differ mainly in how much work they require and how much of the existing application they preserve. The exam does not usually ask you to name the seven strategies. It gives you a business constraint — a data center lease expiring, a licensing dispute, a compliance requirement, a team with no Kubernetes experience — and asks which strategy is appropriate for a specific application under that constraint.</p>

@@ -120,6 +120,30 @@
         </div>
       </section>
 
+      <section class="doc-section" id="foundations">
+        <h2 class="section-heading">Foundations You'll Need Today</h2>
+        <div class="card card-sre">
+          <p>This day is about how a team changes and repairs a system, rather than about the system itself. That means it leans on a handful of AWS building blocks that the rest of the curriculum treats as background knowledge. If you have only studied at the Cloud Practitioner level, these are the pieces worth getting straight before the pillar discussion starts making sense.</p>
+
+          <h3 class="sub-heading">Infrastructure as Code and CloudFormation Stacks</h3>
+          <p>Traditionally, building a server meant logging into a console or a machine and clicking or typing until the environment looked right. The problem with that approach is that the result exists only in that one environment — nobody can review it before it is created, and nobody can recreate it exactly if it is lost. Infrastructure as code flips this around: instead of performing the steps, you write a file that describes the end state you want, and a tool reads that file and makes reality match it. AWS CloudFormation is the native service that does this. You hand it a template, it creates the resources described in the template, and the collection of resources it manages together is called a stack. The important consequence is that the template, not the running environment, becomes the source of truth — which is why the day keeps referring to "the infrastructure definition" as the thing a change should be made against.</p>
+
+          <h3 class="sub-heading">IAM Roles Versus IAM Users</h3>
+          <p>An IAM user is an identity tied to a person or an application, with long-lived credentials like a password or an access key. An IAM role is different: it is a set of permissions that something can temporarily assume, with no permanent credentials of its own. When an AWS service — say, an automation job — needs to act on your behalf, you give it a role rather than a user, and the service receives short-lived credentials each time it runs. The role also carries a trust policy, which is the part that answers "who is allowed to assume this role in the first place." This matters for today's topic because when a procedure is automated, the role it runs under becomes the precise, auditable statement of what that procedure is permitted to do — a much tighter boundary than handing an engineer broad console access.</p>
+
+          <h3 class="sub-heading">Systems Manager Automation Documents</h3>
+          <p>AWS Systems Manager is a service for managing fleets of servers without logging into them individually. One of its features, Automation, lets you write a procedure as a document — a structured file listing named steps, where each step performs an action such as running a command on an instance or calling an AWS API. The document can take parameters, so the same document can target one instance or a thousand, and it can branch based on the result of an earlier step. When you run it, Systems Manager records an execution history showing exactly which step ran, what it returned, and where it failed if it did. That record is what turns a runbook from a document someone reads into a component you can monitor.</p>
+
+          <h3 class="sub-heading">CloudWatch Alarms and Composite Alarms</h3>
+          <p>Amazon CloudWatch collects metrics — numeric measurements such as CPU utilization or error count — from your resources. An alarm is a rule attached to a metric that changes state when the metric crosses a threshold you define, and that state change can trigger an action such as sending a notification or invoking automation. A composite alarm is an alarm built from other alarms: instead of watching one metric, it watches the states of several and only fires when a combination of them is true. The reason this comes up today is that a single metric firing is often noise, while several related metrics firing together usually means something real — so composite alarms are the standard way to reduce the number of pages an on-call engineer receives without losing sensitivity to genuine problems.</p>
+
+          <h3 class="sub-heading">Service Quotas</h3>
+          <p>Every AWS account has quotas — hard limits on how many of a given resource you can create, or how many API requests per second you can make. They exist to protect both you and AWS from runaway usage, and most of them are far higher than a typical workload needs. The catch is that when you hit one, the request simply fails; there is no dramatic error, just an operation that did not happen. This is why the day's sizing discussion treats quotas as a design constraint: a procedure that fans out across a large fleet can quietly exhaust a concurrency limit and leave part of the fleet untouched while reporting success for the rest.</p>
+
+          <p>With that grounding, here is why Operational Excellence is on the exam and what problem it actually solves.</p>
+        </div>
+      </section>
+
       <section class="doc-section" id="why-on-exam">
         <h2 class="section-heading">1. Why This Pillar Is on the Exam</h2>
         <p>Operational Excellence is the pillar candidates most often treat as soft. It has no service name attached to it, no console page, and no obvious "which product do I pick" question. That is precisely why it appears on SAP-C02: the exam can describe a technically correct architecture that is operationally unmaintainable, and the correct answer is the option that changes how the team operates rather than which service they buy. A scenario that says a team applies emergency patches by SSHing into instances and occasionally causes configuration drift is not testing whether you know SSM exists. It is testing whether you recognize that the root cause is an operational process performed by hand, and that the fix is to make the process an artifact.</p>

@@ -25,6 +25,7 @@
     <div class="nav-section">
       <div class="nav-section-title">On This Page</div>
       <a href="#recap" class="nav-link">Recap: Where We Left Off</a>
+      <a href="#foundations" class="nav-link">Foundations You'll Need Today</a>
       <a href="#why-on-exam" class="nav-link">1. Why This Is on the Exam</a>
       <a href="#mechanism" class="nav-link">2. How Each Option Actually Works</a>
       <a href="#decision-boundary" class="nav-link">3. The Core Decision Boundary</a>
@@ -134,6 +135,28 @@
         <div class="card card-accent">
           <p>Day 49 established the Snow Family as the offline-transfer answer when the network itself is the bottleneck — Snowcone for small or rugged edge sites, Snowball Edge Storage Optimized at roughly 80TB usable per device, Snowball Edge Compute Optimized with GPU for edge processing, and Snowmobile for exabyte-scale shipping-container transfers, all coordinated through OpsHub. The common thread was that when moving data over the wire is impractical, you move the hardware instead.</p>
           <p>Today extends that same instinct in a different direction. Snow Family moves data to AWS; Outposts, Local Zones, and Wavelength move AWS compute to where the data and the users already are. The constraint is no longer bandwidth but latency and data residency — a manufacturing plant that needs single-digit-millisecond round trips to its own control systems cannot be served by a Region hundreds of miles away, no matter how much bandwidth you provision. The question shifts from "how do we get the bytes to AWS" to "how much of AWS can we put inside the building, the metro, or the carrier network."</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="foundations">
+        <h2 class="section-heading">Foundations You'll Need Today</h2>
+        <div class="card card-sre">
+          <h3 class="sub-heading">Regions and Availability Zones</h3>
+          <p>A Region is a physical cluster of data centers in one geographic area — Northern Virginia, Ireland, Singapore, and so on. Inside each Region are Availability Zones, which are separate buildings with independent power and networking, close enough to each other that you can connect them with low-latency links but far enough apart that a single fire or flood will not take both down. When you launch a server "in AWS," you are really launching it into one Availability Zone inside one Region. This matters for today because every hybrid compute option is defined by its relationship to a Region: an Outpost is an extension of a Region that happens to sit in your building, a Local Zone is a small piece of a Region placed in a city, and a Wavelength Zone is a piece of a Region placed inside a phone carrier's network. None of them is a Region of its own.</p>
+
+          <h3 class="sub-heading">Latency and Why Distance Causes It</h3>
+          <p>Latency is the time it takes for a request to travel from a client to a server and for the response to come back — the round trip. It is measured in milliseconds, and a millisecond is one thousandth of a second. The speed of light in fiber is roughly 200,000 kilometers per second, which sounds fast until you do the arithmetic: a round trip from a factory in the middle of a country to a data center 1,500 kilometers away costs at least 15 milliseconds of pure travel time before any server does any work. That is why "single-digit milliseconds" is a hard physical constraint and not a tuning problem. You cannot optimize your way out of distance; you have to move the compute closer to the client. Every service in today's lesson exists to do exactly that.</p>
+
+          <h3 class="sub-heading">VPCs and Subnets</h3>
+          <p>A Virtual Private Cloud (VPC) is your own private network inside AWS — a logically isolated space where you decide the IP address ranges, the routing, and who can talk to whom. Inside a VPC you carve out subnets, which are smaller slices of that address range tied to a specific Availability Zone. A subnet is where a server actually lives; it is the network segment the server's network interface attaches to. When today's material says a Local Zone "adds a new set of subnets to your VPC," it means AWS has extended your private network into a new physical location, and you can now place servers there as if they were in any other subnet — except that traffic between that subnet and your other subnets has to physically travel between the metro and the Region.</p>
+
+          <h3 class="sub-heading">Control Plane vs. Data Plane</h3>
+          <p>Every AWS service has two halves. The control plane is the management layer: the APIs you call to create, modify, and delete resources, and the console you click through to do the same. The data plane is the resources themselves doing their job — a server serving HTTP requests, a database answering queries, a load balancer forwarding packets. These two halves can fail independently, and that distinction is the single most important idea for understanding hybrid compute failure modes. If the control plane is unreachable but the data plane is healthy, your application keeps serving users while you are completely unable to launch a new server, change a security rule, or even see fresh metrics. That is precisely what happens when an Outpost loses its connection to its parent Region, and it is why "the app is up but I can't do anything" is a recognizable symptom rather than a contradiction.</p>
+
+          <h3 class="sub-heading">Direct Connect and VPN</h3>
+          <p>A VPN is an encrypted tunnel over the public internet between your network and AWS — quick to set up, cheap, but subject to the internet's variable latency and occasional congestion. AWS Direct Connect is a dedicated private physical circuit from your data center to an AWS facility, bypassing the public internet entirely. It costs more and takes weeks to provision, but it delivers consistent, low latency and predictable bandwidth. Today's material assumes you know both because an Outpost needs a reliable, low-latency link back to its parent Region, and Direct Connect is the recommended way to provide it. When the lesson says the "service link" is down, it is talking about this connection — and the choice between VPN and Direct Connect is often the difference between an Outpost that meets its latency requirement and one that does not.</p>
+
+          <p>With that grounding, here is why Outposts, Local Zones, and Wavelength exist and what problem each one actually solves.</p>
         </div>
       </section>
 

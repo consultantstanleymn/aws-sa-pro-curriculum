@@ -119,6 +119,31 @@
         </div>
       </section>
 
+      <section class="doc-section" id="foundations">
+        <h2 class="section-heading">Foundations You'll Need Today</h2>
+        <div class="card card-sre">
+          <p>Today's material assumes a handful of building blocks that the rest of this curriculum treats as background knowledge. If you have not worked hands-on with AWS identity, here is what each one actually is and what problem it solves.</p>
+
+          <h3 class="sub-heading">IAM roles and trust policies</h3>
+          <p>An IAM user is an identity with a permanent name and password or access key — it belongs to one account and exists until someone deletes it. An IAM role is different: it is an identity that nobody logs into directly. Instead, a role is something a person or a program temporarily <em>becomes</em>. When you assume a role, AWS hands you a short-lived set of credentials that expire on their own, and when they expire you have to assume the role again to get new ones. That is the whole point — there is no long-lived secret sitting anywhere for an attacker to steal.</p>
+          <p>The other half of a role is its trust policy. A role has two separate sets of rules attached to it, and confusing them is the single most common source of identity mistakes. The <em>permissions policy</em> says what the role is allowed to do once you are inside it — read this bucket, start that instance. The <em>trust policy</em> says who is allowed to assume the role in the first place. A role can have broad permissions and still be safe if almost nobody is trusted to assume it, and it can have narrow permissions and still be dangerous if the trust policy is wide open. Today's material leans on this distinction constantly, because Identity Center works by creating roles in your accounts and setting their trust policies to allow the Identity Center service to assume them on a user's behalf.</p>
+
+          <h3 class="sub-heading">Temporary credentials and STS</h3>
+          <p>STS stands for Security Token Service, and it is the AWS component that actually issues temporary credentials. When something assumes a role, STS is the service that validates the request, checks the trust policy, and returns a credential set with an expiration time baked in. Those credentials are what the caller uses for every subsequent API call until they expire.</p>
+          <p>The reason this matters today is that it is the mechanism underneath the entire federated login story. When a user clicks an account in the Identity Center portal, Identity Center calls STS to assume the corresponding role, and the user's browser session is backed by those temporary credentials. Nothing durable is created for that user in the target account — no password, no access key, no user object. The role is the only lasting artifact, and the credentials are ephemeral by design.</p>
+
+          <h3 class="sub-heading">SAML 2.0 federation</h3>
+          <p>Federation is the idea that you can prove who you are using an identity system that is not AWS, and then carry that proof into AWS. The identity system is called an identity provider, or IdP — Okta, Microsoft Entra ID, and Ping are the common corporate ones. Your company already runs one of these; it is what you type your work password into every morning.</p>
+          <p>SAML 2.0 is the specific protocol that carries that proof across the boundary. The flow is roughly: you authenticate to your corporate IdP, the IdP produces a signed digital document called an assertion that says "this is who this person is, and we vouch for it," and AWS verifies the signature and accepts the claim. The signature is what makes it trustworthy — AWS does not need to know your password, it only needs to trust the IdP's signing key. This is why the exam scenarios keep mentioning an "existing SAML 2.0 identity provider": it means the company already has a place where employees authenticate, and the question is how to reuse it for AWS rather than building a parallel set of credentials.</p>
+
+          <h3 class="sub-heading">SCIM provisioning</h3>
+          <p>SAML solves authentication — proving who someone is at login time. It does not solve the problem of keeping the list of users and groups in sync between the IdP and AWS. That is what SCIM does. SCIM is a separate, simpler protocol that lets the IdP push its user and group records into a downstream system automatically, so that when someone joins a team or leaves the company, the change propagates without anyone manually updating AWS.</p>
+          <p>The practical consequence is that group membership in your corporate directory becomes the thing that drives AWS access. You assign permissions to a group once, and then adding someone to that group in the IdP is what grants them access — no AWS-side action at all. The catch, which today's failure-modes section covers, is that this synchronization is not instant, so there is a window where the IdP and AWS disagree about who is in which group.</p>
+
+          <p>With that grounding — roles that are assumed rather than logged into, temporary credentials issued by STS, and a corporate IdP whose assertions and group records can be trusted and synchronized — here is why IAM Identity Center exists and what problem it actually solves.</p>
+        </div>
+      </section>
+
       <section class="doc-section" id="why-on-exam">
         <h2 class="section-heading">1. Why This Is on the Exam</h2>
         <p>Every SAP-C02 scenario that involves more than a handful of accounts eventually has to answer the question of how people get in. The exam's design-domain questions are built around organizations that have already solved account structure and are now confronting the operational consequences of that structure: forty accounts means forty places a departing employee might still have credentials, forty places a password policy has to be enforced, and forty places an auditor will ask you to produce an access review for. The architectural problem IAM Identity Center solves is not authentication in the abstract — it is the elimination of per-account human identity as a category.</p>

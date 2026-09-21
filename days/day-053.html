@@ -120,6 +120,30 @@
         </div>
       </section>
 
+      <section class="doc-section" id="foundations">
+        <h2 class="section-heading">Foundations You'll Need Today</h2>
+        <div class="card card-sre">
+          <p>Today's material is written in the vocabulary of AWS billing, and that vocabulary only makes sense if you already know what is being billed. Before the commitment instruments make any sense, here are the five pieces of background this day quietly assumes.</p>
+
+          <h3 class="sub-heading">EC2 Instances, Families, and Sizes</h3>
+          <p>An EC2 instance is a virtual server you rent by the hour (or by the second, for some types). When you launch one, you pick an <em>instance type</em>, which is a combination of a <em>family</em> and a <em>size</em>. The family describes what the machine is optimized for — general purpose, compute-heavy, memory-heavy, storage-heavy, or accelerated with GPUs — and the size describes how much of that resource you get, from a couple of virtual CPUs up to machines with hundreds. The family name is the part before the dot and the size is the part after it, so a <code>m5.large</code> and an <code>m5.2xlarge</code> are the same family at different sizes, while an <code>m5.large</code> and an <code>r5.large</code> are different families at the same size. This matters today because a Reserved Instance is a commitment to a specific family and size, and a Savings Plan is a commitment that ignores family and size entirely. That single distinction is the source of most of the day's trade-offs.</p>
+
+          <h3 class="sub-heading">On-Demand Pricing and Why It Is the Baseline</h3>
+          <p>On-Demand is the default way to pay for compute: you launch an instance, you pay the published hourly rate for as long as it runs, and you stop paying when you stop it. There is no contract, no minimum, and no discount. Every other pricing instrument in this day is described as a percentage off On-Demand, which is why On-Demand is the reference point rather than just another option. When a scenario says a workload is "steady-state and predictable," it is really saying that the workload runs enough hours that paying the undiscounted rate is leaving money on the table — and that is the situation the commitment instruments exist to fix.</p>
+
+          <h3 class="sub-heading">Auto Scaling Groups and Mixed-Instance Fleets</h3>
+          <p>An Auto Scaling Group (ASG) is a controller that keeps a target number of EC2 instances running on your behalf. You tell it a <em>desired capacity</em> — say, six instances — and it launches instances when you have fewer and terminates them when you have more. It launches them from a <em>launch template</em>, which is a saved recipe describing the AMI (the disk image), the instance type, the security groups, and the startup script. A <em>mixed-instance</em> ASG is one where the launch template offers several acceptable instance types instead of pinning one, and the ASG is allowed to pick whichever is available. That flexibility is what makes Spot capacity practical, because a fleet that will accept any of six comparable instance types can almost always find room somewhere, while a fleet that demands one exact type often cannot.</p>
+
+          <h3 class="sub-heading">Regions and Availability Zones</h3>
+          <p>A region is a geographic area — us-east-1, eu-west-2 — and each region contains several Availability Zones, which are physically separate data centers with independent power and networking. An AZ is identified by appending a letter to the region, so <code>us-east-1a</code> and <code>us-east-1b</code> are two different AZs in the same region. The reason this matters today is that "regional" and "zonal" are not synonyms in AWS pricing. A regional Reserved Instance gives you a discount that floats across every AZ in the region, while a zonal Reserved Instance pins the discount — and, crucially, a capacity reservation — to one specific AZ. Spreading a fleet across multiple AZs is also the standard way to survive the failure of a single data center, which is why the Spot diversification advice in this day tells you to spread across AZs as well as families.</p>
+
+          <h3 class="sub-heading">Load Balancers, Target Groups, and Connection Draining</h3>
+          <p>A load balancer sits in front of your instances and distributes incoming requests across them. It does not send traffic to instances directly; it sends traffic to a <em>target group</em>, which is a list of instances that have been registered as healthy and eligible. When an instance is about to go away — because it is being replaced, or because Spot is about to reclaim it — the correct sequence is to <em>deregister</em> it from the target group first, which tells the load balancer to stop sending it new requests, and then wait for the in-flight requests it is already handling to finish. That waiting period is called connection draining. Today's lab builds an interruption handler around exactly this sequence, and the two-minute Spot notice is the budget it has to complete in.</p>
+
+          <p>With that grounding, here's why the commitment instruments exist and what problem each one actually solves.</p>
+        </div>
+      </section>
+
       <section class="doc-section" id="why-on-exam">
         <h2 class="section-heading">1. Why This Is on the Exam</h2>
         <p>Cost optimization is Domain 4 of SAP-C02, and it is the domain candidates most often underestimate because it feels like arithmetic rather than architecture. It is not arithmetic. Every cost question on the exam is really a question about which constraint the business is willing to accept: a commitment term, a capacity guarantee, an interruption risk, or a migration effort. The pricing instruments are just the vocabulary the question is written in.</p>

@@ -119,6 +119,30 @@
         </div>
       </section>
 
+      <section class="doc-section" id="foundations">
+        <h2 class="section-heading">Foundations You'll Need Today</h2>
+        <div class="card card-sre">
+          <p>Today's topic sits at the seam between two worlds that use different vocabularies for the same idea — "where the data lives." Before the DataSync discussion makes sense, it helps to have a plain-language grip on five things the rest of this page assumes you already know.</p>
+
+          <h3 class="sub-heading">Network file protocols: NFS and SMB</h3>
+          <p>When a computer reads a file from its own disk, the operating system handles the request directly. When it reads a file from another machine across a network, something has to translate "open this file" into network messages and back again. That translator is a file-sharing protocol, and the two you will see named throughout this page are NFS (used mostly by Linux and Unix systems) and SMB (used mostly by Windows). The practical consequence is that a "share" is not a copy of the data — it is a live, remote view of a directory tree that lives on another server. An application opening a file over NFS is talking to the remote server every time, which is why the source in today's scenarios is described as something that keeps running while the transfer happens, rather than as a snapshot you can safely unplug.</p>
+
+          <h3 class="sub-heading">What an "agent" is in an AWS migration service</h3>
+          <p>Several AWS services that move data out of a data center cannot reach into that data center on their own — AWS has no network path into your building. The workaround is a small piece of software you install on your own hardware, called an agent, which dials out to AWS and acts as the service's hands on the inside. The agent is what actually reads the source files, computes checksums, and pushes bytes over the connection; the AWS-side service is what schedules the work and records what happened. This split is worth internalizing because it explains two things that come up repeatedly today: the agent's own CPU, memory, and disk become a real performance ceiling, and if the agent loses its outbound connection, the task cannot start at all — no matter how healthy everything on the AWS side looks.</p>
+
+          <h3 class="sub-heading">IAM roles and trust policies</h3>
+          <p>In AWS, almost nothing acts as itself. Instead, a service or a piece of software is granted an identity called a role, and it "assumes" that role to get temporary credentials. A role has two separate halves that are easy to conflate. The first is the trust policy, which answers "who is allowed to assume this role at all?" — for example, "the DataSync service is permitted to take on this identity." The second is the permissions policy, which answers "once you have assumed it, what are you allowed to do?" — for example, "you may write objects into this one bucket." Both halves must line up. A role that DataSync is allowed to assume but that grants no useful permissions will authenticate successfully and then fail on every write, which is exactly the kind of partial failure today's troubleshooting section describes.</p>
+
+          <h3 class="sub-heading">Object storage versus filesystem storage</h3>
+          <p>A filesystem is a hierarchy of directories and files, and each file carries attributes like an owner, a group, and permission bits that determine who may read or write it. Object storage, which is what Amazon S3 is, works differently: there are no directories, only a flat namespace of objects, each identified by a key (a string that looks like a path but is really just a name), each holding a blob of bytes plus a small set of metadata. S3 objects do not have POSIX owners or permission bits, and they do not have modification timestamps in the filesystem sense. This distinction is the reason today's page keeps returning to "destination fidelity": copying a file tree into S3 and copying it into a filesystem-backed service like EFS produce genuinely different results, because one of those destinations has nowhere to put the ownership and permission information the source carried.</p>
+
+          <h3 class="sub-heading">How on-premises software reaches an AWS service</h3>
+          <p>Every AWS service lives at a regional network address, and reaching it from outside AWS means ordinary internet or private-circuit networking applies: DNS has to resolve the name, a firewall has to permit the outbound connection, and any proxy in the path has to understand the protocol being used. This is why the agent's connectivity is treated as a first-class concern rather than an afterthought — a firewall rule change or a DNS problem on the corporate side will take the agent offline even though nothing in AWS has changed. It also explains why the agent is described as making an outbound connection rather than AWS reaching in: the design deliberately avoids requiring inbound access to your network.</p>
+
+          <p>With that grounding, here's why DataSync exists and what problem it actually solves.</p>
+        </div>
+      </section>
+
       <section class="doc-section" id="why-on-exam">
         <h2 class="section-heading">1. Why DataSync Is on the Exam</h2>
         <p>SAP-C02 tests migration and modernization as one of its four scored domains, and within that domain the exam repeatedly probes whether you can distinguish between tools that sound similar but operate at different layers. DataSync sits in a crowded neighborhood: DMS moves database rows, Storage Gateway presents cloud storage as an on-prem appliance, Snowball moves data physically, and DataSync moves files and objects over the network on a schedule. A scenario that says "nightly," "NFS share," "S3 bucket," or "EFS" is almost always pointing at DataSync, and a scenario that says "database," "CDC," or "replication instance" is almost never pointing at it.</p>

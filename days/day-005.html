@@ -120,6 +120,30 @@
         </div>
       </section>
 
+      <section class="doc-section" id="foundations">
+        <h2 class="section-heading">Foundations You'll Need Today</h2>
+        <div class="card card-sre">
+          <p>Today's material sits on top of a handful of IAM ideas that the rest of this curriculum treats as already known. If you have not spent time in the IAM console, the words "policy," "role," and "trust policy" can blur together, and the day will read as a wall of jargon. Here is the grounding, in the order the day builds on it.</p>
+
+          <h3 class="sub-heading">Policies: the rules that say what is allowed</h3>
+          <p>Every action anyone takes in AWS — reading an object from a storage bucket, starting a server, creating a user — is checked against a set of rules before it is allowed to happen. Those rules are written as JSON documents called policies, and each policy is essentially a list of statements saying "this action on this resource is allowed" or "this action on this resource is denied." The important part for today is how the rules combine. AWS starts from a default of deny everything, then looks for an explicit allow. If it finds one, the action is permitted — unless some other applicable policy contains an explicit deny, in which case the deny wins no matter how many allows exist. That "deny beats allow, and silence means deny" behavior is the foundation every other control in this day is built on.</p>
+
+          <h3 class="sub-heading">Users, roles, and why roles are the modern default</h3>
+          <p>An IAM user is a permanent identity with a name and, usually, a long-lived password or access key that does not expire on its own. An IAM role is different: it is an identity that nobody logs into directly. Instead, a role is something a person or a program temporarily becomes, and while they are wearing it they get whatever permissions the role carries. The advantage is that the credentials handed out for a role expire automatically after a set period, so a leaked credential is only useful for a short window rather than forever. This is why the rest of the curriculum keeps steering you away from creating IAM users for workloads and toward roles instead.</p>
+
+          <h3 class="sub-heading">Trust policies: who is allowed to become the role</h3>
+          <p>A role has two separate sets of rules attached to it, and confusing them is the single most common source of IAM mistakes. The first is the trust policy, which answers "who is allowed to assume this role in the first place?" The second is the permission policy, which answers "once someone has assumed it, what are they allowed to do?" A role that grants access to a database but whose trust policy names the wrong account is useless, because nobody who needs it can get in. A role whose trust policy is wide open but whose permission policy is narrow is a different kind of problem: too many people can get in, but they cannot do much once they are there. Today's material cares about both, because a delegation model has to get the "who" and the "what" right at the same time.</p>
+
+          <h3 class="sub-heading">STS: the service that hands out temporary credentials</h3>
+          <p>When someone assumes a role, something has to actually issue the temporary credentials they will use. That something is AWS Security Token Service, usually shortened to STS. You will see it referenced through API calls that all start with "AssumeRole" — the exact variant depends on how the caller proved who they were, whether that was a normal AWS identity, a corporate login system, or a Kubernetes cluster. The credentials STS returns come with an expiry time baked in, which is what makes the whole role model safer than long-lived keys. Today's scenarios lean on STS constantly, because almost every cross-account or workload-identity pattern on the exam is really a question about which AssumeRole variant applies.</p>
+
+          <h3 class="sub-heading">Permission boundaries: a ceiling, not a grant</h3>
+          <p>The last idea is the one this day is named after. A permission boundary is a policy you attach to a user or role that sets the maximum it could ever be allowed to do, no matter what other policies get attached to it later. The mental image worth holding onto is a ceiling above a floor: the ordinary permission policies decide what the entity is allowed to do, and the boundary decides the highest it can ever reach. A boundary can only ever take permissions away, never add them, so attaching one to a role that has no permissions at all does not magically give it any. That asymmetry — boundaries restrict but never grant — is the detail the exam returns to again and again.</p>
+
+          <p>With that grounding, here is why permission boundaries and STS exist as a pair, and what problem they actually solve.</p>
+        </div>
+      </section>
+
       <section class="doc-section" id="why-on-exam">
         <h2 class="section-heading">1. Why This Is on the Exam</h2>
         <p>Permission boundaries exist because of a specific organizational shape that shows up constantly in SAP-C02 scenarios: a central platform or security team that wants to delegate IAM administration to application teams without handing over the ability to escalate to full account control. The naive answer — give the app team an IAM policy that allows <code>iam:CreateRole</code> and hope they write good policies — fails the moment someone creates a role with <code>AdministratorAccess</code> attached. The exam tests whether you know the mechanism that makes delegation safe rather than merely discouraged.</p>

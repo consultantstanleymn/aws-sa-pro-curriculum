@@ -119,6 +119,30 @@
         </div>
       </section>
 
+      <section class="doc-section" id="foundations">
+        <h2 class="section-heading">Foundations You'll Need Today</h2>
+        <div class="card card-sre">
+          <p>Today's material sits on top of four ideas that the rest of this page will use without stopping to define them. None of them are complicated on their own, but each one is load-bearing: if any of them is fuzzy, the reasoning about peering will not land. Here they are, in the order the day needs them.</p>
+
+          <h3 class="sub-heading">IP addresses and CIDR blocks</h3>
+          <p>Every device on a network needs an address so that other devices can find it, and on AWS those addresses are grouped into ranges rather than assigned one at a time. A CIDR block is just a compact way of writing a range of addresses. The notation <code>10.1.0.0/16</code> means "start at 10.1.0.0 and include the next 65,536 addresses," while <code>10.1.0.0/24</code> means "start at 10.1.0.0 and include the next 256." The number after the slash tells you how big the range is: smaller number, bigger range. When you create a VPC, you pick one of these ranges, and every subnet and instance inside it gets an address from that range.</p>
+          <p>The reason this matters today is that two networks can only be connected at the routing level if their ranges do not overlap. If Region A uses <code>10.0.0.0/16</code> and Region B also uses <code>10.0.0.0/16</code>, then an address like <code>10.0.5.7</code> is ambiguous — it exists in both places, and no router can decide which one a packet is meant for. This is why the day keeps returning to "non-overlapping CIDRs" as a hard constraint: it is not a preference, it is a physical requirement of how routing works.</p>
+
+          <h3 class="sub-heading">Route tables and route propagation</h3>
+          <p>A route table is a list of rules that tells a network device where to send a packet based on its destination address. Each rule says, in effect, "if the destination looks like this, send it that way." Every subnet in a VPC has its own route table, and so does a Transit Gateway. When a packet arrives, the device looks up the destination in the table and forwards it to whatever the matching rule points at. If no rule matches, the packet is dropped — and by default, nothing tells the sender why.</p>
+          <p>There are two ways a rule gets into a route table. You can add it by hand, which is called a static route, or the system can add it automatically when it learns about a network, which is called route propagation. Propagation is convenient because it keeps the table up to date on its own: if you add a subnet to a VPC, the VPC's range is already known and the routes follow automatically. Static routes do not update themselves — if the network changes, someone has to remember to edit the table. Today's entire topic turns on the fact that one specific kind of connection, a peering attachment, supports only the manual kind.</p>
+
+          <h3 class="sub-heading">Transit Gateway and attachments</h3>
+          <p>If you have two VPCs that need to talk, you can connect them directly. If you have twenty, connecting every pair to every other pair becomes an unmanageable web of connections. A Transit Gateway solves that by acting as a central hub: every VPC connects to the hub once, and the hub handles forwarding between them. The connection from a VPC to the hub is called an attachment, and it is a real object with its own state — it can be pending, available, or deleted, and it can be associated with a particular route table on the hub.</p>
+          <p>The hub itself has route tables just like a subnet does, and the rules in those tables decide which attachments can reach which others. That is the mechanism that lets you keep a shared-services VPC reachable from everywhere while isolating two production VPCs from each other, even though all three are attached to the same hub. Today we take two of these hubs, one in each Region, and connect them to each other.</p>
+
+          <h3 class="sub-heading">MTU, or how big a packet can be</h3>
+          <p>Data moving across a network is chopped into packets, and every network path has a maximum packet size it will carry, called the MTU. If a packet is larger than the path allows, it either gets split into smaller pieces or dropped. Within a single AWS Region, the path allows fairly large packets, which is efficient. Across Regions, the limit is lower. This sounds like a minor detail until a workload sends something large — a file, a database replication batch — and it silently fails while small requests succeed. Today's material includes that limit because it is one of the specific ways cross-region connections break in practice.</p>
+
+          <p>With that grounding, here's why Transit Gateway peering exists and what problem it actually solves.</p>
+        </div>
+      </section>
+
       <section class="doc-section" id="why-on-exam">
         <h2 class="section-heading">1. Why This Is on the Exam</h2>
         <p>SAP-C02 Domain 1 (Design Solutions for Organizational Complexity) and Domain 2 (Design for New Solutions) both lean heavily on multi-region network design, and TGW peering is the connective tissue between them. The exam keeps returning to it because it is the point where a design that looked clean in a single region becomes genuinely hard: you have two independent routing domains, each with its own route tables, its own attachment lifecycle, and no automatic mechanism to keep them in sync. A candidate who understands only intra-region TGW will confidently draw a topology that cannot pass traffic, and the exam is written to catch exactly that.</p>

@@ -119,6 +119,30 @@
         </div>
       </section>
 
+      <section class="doc-section" id="foundations">
+        <h2 class="section-heading">Foundations You'll Need Today</h2>
+        <div class="card card-sre">
+          <p>Today's lesson is about deliberately breaking things on purpose, which only makes sense once you know what the things are and what "broken" means for each of them. Five ideas carry the whole discussion, and none of them require hands-on experience to understand — just a clear picture of what each one is for.</p>
+
+          <h3 class="sub-heading">Availability Zones: the unit of failure</h3>
+          <p>An AWS Region is a geographic area, and inside each Region AWS operates several physically separate data centers grouped into Availability Zones, usually three or more. The zones have independent power, cooling, and network connections, so a fire, flood, or power failure in one zone does not take down the others. This separation is the entire reason AWS can promise high availability: you spread your application across multiple zones, and if one zone dies, the others keep serving. When today's lesson talks about "losing an AZ," it means exactly that — one of those physically separate groups of data centers becomes unreachable, and everything you placed inside it stops responding at once. That is the failure mode most AWS resilience design is built around, which is why it is the most common thing a Game Day simulates.</p>
+
+          <h3 class="sub-heading">Load balancers and Auto Scaling Groups: the two things that react</h3>
+          <p>An Application Load Balancer sits in front of your application and distributes incoming requests across a pool of servers, called targets. Crucially, it continuously health-checks those targets and stops sending traffic to any that fail — a process called draining. An Auto Scaling Group is the mechanism that keeps a desired number of servers running: it watches how many are healthy and launches replacements when some disappear. Together they form the automatic recovery path that most AWS architectures rely on. When today's hypothesis says the load balancer will "drain the affected targets within 30 seconds" and the scaling group will "launch replacement capacity within 5 minutes," it is describing these two mechanisms doing their jobs. A Game Day exists to find out whether they actually do, and how fast.</p>
+
+          <h3 class="sub-heading">Multi-AZ databases and failover</h3>
+          <p>A database is the hardest part of an application to recover, because unlike a stateless web server it holds data that cannot simply be recreated. AWS offers a Multi-AZ configuration for its managed databases: a second copy of the database runs in a different Availability Zone, kept continuously in sync, and if the primary copy fails, AWS promotes the standby to become the new primary. That promotion is called a failover, and it takes time — typically under two minutes, but not zero. Applications must also reconnect to the new primary, which is why failover is a common source of surprises. Today's exercises treat database failover as one of the failure modes worth measuring, because the gap between the documented failover time and the real one is often where an RTO claim quietly breaks.</p>
+
+          <h3 class="sub-heading">RTO and RPO: the two numbers everything is measured against</h3>
+          <p>Recovery Time Objective, or RTO, is how long the business can tolerate the service being down before the damage becomes unacceptable — "we must be back within fifteen minutes." Recovery Point Objective, or RPO, is how much data the business can afford to lose, expressed as time — "we can accept losing the last five minutes of transactions." These are business decisions, not technical ones, and they are the yardstick for everything in this lesson. Without a stated RTO there is no way to say whether a recovery was fast enough, which is why today's lab insists you write one down before designing the exercise. A Game Day is fundamentally a test of whether the architecture actually meets the RTO and RPO it claims.</p>
+
+          <h3 class="sub-heading">CloudWatch alarms and stop conditions: the safety net</h3>
+          <p>Amazon CloudWatch is AWS's monitoring service: it collects numeric measurements from your resources, called metrics, and an alarm is a rule that watches one metric and changes state when it crosses a threshold you set — for example, "alert me if the error rate exceeds 0.5% for two consecutive minutes." An alarm can be in one of three states: OK, ALARM, or INSUFFICIENT_DATA, the last meaning it has not yet received enough measurements to judge. A stop condition is simply an alarm wired into a failure-injection experiment so that if the alarm enters ALARM, the experiment halts automatically. This is what makes it defensible to break things in production: the moment the damage exceeds what you agreed to accept, the experiment stops itself rather than waiting for a human to notice. Keep the INSUFFICIENT_DATA state in mind, because today's lesson treats an alarm stuck in that state as a safety net that is not actually there.</p>
+
+          <p>With that grounding, here is why Game Days exist and what problem they actually solve.</p>
+        </div>
+      </section>
+
       <section class="doc-section" id="why-on-exam">
         <h2 class="section-heading">1. Why Game Days Are on the Exam</h2>
         <p>The SAP-C02 exam tests design judgment under constraint, and one of the most reliable constraints it uses is the gap between what an architecture claims and what it has actually been proven to do. A team can draw a three-AZ, multi-region diagram with automatic failover and still have a recovery time objective that exists only in a slide deck. The exam's resilience domain is built around that gap, and Game Days are the mechanism AWS documents for closing it. When a question describes a workload with a stated RTO, a documented runbook, and no evidence the runbook has ever been executed, the correct answer is almost always to test the recovery path rather than to add more redundancy.</p>

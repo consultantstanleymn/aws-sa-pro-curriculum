@@ -120,6 +120,30 @@
         </div>
       </section>
 
+      <section class="doc-section" id="foundations">
+        <h2 class="section-heading">Foundations You'll Need Today</h2>
+        <div class="card card-sre">
+          <p>Today's topic is entirely about how two separate private networks are allowed to talk to each other, and the whole argument hinges on a handful of building blocks that the rest of this page will use without stopping to define them. If you have never built a network in AWS, these are the pieces the discussion assumes you already have in your head.</p>
+
+          <h3 class="sub-heading">VPCs and CIDR blocks</h3>
+          <p>A Virtual Private Cloud (VPC) is your own isolated slice of the AWS network — a private space where you launch servers, databases, and other resources, and where nothing from the outside can reach them unless you explicitly allow it. Every VPC is assigned an address range written in CIDR notation, something like <code>10.0.0.0/16</code>. That notation is just a compact way of saying "this many addresses, starting here": the number after the slash tells you how large the range is, and a smaller number means a bigger range. The practical consequence is that two VPCs can be given the same range, or ranges that partially overlap, and when that happens the addresses inside them become ambiguous — a packet addressed to <code>10.0.0.5</code> could belong to either network, and no router can decide which one you meant. Keep that ambiguity in mind, because it is the single constraint that eliminates most of the connectivity options discussed below.</p>
+
+          <h3 class="sub-heading">Route tables</h3>
+          <p>Inside a VPC, every subnet has a route table, which is simply a list of rules saying "traffic destined for this address range should go out through this path." When you connect two networks together in the traditional way, the connection only works because you add a rule to each side's route table pointing at the other. This matters today because it is the mechanism PrivateLink deliberately avoids: it never adds a route, so the two networks never gain a general path to each other. When this page says a solution "requires route table changes on both sides," it means you are merging the two networks' routing, which is a much bigger commitment than it sounds.</p>
+
+          <h3 class="sub-heading">Security groups and network ACLs</h3>
+          <p>Once traffic can physically reach a resource, two layers of firewall decide whether it is actually allowed in. A security group is a set of allow rules attached to a resource itself — a server, a database, or in today's case a network interface — and it is stateful, meaning if you allow a request in, the response is automatically allowed back out. A network ACL is a coarser filter attached to a whole subnet, and it is stateless, so you have to write rules for both directions. The reason this page keeps warning that "security groups become the only remaining control" is that when two networks are fully connected, these firewalls are the last thing standing between a consumer and everything in the provider's network — and a single mistaken rule is then the entire boundary.</p>
+
+          <h3 class="sub-heading">Elastic network interfaces (ENIs)</h3>
+          <p>An elastic network interface is the virtual equivalent of a network card: it is the thing that actually holds a private IP address inside a subnet and that traffic is sent to. A server has one, and so does almost everything else that needs an address. This is worth knowing up front because PrivateLink works by placing an ENI in the consumer's own subnet and having the consumer talk to that ENI — which is why the consumer never needs to know anything about the provider's addresses, and why the endpoint's own security group becomes a place failures can hide.</p>
+
+          <h3 class="sub-heading">Load balancers, and the difference between layer 4 and layer 7</h3>
+          <p>A load balancer sits in front of a group of servers and spreads incoming requests across them, so that no single server is overwhelmed and so that a failed server can be taken out of rotation. AWS offers two kinds that matter here. An Application Load Balancer (ALB) understands HTTP — it can route based on URL paths and hostnames, which makes it a layer 7 (application layer) device. A Network Load Balancer (NLB) only understands raw TCP connections and IP addresses, making it a layer 4 (transport layer) device, but it is extremely fast and preserves the original connection. Today's material depends on this distinction because PrivateLink can only be backed by an NLB, and the exam will happily hand you a scenario with an ALB already in place to see whether you notice.</p>
+
+          <p>With that grounding, here is why PrivateLink exists and what problem it actually solves — and, just as importantly, when it is the wrong answer.</p>
+        </div>
+      </section>
+
       <section class="doc-section" id="why-on-exam">
         <h2 class="section-heading">1. Why This Is on the Exam</h2>
         <p>PrivateLink shows up on SAP-C02 because it is the answer to a class of scenario that no other connectivity primitive solves cleanly. The exam repeatedly presents a situation where two organizations, or two business units inside one organization, need to share exactly one service and nothing else. The consumer may be a partner company, a SaaS vendor's customer, or an internal team that must not be able to reach the provider's database, its management plane, or any other workload in that VPC. The requirement is almost always phrased as "expose only this API" or "the consumer must not have network-level access to our VPC."</p>

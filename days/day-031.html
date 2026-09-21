@@ -25,6 +25,7 @@
     <div class="nav-section">
       <div class="nav-section-title">On This Page</div>
       <a href="#recap" class="nav-link">Recap: From Outside-In Probes to Inside-Out Traces</a>
+      <a href="#foundations" class="nav-link">Foundations You'll Need Today</a>
       <a href="#why-xray" class="nav-link">1. Why X-Ray Is on the Exam</a>
       <a href="#mechanism" class="nav-link">2. How a Trace Is Actually Built</a>
       <a href="#decision-boundary" class="nav-link">3. The Core Decision Boundary: Trace or Don't Trace</a>
@@ -134,6 +135,30 @@
         <div class="card card-accent">
           <p>Day 30 put monitoring outside the infrastructure. Synthetics canaries are scripted Puppeteer/Selenium probes that drive real user flows against your public endpoints on a schedule, which means they answer a question your internal dashboards structurally cannot: is the thing a customer actually does still working? That is the value of synthetic probes from outside — they catch SLO breach detection at the edge, where DNS, CDN, TLS, and front-end regressions live, and they do it before a human files a ticket. The limitation is equally structural. A canary tells you the checkout flow failed and roughly how long it took; it cannot tell you which of the twelve services behind that flow was responsible.</p>
           <p>X-Ray is the same service family — CloudWatch-adjacent observability tooling, same console, same alarms — pointed at the opposite failure mode. Where canaries observe the system from outside and report a symptom, X-Ray instruments the system from inside and reports the causal chain. The two are complementary rather than competing: a canary alarm is often the trigger that sends you into the X-Ray service map to find the hop that actually degraded. Today is about building that inside-out view, and about the sampling economics that decide how much of it you can afford to keep.</p>
+        </div>
+      </section>
+
+      <section class="doc-section" id="foundations">
+        <h2 class="section-heading">Foundations You'll Need Today</h2>
+        <div class="card card-sre">
+          <p>Today's material assumes a handful of ideas that are second nature to anyone who has run a production system but are never spelled out in the AWS documentation, because the documentation is written for people who already have them. Here they are, built from the ground up.</p>
+
+          <h3 class="sub-heading">A request is a journey, not a single event</h3>
+          <p>When a user clicks a button in a web application, the browser sends one message to a server and waits for a reply. That much is intuitive. What is less intuitive is what happens on the other side. In a modern application, that one incoming message is rarely handled by one program. It is more like a relay race: a front-end program receives it, then calls a second program to look up the user's account, which calls a third program to fetch the user's order history, which calls a database to read the actual rows. Each of those programs is called a <strong>service</strong>, and each handoff from one service to the next is a <strong>hop</strong>. The user experiences one request that took 800 milliseconds. The system experiences five or six separate pieces of work, any one of which could be the slow one. This is the entire reason distributed tracing exists: without a way to see the individual hops, you only know the total time, not where it went.</p>
+
+          <h3 class="sub-heading">A trace is a receipt for one request</h3>
+          <p>If you wanted to reconstruct that relay race after the fact, you would need each runner to write down when they started, when they finished, and who handed them the baton. A <strong>trace</strong> is exactly that: a record of one request's journey, assembled from notes that each service wrote down as it did its part. Each service's note is called a <strong>segment</strong>, and if a service does several distinct things — say, a database read and then an HTTP call to a partner API — it can break its note into smaller pieces called <strong>subsegments</strong>. The critical detail is that the services have to agree on a shared identifier so their notes can be stitched together into one story. That identifier travels with the request from service to service, which is why the day keeps talking about "propagating the header" — it just means passing that identifier along on every outbound call. If one service forgets to pass it, the story breaks in half and you get two disconnected traces instead of one.</p>
+
+          <h3 class="sub-heading">A daemon is a background helper process</h3>
+          <p>A <strong>daemon</strong> is a small program that runs continuously in the background on a machine, doing a job nobody watches directly. You have almost certainly used one without knowing it — the thing that keeps your laptop's clock accurate is a daemon. In the X-Ray world, the daemon's job is to sit on each server, collect the trace notes that the application produces, hold them briefly in memory, and forward them in batches to the AWS service that stores them. The application does not talk to AWS directly; it drops its notes off with the local daemon and moves on. This matters because of how it communicates: the application sends to the daemon over <strong>UDP</strong>, a network protocol that fires a message and does not wait for or expect a confirmation. That is fast and it never slows the application down, but it also means that if the daemon is not running, the notes are simply thrown into the void with no error message anywhere. This is why "the traces are missing but the app is fine" is such a common symptom.</p>
+
+          <h3 class="sub-heading">An IAM role is a permission slip a service wears</h3>
+          <p>AWS is built on the principle that nothing gets to do anything unless it has been explicitly granted permission. An <strong>IAM role</strong> is a named bundle of permissions that a program can temporarily adopt, the way a contractor is issued a badge that opens specific doors for the duration of a job. When the day says "the execution role needs the appropriate X-Ray write permissions," it means the program has to be wearing a badge that includes the door labeled "send trace data to X-Ray." If it is not, the program still runs perfectly — it just quietly fails to deliver its trace notes, because tracing is deliberately designed never to break the application it is observing. The result is a service that works fine and is invisible in the tracing console, which is a confusing combination until you know to look at permissions.</p>
+
+          <h3 class="sub-heading">Sampling means keeping some and discarding the rest</h3>
+          <p>Recording a detailed receipt for every single request is expensive when you are serving millions of them. <strong>Sampling</strong> is the practice of recording only a fraction — say, five out of every hundred requests — and assuming the sample is representative of the whole. It is the same logic as a poll: you do not need to ask every voter to know roughly how the electorate feels. The tradeoff is that a rare event can fall entirely outside the sample. If one request in a thousand fails, and you are only recording one in twenty, you may have no record of the failure at all. The decision about whether to record a given request is made once, at the very beginning of the journey, and then carried along with the request — which is why you cannot decide after the fact to keep a trace you already discarded.</p>
+
+          <p>With that grounding, here is why X-Ray exists, what problem it actually solves, and where the exam expects you to reach for it.</p>
         </div>
       </section>
 

@@ -111,6 +111,30 @@
       </div>
       <div id="tracker"></div>
 
+      <section class="doc-section" id="foundations">
+        <h2 class="section-heading">Foundations You'll Need Today</h2>
+        <div class="card card-sre">
+          <p>This lesson is written for someone who already knows how AWS accounts, IAM, and networking fit together. If you are coming to it from a foundational level, the five ideas below are the ones the rest of the page quietly assumes. None of them are hard, but each one is load-bearing for the argument that follows, so it is worth a few minutes to get them straight before the prose starts using them as shorthand.</p>
+
+          <h3 class="sub-heading">An AWS account is a security boundary, not just a login</h3>
+          <p>When you sign up for AWS, you get an account: a container that holds your resources, your users, and your bill. The important thing to understand is that the account is the outermost wall in AWS. Permissions you grant inside an account can be very broad — an administrator in that account can, in principle, give themselves access to anything in it — but nothing inside one account can reach into another account unless the other account explicitly says so. That is why the rest of this lesson treats "put it in a separate account" as a stronger move than "put it in a separate folder" or "give it a stricter policy." The account boundary is the one wall that an in-account administrator cannot climb over.</p>
+
+          <h3 class="sub-heading">IAM users, roles, and trust policies</h3>
+          <p>IAM (Identity and Access Management) is how AWS decides who can do what. A <em>user</em> is a long-lived identity with credentials attached — a person or a script that logs in directly. A <em>role</em> is different: it is an identity that nobody logs into, but that a user, a service, or another account can temporarily <em>assume</em>, receiving short-lived credentials in exchange. A role has two policies attached. The <em>permissions policy</em> says what the role can do once you are wearing it. The <em>trust policy</em> says who is allowed to put it on in the first place. That second one is the piece this lesson keeps referring to as a "trust relationship," and it is the mechanism by which one account grants access to a principal in another. When the page says a compromise is "contained by the fact that the other accounts do not trust it," it means no other account's role has a trust policy naming the compromised account.</p>
+
+          <h3 class="sub-heading">Service quotas are per-account</h3>
+          <p>Every AWS account has limits on how much of each service it can use — how many EC2 instances it can launch, how many API calls per second it can make, how many VPCs it can create. These are called service quotas (older documentation calls them limits). They are counted per account, not per organization or per region-wide pool. This matters because two workloads sharing one account also share one set of quotas: if one of them is busy enough, it can consume the headroom the other one needed, and the second workload starts getting throttled or refused for reasons that have nothing to do with its own code. Splitting workloads into separate accounts gives each one its own quota budget.</p>
+
+          <h3 class="sub-heading">Consolidated billing, Reserved Instances, and Savings Plans</h3>
+          <p>By default, each AWS account is billed separately. When accounts are joined into an organization, AWS can roll all of their charges onto one bill — this is <em>consolidated billing</em>. It is purely a financial arrangement: it changes who pays and how discounts are calculated, but it grants no permissions between accounts. The discount part is worth knowing because it is a common reason to use organizations even when you do not need the governance features. <em>Reserved Instances</em> and <em>Savings Plans</em> are commitment-based discounts: you promise to spend a certain amount (or use a certain instance type) for one or three years, and in exchange AWS charges you less. Under consolidated billing, a commitment purchased in one account can be shared across the whole organization, and volume-based pricing tiers are calculated on the organization's total usage rather than each account's slice of it.</p>
+
+          <h3 class="sub-heading">VPCs and security groups are network segmentation, not permission segmentation</h3>
+          <p>A <em>VPC</em> (Virtual Private Cloud) is a private network inside your account — your own isolated slice of AWS where you place servers, databases, and other resources, with control over IP address ranges and routing. A <em>security group</em> is a firewall attached to individual resources that decides which network traffic is allowed in and out. Both are excellent tools, and both are frequently the wrong answer to a governance question. They control what can talk to what over the network; they do not control who can log in and change things. A developer who cannot reach a production database over the network can still delete it through the AWS API if their IAM permissions allow it. That distinction — network reachability versus permission to act — is the one this lesson keeps drawing, and it is why "put it in a separate VPC" is not the same answer as "put it in a separate account."</p>
+
+          <p>With that grounding, here is why AWS Organizations exists and what problem it actually solves.</p>
+        </div>
+      </section>
+
       <section class="doc-section" id="welcome">
         <h2 class="section-heading">How to Use This Curriculum</h2>
         <div class="card card-accent">

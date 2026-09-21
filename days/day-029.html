@@ -121,6 +121,30 @@
         </div>
       </section>
 
+      <section class="doc-section" id="foundations">
+        <h2 class="section-heading">Foundations You'll Need Today</h2>
+        <div class="card card-sre">
+          <p>Today's topic is monitoring, and monitoring has its own vocabulary that the rest of this curriculum uses as if it were obvious. Before the architecture discussion starts, here are the four ideas everything else in this day is built on.</p>
+
+          <h3 class="sub-heading">Metrics, Namespaces, and Dimensions</h3>
+          <p>A metric is just a number that something reports over time — how many requests a service handled in the last minute, how much disk space is free, how long a request took. AWS services report these numbers automatically, and you can also have your own code report custom ones. The problem this solves is that without a running record of these numbers, you have no way to know whether a system is healthy or degrading until a user tells you it is broken.</p>
+          <p>Two pieces of vocabulary matter here. A <em>namespace</em> is the grouping a metric belongs to — AWS services each publish into their own namespace, and your custom metrics go into one you name yourself. A <em>dimension</em> is a further qualifier that identifies which specific thing the number is about, such as which particular server or which particular load balancer. The reason this matters is that a metric with a different dimension is treated as a completely separate metric, not as another data point on the same line. If you are watching five servers, you have five separate metrics, and an alarm attached to one of them knows nothing about the other four.</p>
+
+          <h3 class="sub-heading">Statistics and Periods</h3>
+          <p>Raw numbers arrive constantly, and no human wants to look at every single one. So when you ask a monitoring system a question about a metric, you ask it in terms of a <em>statistic</em> over a <em>period</em>. The period is the time window — "the last five minutes" — and the statistic is how you want those five minutes summarized: the average, the highest value, the total, or a percentile.</p>
+          <p>The percentile is the one worth pausing on, because it is the least intuitive and the most important for today. If you line up every request by how long it took and pick the one that sits at the ninety-ninth position out of a hundred, that is the p99 — the value that ninety-nine percent of requests came in under. It exists because averages hide problems: if ninety-nine requests take fifty milliseconds and one takes ten seconds, the average looks perfectly healthy while one real user waited ten seconds. A percentile lets you ask about the slow tail directly instead of having it averaged away.</p>
+
+          <h3 class="sub-heading">Alarms, Thresholds, and Alarm States</h3>
+          <p>An alarm is a rule that watches one metric and changes its own status when that metric crosses a line you drew. The line is the <em>threshold</em>, and the status is the <em>alarm state</em>. The reason alarms exist is that a metric sitting on a dashboard only helps someone who is already looking at the dashboard; an alarm is what turns a number into something that reaches a person or triggers an automated response.</p>
+          <p>There are three states, not two, and the third one is the trap. <em>OK</em> means the metric is inside its normal range. <em>ALARM</em> means it has crossed the threshold. <em>INSUFFICIENT_DATA</em> means the alarm has no numbers to evaluate at all — which happens when a metric stops being reported, for instance because the thing reporting it was deleted or crashed. The reason this is a trap is that a stopped metric is often the most serious problem of all, and by default it does not raise an alarm; it just sits quietly in that third state. Keep this in mind, because it comes back repeatedly in today's material.</p>
+
+          <h3 class="sub-heading">Who Publishes, and Who Gets Told</h3>
+          <p>Two roles get conflated constantly. The <em>publisher</em> is whatever produces the metric — an AWS service, or your own application code. The <em>notification channel</em> is whatever receives the alarm when it fires, which on AWS is usually a simple pub/sub topic that fans the message out to email, chat, or another piece of automation. They are separate concerns, and separating them is what lets you change who gets paged without touching the thing being measured. It also means that if the publisher dies, nothing is being measured at all — and no notification channel in the world can tell you about a number that was never sent.</p>
+
+          <p>With that grounding, here is why CloudWatch alarms exist, what problem they actually solve, and where the design decisions get genuinely hard.</p>
+        </div>
+      </section>
+
       <section class="doc-section" id="why-on-exam">
         <h2 class="section-heading">1. Why This Is on the Exam</h2>
         <p>CloudWatch alarms appear on SAP-C02 in two distinct guises, and confusing them is the most common way candidates lose points on otherwise straightforward questions. The first guise is as a component inside a larger architecture: an alarm that triggers an Auto Scaling policy, an alarm that acts as a stop condition on a Fault Injection Service experiment, an alarm that drives a Route 53 health check or a Lambda-based remediation. In those questions the alarm is not the subject of the question — it is a required piece of plumbing, and the exam is testing whether you know that the alarm must exist and what it must be attached to. The second guise is as the subject itself: a scenario describes alert fatigue, a noisy pager, or a monitoring gap, and the correct answer is a specific alarm configuration rather than a different service.</p>

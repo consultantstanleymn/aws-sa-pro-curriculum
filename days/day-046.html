@@ -119,6 +119,30 @@
         </div>
       </section>
 
+      <section class="doc-section" id="foundations">
+        <h2 class="section-heading">Foundations You'll Need Today</h2>
+        <div class="card card-sre">
+          <p>Today's topic sits on top of a handful of database ideas that the rest of this curriculum treats as background knowledge. None of them are complicated, but the day's whole argument depends on them, so it is worth spending a few minutes making them concrete before the real material starts.</p>
+
+          <h3 class="sub-heading">A Database Engine Is Software, Not the Data</h3>
+          <p>When people say "the database," they usually mean two different things at once. One is the data itself — the rows and columns of actual information. The other is the engine: the software program that stores that data on disk, answers queries against it, enforces rules about what values are allowed, and decides how to execute a request efficiently. Oracle, Microsoft SQL Server, MySQL, and PostgreSQL are all engines. They all speak SQL, which is why they look interchangeable from a distance, but they are separate products built by different companies with different internal designs, different performance characteristics, and — critically for today — different dialects of SQL and different ways of writing the logic that runs inside them. Moving data from one engine to another is not like copying a file; it is like translating a document into a language that is similar but not identical.</p>
+
+          <h3 class="sub-heading">Schema vs. Data: The Structure and the Contents</h3>
+          <p>The schema is the structure: the list of tables, what columns each table has, what type of value each column holds (a number, a date, a piece of text), which columns are indexed for fast lookup, and which rules must hold true. The data is what fills that structure — the actual rows. This distinction matters because the two can be moved separately and by different tools. You can build an empty structure on a new engine weeks before any real data arrives, and you can move data into a structure that already exists. Almost every migration mistake in today's material comes from blurring these two things together, so keep them separate in your head: structure first, contents second.</p>
+
+          <h3 class="sub-heading">Stored Procedures and Procedural Code</h3>
+          <p>Most of the time, an application sends a query to the database and gets a result back. But databases can also hold logic of their own — small programs that live inside the database and run there. These are called stored procedures, functions, triggers, and views, and collectively they are "procedural code." A stored procedure might, for example, take an order ID, check inventory, apply a discount rule, and write a record, all without the application having to orchestrate each step. Each engine has its own language for writing this logic: Oracle uses PL/SQL, SQL Server uses T-SQL, PostgreSQL uses PL/pgSQL. They share a family resemblance but differ in the details — how they handle errors, how they loop over results, which built-in functions exist. This is the part of a database that does not travel cleanly between engines, and it is the reason today's tool exists at all.</p>
+
+          <h3 class="sub-heading">Homogeneous vs. Heterogeneous Migration</h3>
+          <p>A migration is homogeneous when the source and target are the same engine — Oracle to Oracle, MySQL to MySQL. In that case the structure and the logic move as-is, because nothing needs translating. A migration is heterogeneous when the engine changes — Oracle to PostgreSQL, SQL Server to MySQL. Now every table definition, every index, and every piece of procedural code has to be translated into the target engine's dialect, and some of it will not translate cleanly. That single word — homogeneous or heterogeneous — determines which tools you need, how long the project takes, and where the risk lives. It is the first thing to identify in any migration scenario.</p>
+
+          <h3 class="sub-heading">Change Data Capture (CDC)</h3>
+          <p>Moving a large database takes time — hours or days for a big one. During that window, the original database keeps receiving new writes from live users, so by the time the copy finishes, it is already out of date. Change data capture solves this by watching the source database for every insert, update, and delete that happens after the initial copy began, and replaying those changes onto the target. The result is that the target stays in sync with the source continuously, and the final switchover can happen in minutes rather than requiring a long freeze. You will see CDC mentioned in today's quiz and in the tool comparison, and it is the mechanism that makes "minimize downtime" migrations possible.</p>
+
+          <p>With that grounding, here's why SCT exists and what problem it actually solves.</p>
+        </div>
+      </section>
+
       <section class="doc-section" id="why-on-exam">
         <h2 class="section-heading">1. Why SCT Is on the Exam</h2>
         <p>SCT exists because of a specific architectural problem: relational database engines are not interchangeable at the schema level, and the parts that differ most are the parts that carry business logic. A table definition is mostly portable — column types map with varying degrees of fidelity, indexes and constraints translate with predictable caveats. Stored procedures, functions, triggers, and views are not portable in the same way, because they are written in a vendor-specific procedural dialect. Oracle's PL/SQL, SQL Server's T-SQL, and PostgreSQL's PL/pgSQL share syntax ancestry but diverge on error handling, cursor semantics, dynamic SQL, package structure, and dozens of built-in functions that have no direct equivalent. A migration that only moves tables and data leaves the application calling procedures that no longer exist.</p>
